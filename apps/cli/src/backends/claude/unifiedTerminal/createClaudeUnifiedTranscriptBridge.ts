@@ -1,5 +1,13 @@
 import { createSessionScanner, type SessionScanner } from '../utils/sessionScanner';
+import type { CommittedClaudeJsonlMessageBaseline } from '../utils/claudeJsonlMessageKey';
 import type { RawJSONLines } from '../types';
+import { logger } from '@/ui/logger';
+
+// Allowance for clock skew between Claude JSONL row timestamps (runner machine clock) and the
+// server commit times that bound the committed-keys baseline coverage window (Lane N4). A
+// genuinely-missed row is written minutes before the respawn while the coverage window usually
+// reaches hours back, so a generous allowance keeps backfill intact.
+const COMMITTED_BASELINE_COVERAGE_SKEW_MS = 10 * 60_000;
 import type { SessionHookData } from '../utils/startHookServer';
 import type { ClaudeUnifiedSessionHookSubscription } from './createClaudeUnifiedHookLifecycleBridge';
 import type { ClaudeUnifiedStartableDisposable } from './_types';
@@ -69,6 +77,29 @@ function shouldForwardResumeTranscriptToLifecycle(
   return timestampMs >= liveAfterMs;
 }
 
+function shouldForwardFreshResumeTranscriptToMessage(
+  message: RawJSONLines,
+  resumeLiveTranscriptAfterMsBySessionId: ReadonlyMap<string, number>,
+): boolean {
+  const sessionId = readTranscriptString(message, 'sessionId');
+  if (!sessionId) return true;
+  const liveAfterMs = resumeLiveTranscriptAfterMsBySessionId.get(sessionId);
+  if (liveAfterMs === undefined) return true;
+  const timestampMs = readTranscriptTimestampMs(message);
+  if (timestampMs === null) return false;
+  return timestampMs >= liveAfterMs;
+}
+
+function isFreshHookDrivenSession(opts: Readonly<{
+  sessionId: string | null;
+  transcriptPath?: string | null | undefined;
+}>): boolean {
+  const transcriptPath = typeof opts.transcriptPath === 'string' && opts.transcriptPath.trim().length > 0
+    ? opts.transcriptPath.trim()
+    : null;
+  return opts.sessionId === null && !transcriptPath;
+}
+
 export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   sessionId: string | null;
   transcriptPath?: string | null | undefined;
@@ -80,7 +111,15 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   onTranscriptMissing?: ((info: { sessionId: string; filePath: string }) => void) | undefined;
   transcriptMissingWarningMs?: number | undefined;
   subscribeClaudeSessionHooks?: ClaudeUnifiedSessionHookSubscription | undefined;
-  loadCommittedClaudeJsonlMessageKeys?: (() => Promise<ReadonlySet<string>> | ReadonlySet<string>) | undefined;
+  /**
+   * Committed Claude JSONL dedupe baseline for resume replay (Lane N4). The baseline must be
+   * loaded BEFORE the scanner replays initial rows; a load FAILURE fails closed (no
+   * replay-as-new), and a partial coverage window suppresses replay of rows older than the
+   * window (they cannot be proven uncommitted).
+   */
+  loadCommittedClaudeJsonlMessageBaseline?: (() =>
+    | Promise<CommittedClaudeJsonlMessageBaseline>
+    | CommittedClaudeJsonlMessageBaseline) | undefined;
   classifyDiscoveredSession?: ((params: {
     sessionId: string;
     filePath: string;
@@ -91,7 +130,20 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   let scanner: Awaited<SessionScanner> | null = null;
   let unsubscribe: (() => void) | null = null;
   const resumeLiveTranscriptAfterMsBySessionId = new Map<string, number>();
+  const freshResumeLiveMessageAfterMsBySessionId = new Map<string, number>();
   const pendingSessionStarts: PendingClaudeUnifiedSessionStart[] = [];
+  const freshHookDrivenSession = isFreshHookDrivenSession(opts);
+
+  const recordSessionStartBaselines = (
+    sessionInfo: ClaudeUnifiedSessionStartInfo,
+    receivedAtMs: number,
+  ) => {
+    if (sessionInfo.source !== 'resume') return;
+    resumeLiveTranscriptAfterMsBySessionId.set(sessionInfo.sessionId, receivedAtMs);
+    if (freshHookDrivenSession) {
+      freshResumeLiveMessageAfterMsBySessionId.set(sessionInfo.sessionId, receivedAtMs);
+    }
+  };
 
   const applySessionStart = (
     sessionInfo: ClaudeUnifiedSessionStartInfo,
@@ -99,9 +151,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
     receivedAtMs: number,
   ) => {
     if (disposed) return;
-    if (sessionInfo.source === 'resume') {
-      resumeLiveTranscriptAfterMsBySessionId.set(sessionInfo.sessionId, receivedAtMs);
-    }
+    recordSessionStartBaselines(sessionInfo, receivedAtMs);
     opts.onSessionFound?.(sessionInfo.sessionId, data);
 
     if (!scanner) {
@@ -118,9 +168,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   const flushPendingSessionStarts = () => {
     if (!scanner) return;
     for (const pending of pendingSessionStarts.splice(0)) {
-      if (pending.sessionInfo.source === 'resume') {
-        resumeLiveTranscriptAfterMsBySessionId.set(pending.sessionInfo.sessionId, pending.receivedAtMs);
-      }
+      recordSessionStartBaselines(pending.sessionInfo, pending.receivedAtMs);
       scanner.onNewSession({
         sessionId: pending.sessionInfo.sessionId,
         transcriptPath: pending.sessionInfo.transcriptPath,
@@ -139,9 +187,29 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
           applySessionStart(sessionInfo, data, Date.now());
         }) ?? null;
       }
-      const committedClaudeJsonlMessageKeys = waitForSessionStartHook
-        ? await Promise.resolve(opts.loadCommittedClaudeJsonlMessageKeys?.()).catch(() => new Set<string>())
-        : new Set<string>();
+      let committedClaudeJsonlMessageKeys: ReadonlySet<string> = new Set<string>();
+      let replaySuppressRowsBeforeMs: number | null = null;
+      const resumesKnownClaudeSession = Boolean(opts.sessionId || opts.transcriptPath);
+      if (waitForSessionStartHook) {
+        try {
+          const baseline = await Promise.resolve(opts.loadCommittedClaudeJsonlMessageBaseline?.())
+            ?? { keys: new Set<string>(), complete: true, oldestCoveredAtMs: null };
+          committedClaudeJsonlMessageKeys = baseline.keys;
+          if (!baseline.complete && typeof baseline.oldestCoveredAtMs === 'number' && Number.isFinite(baseline.oldestCoveredAtMs)) {
+            replaySuppressRowsBeforeMs = baseline.oldestCoveredAtMs - COMMITTED_BASELINE_COVERAGE_SKEW_MS;
+          }
+        } catch (error) {
+          // Fail CLOSED for resumes (Lane N4, incident pid-44935): without a baseline we cannot
+          // distinguish committed history from missed rows, and replay-as-new floods the session
+          // with duplicates. Suppressing the initial snapshot only degrades downtime backfill,
+          // never correctness; live rows keep flowing. Fresh sessions have no committed history
+          // to duplicate, so they keep the normal replay.
+          if (resumesKnownClaudeSession) {
+            replaySuppressRowsBeforeMs = Number.POSITIVE_INFINITY;
+          }
+          logger.debug('[unified]: committed Claude JSONL baseline unavailable; suppressing resume replay (fail-closed)', error);
+        }
+      }
       if (disposed) {
         pendingSessionStarts.length = 0;
         return;
@@ -152,7 +220,9 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
         claudeConfigDir: opts.claudeConfigDir,
         workingDirectory: opts.workingDirectory,
         onMessage: (message) => {
-          opts.onMessage?.(message);
+          if (shouldForwardFreshResumeTranscriptToMessage(message, freshResumeLiveMessageAfterMsBySessionId)) {
+            opts.onMessage?.(message);
+          }
           if (shouldForwardResumeTranscriptToLifecycle(message, resumeLiveTranscriptAfterMsBySessionId)) {
             opts.onTranscriptMessage?.(message);
           }
@@ -161,6 +231,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
         transcriptMissingWarningMs: opts.transcriptMissingWarningMs,
         initialProcessedMessageKeys: committedClaudeJsonlMessageKeys,
         replayInitialMessages: waitForSessionStartHook,
+        replaySuppressRowsBeforeMs,
         discoverNewSessions: waitForSessionStartHook && !opts.sessionId && !opts.transcriptPath,
         bindToFirstSession: waitForSessionStartHook,
         bindDiscoveredSessions: !waitForSessionStartHook,

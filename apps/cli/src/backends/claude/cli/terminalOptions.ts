@@ -1,5 +1,5 @@
 import type { EnhancedMode } from '@/backends/claude/loop';
-import { buildClaudeEffortCliArgs } from '@/backends/claude/utils/claudeEffort';
+import { buildClaudeEffortCliArgs, resolveClaudeUltracodeForModel } from '@/backends/claude/utils/claudeEffort';
 import { getClaudeRemoteSystemPrompt } from '@/backends/claude/utils/remoteSystemPrompt';
 import { parseClaudeSdkFlagOverridesFromArgs } from '@/backends/claude/remote/sdkFlagOverrides';
 
@@ -19,6 +19,13 @@ export type ClaudeTerminalCliOptions = Readonly<{
     extraArgs: readonly string[];
     customSystemPrompt: string;
     appendSystemPrompt: string;
+    /**
+     * Resolved session-only ultracode setting (requested AND xhigh-capable model).
+     *
+     * Not emitted as a CLI arg here: ultracode must ride the single `--settings` overlay,
+     * which the spawn builder owns (it merges this into the hook settings overlay).
+     */
+    ultracodeEnabled: boolean;
     diagnostics: readonly ClaudeTerminalCliOptionsDiagnostic[];
 }>;
 
@@ -223,6 +230,10 @@ export function resolveClaudeTerminalCliOptions(params: Readonly<{
         extraArgs: Object.freeze([...extraArgs]),
         customSystemPrompt,
         appendSystemPrompt,
+        ultracodeEnabled: resolveClaudeUltracodeForModel({
+            modelId: effectiveModel,
+            ultracode: params.mode.ultracode,
+        }),
         diagnostics: Object.freeze([...diagnostics]),
     });
 }

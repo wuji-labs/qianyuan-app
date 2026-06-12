@@ -26,7 +26,7 @@
  */
 
 import { join } from 'node:path';
-import { writeFileSync, mkdirSync, unlinkSync, existsSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import { buildMissingJavaScriptRuntimeMessage } from '@/runtime/js/buildMissingJavaScriptRuntimeMessage';
@@ -38,6 +38,60 @@ import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseCha
 export interface GenerateHookSettingsOptions {
     enableLocalPermissionBridge?: boolean;
     permissionHookSecret?: string;
+    /**
+     * Explicit Claude command-hook `timeout` (seconds) installed on the PermissionRequest /
+     * PreToolUse(AskUserQuestion) permission hooks.
+     *
+     * This makes the provider-side hook ceiling explicit and aligned with the local permission bridge's
+     * own response timeout (`claudeLocalPermissionBridgeTimeoutSeconds`, default 600s), instead of silently
+     * relying on Claude's undocumented default. The bridge uses the same value as its expiry boundary so a
+     * late UI answer after the ceiling returns a typed expired result instead of a false success.
+     */
+    permissionHookTimeoutSeconds?: number;
+}
+
+/**
+ * Default explicit permission-hook command timeout in seconds: 7 days.
+ *
+ * A permission request must survive an operator launching a session before sleeping and answering it on
+ * waking, so the installed hook `timeout` is effectively unlimited. Claude honors large `timeout` values
+ * without capping (probe §W: it accepts and runs values up to int32-max without error and does not kill
+ * the forwarder early). The value stays FINITE on purpose so the local permission bridge can still
+ * honestly expire a genuinely-dead forwarder at the same ceiling (see `DEFAULT_PROVIDER_HOOK_CEILING_MS`
+ * in `localPermissionBridge.ts`) instead of approving a late answer into a dead socket.
+ *
+ * Kept aligned with the bridge ceiling so Lane V's answer-time expiry only ever fires on this huge
+ * ceiling or a truly-dead forwarder, never an artificial short timeout.
+ */
+export const DEFAULT_PERMISSION_HOOK_TIMEOUT_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Optional environment override for the installed permission-hook `timeout` (seconds). Lets an operator
+ * tune the effectively-unlimited default without threading an account setting through `runClaude`
+ * (Lane T territory). An explicit `permissionHookTimeoutSeconds` option still wins over this env value.
+ */
+const PERMISSION_HOOK_TIMEOUT_SECONDS_ENV_VAR = 'HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS';
+
+function readPositiveIntEnv(envVarName: string): number | null {
+    const raw = process.env[envVarName];
+    if (typeof raw !== 'string') return null;
+    const parsed = Number(raw.trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+        return Math.floor(parsed);
+    }
+    return null;
+}
+
+function resolvePermissionHookTimeoutSeconds(options: GenerateHookSettingsOptions): number {
+    const raw = options.permissionHookTimeoutSeconds;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+        return Math.floor(raw);
+    }
+    const envOverride = readPositiveIntEnv(PERMISSION_HOOK_TIMEOUT_SECONDS_ENV_VAR);
+    if (envOverride !== null) {
+        return envOverride;
+    }
+    return DEFAULT_PERMISSION_HOOK_TIMEOUT_SECONDS;
 }
 
 type ClaudeSettingsOverlay = Readonly<{
@@ -69,8 +123,27 @@ function resolveTmpRoot(subdirName: 'hooks' | 'hook-plugins'): string {
         'tmp',
         resolveReleaseRingScopedBasename(subdirName, configuration.publicReleaseRing),
     );
-    mkdirSync(root, { recursive: true });
+    mkdirPrivateSync(root);
     return root;
+}
+
+function chmodIfSupported(path: string, mode: number): void {
+    if (process.platform === 'win32') return;
+    try {
+        chmodSync(path, mode);
+    } catch {
+        // Best-effort hardening; write/mkdir mode still applies on creation.
+    }
+}
+
+function mkdirPrivateSync(path: string): void {
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    chmodIfSupported(path, 0o700);
+}
+
+function writePrivateFileSync(path: string, contents: string): void {
+    writeFileSync(path, contents, { mode: 0o600 });
+    chmodIfSupported(path, 0o600);
 }
 
 /**
@@ -94,7 +167,7 @@ export function generateHookSettingsFile(_port: number, _options: GenerateHookSe
         },
     };
 
-    writeFileSync(filepath, JSON.stringify(settings, null, 2));
+    writePrivateFileSync(filepath, JSON.stringify(settings, null, 2));
     logger.debug(`[generateHookSettings] Created settings file: ${filepath}`);
 
     return filepath;
@@ -118,8 +191,11 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
     const pluginDir = join(pluginsRoot, `session-${process.pid}`);
     const manifestDir = join(pluginDir, '.claude-plugin');
     const hooksDir = join(pluginDir, 'hooks');
-    mkdirSync(manifestDir, { recursive: true });
-    mkdirSync(hooksDir, { recursive: true });
+    // hooks.json points at the private permission secret file; keep the whole session plugin dir
+    // owner-only so other local users cannot read paths/settings or race the secret file.
+    mkdirPrivateSync(pluginDir);
+    mkdirPrivateSync(manifestDir);
+    mkdirPrivateSync(hooksDir);
 
     const manifest = {
         name: `happier-session-hooks-${process.pid}`,
@@ -129,7 +205,7 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
             name: 'Happier',
         },
     };
-    writeFileSync(join(manifestDir, 'plugin.json'), JSON.stringify(manifest, null, 2));
+    writePrivateFileSync(join(manifestDir, 'plugin.json'), JSON.stringify(manifest, null, 2));
 
     const nodeExecutable = resolveNodeExecutable();
     const sessionForwarderScript = resolveCliRuntimeAssetPath('scripts', 'session_hook_forwarder.cjs');
@@ -159,12 +235,19 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
 
     if (options.enableLocalPermissionBridge) {
         const permissionForwarderScript = resolveCliRuntimeAssetPath('scripts', 'permission_hook_forwarder.cjs');
-        const secretPart =
-            typeof options.permissionHookSecret === 'string' && options.permissionHookSecret.length > 0
-                ? ` ${JSON.stringify(options.permissionHookSecret)}`
-                : '';
+        // The secret never rides on the command line (argv is world-visible via `ps`); it is written
+        // to an owner-only file inside the 0700 plugin dir and the forwarder reads it via
+        // `--secret-file <path>`.
+        let secretPart = '';
+        if (typeof options.permissionHookSecret === 'string' && options.permissionHookSecret.length > 0) {
+            const secretFile = join(pluginDir, 'permission-hook-secret');
+            writePrivateFileSync(secretFile, options.permissionHookSecret);
+            secretPart = ` --secret-file ${JSON.stringify(secretFile)}`;
+        }
         const buildPermissionCommand = (hookEventName: 'PermissionRequest' | 'PreToolUse'): string =>
             `${JSON.stringify(nodeExecutable)} ${JSON.stringify(permissionForwarderScript)} ${port} ${JSON.stringify(hookEventName)}${secretPart}`;
+
+        const permissionHookTimeoutSeconds = resolvePermissionHookTimeoutSeconds(options);
 
         hooks.PermissionRequest = [
             {
@@ -173,6 +256,7 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
                     {
                         type: 'command',
                         command: buildPermissionCommand('PermissionRequest'),
+                        timeout: permissionHookTimeoutSeconds,
                     },
                 ],
             },
@@ -184,6 +268,7 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
                     {
                         type: 'command',
                         command: buildPermissionCommand('PreToolUse'),
+                        timeout: permissionHookTimeoutSeconds,
                     },
                 ],
             },
@@ -192,7 +277,7 @@ export function generateHookPluginDir(port: number, options: GenerateHookSetting
 
     const hooksJson = { hooks };
     const hooksFile = join(hooksDir, 'hooks.json');
-    writeFileSync(hooksFile, JSON.stringify(hooksJson, null, 2));
+    writePrivateFileSync(hooksFile, JSON.stringify(hooksJson, null, 2));
     logger.debug(`[generateHookSettings] Created hook plugin dir: ${pluginDir}`);
 
     return pluginDir;
@@ -206,6 +291,18 @@ export function cleanupHookSettingsFile(filepath: string): void {
         if (existsSync(filepath)) {
             unlinkSync(filepath);
             logger.debug(`[generateHookSettings] Cleaned up settings file: ${filepath}`);
+        }
+        // The unified spawn writes merged --settings overlays (which may embed the hook secret)
+        // to a 0600 sibling of this file; it rides the same cleanup lifecycle.
+        const overlayPath = filepath.replace(/\.json$/, '.overlay.json');
+        if (overlayPath !== filepath && existsSync(overlayPath)) {
+            unlinkSync(overlayPath);
+            logger.debug(`[generateHookSettings] Cleaned up settings overlay file: ${overlayPath}`);
+        }
+        const statuslineSecretPath = filepath.replace(/\.json$/, '.statusline-secret');
+        if (statuslineSecretPath !== filepath && existsSync(statuslineSecretPath)) {
+            unlinkSync(statuslineSecretPath);
+            logger.debug(`[generateHookSettings] Cleaned up statusline secret file: ${statuslineSecretPath}`);
         }
     } catch (error) {
         logger.debug(`[generateHookSettings] Failed to cleanup settings file: ${error}`);

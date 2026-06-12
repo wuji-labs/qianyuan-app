@@ -84,7 +84,7 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
 
 
 
-  it('keeps resume backfill visible without forwarding historical rows to lifecycle observers', async () => {
+  it('suppresses historical resume rows in a fresh Happier session while emitting the newly accepted prompt', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-resume-'));
     tempDirs.push(dir);
     const transcriptPath = join(dir, 'sess_resume.jsonl');
@@ -134,11 +134,23 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
         transcript_path: transcriptPath,
       });
 
-      await waitUntil(() => onMessage.mock.calls.length === 1);
-      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
-        uuid: 'historical_user_prompt',
+      await appendJsonl(transcriptPath, {
+        type: 'user',
+        uuid: 'live_user_prompt_after_resume',
+        timestamp: new Date(Date.now() + 10_000).toISOString(),
+        sessionId: 'sess_resume',
+        message: {
+          role: 'user',
+          content: 'new prompt accepted after Happier resumed Claude',
+        },
+      } as RawJSONLines);
+
+      await waitUntil(() => onMessage.mock.calls.some(([message]) => message?.uuid === 'live_user_prompt_after_resume'));
+      expect(onMessage.mock.calls.map(([message]) => message?.uuid)).toEqual(['live_user_prompt_after_resume']);
+      await waitUntil(() => onTranscriptMessage.mock.calls.length === 1);
+      expect(onTranscriptMessage).toHaveBeenCalledWith(expect.objectContaining({
+        uuid: 'live_user_prompt_after_resume',
       }));
-      expect(onTranscriptMessage).not.toHaveBeenCalled();
 
       await appendJsonl(transcriptPath, {
         type: 'assistant',
@@ -152,7 +164,7 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
         },
       } as RawJSONLines);
 
-      await waitUntil(() => onTranscriptMessage.mock.calls.length === 1);
+      await waitUntil(() => onTranscriptMessage.mock.calls.length === 2);
       expect(onTranscriptMessage).toHaveBeenCalledWith(expect.objectContaining({
         uuid: 'live_assistant_end_turn',
       }));
@@ -546,7 +558,11 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
       transcriptPath,
       workingDirectory: dir,
       onMessage,
-      loadCommittedClaudeJsonlMessageKeys: async () => new Set(['main:assistant:already_committed']),
+      loadCommittedClaudeJsonlMessageBaseline: async () => ({
+        keys: new Set(['main:assistant:already_committed']),
+        complete: true,
+        oldestCoveredAtMs: null,
+      }),
       subscribeClaudeSessionHooks: (callback) => {
         subscribedHook = callback;
         return () => {
@@ -574,6 +590,138 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
       expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
         uuid: 'missing_while_runner_was_down',
       }));
+    } finally {
+      await bridge.dispose();
+    }
+  });
+
+  // Lane N4 (incident pid-44935): a same-session resume re-sent 104 historical rows because the
+  // committed-keys baseline only covers the most recent transcript window. Rows OLDER than the
+  // baseline coverage cannot be proven uncommitted, so they must never replay-as-new; rows newer
+  // than the coverage (written while the runner was down) still backfill.
+  it('does not replay snapshot rows older than the committed baseline coverage window', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-coverage-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, 'sess_coverage.jsonl');
+    await mkdir(dir, { recursive: true });
+    await writeFile(transcriptPath, '');
+
+    const nowMs = Date.now();
+    await appendJsonl(transcriptPath, {
+      type: 'assistant',
+      uuid: 'older_than_coverage',
+      timestamp: new Date(nowMs - 2 * 60 * 60 * 1000).toISOString(),
+      sessionId: 'sess_coverage',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'old committed history' }] },
+    } as RawJSONLines);
+    await appendJsonl(transcriptPath, {
+      type: 'assistant',
+      uuid: 'missed_during_downtime',
+      timestamp: new Date(nowMs - 20_000).toISOString(),
+      sessionId: 'sess_coverage',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'missing from Happier' }] },
+    } as RawJSONLines);
+
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onMessage = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: 'sess_coverage',
+      transcriptPath,
+      workingDirectory: dir,
+      onMessage,
+      loadCommittedClaudeJsonlMessageBaseline: async () => ({
+        keys: new Set<string>(),
+        complete: false,
+        oldestCoveredAtMs: nowMs - 60_000,
+      }),
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      transcriptMissingWarningMs: 0,
+    });
+
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+      hook({
+        hook_event_name: 'SessionStart',
+        source: 'resume',
+        session_id: 'sess_coverage',
+        transcript_path: transcriptPath,
+      });
+
+      await waitUntil(() => onMessage.mock.calls.length >= 1);
+      await waitMs(150);
+      expect(onMessage.mock.calls.map(([message]) => (message as { uuid?: string }).uuid)).toEqual([
+        'missed_during_downtime',
+      ]);
+    } finally {
+      await bridge.dispose();
+    }
+  });
+
+  it('fails closed when the committed baseline cannot be loaded: no replay-as-new, live rows still flow', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-baseline-failure-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, 'sess_baseline_failure.jsonl');
+    await mkdir(dir, { recursive: true });
+    await writeFile(transcriptPath, '');
+
+    await appendJsonl(transcriptPath, {
+      type: 'assistant',
+      uuid: 'historical_row',
+      timestamp: new Date(Date.now() - 30_000).toISOString(),
+      sessionId: 'sess_baseline_failure',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'history' }] },
+    } as RawJSONLines);
+
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onMessage = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: 'sess_baseline_failure',
+      transcriptPath,
+      workingDirectory: dir,
+      onMessage,
+      loadCommittedClaudeJsonlMessageBaseline: async () => {
+        throw new Error('baseline channel not connected');
+      },
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      transcriptMissingWarningMs: 0,
+    });
+
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+      hook({
+        hook_event_name: 'SessionStart',
+        source: 'resume',
+        session_id: 'sess_baseline_failure',
+        transcript_path: transcriptPath,
+      });
+
+      await waitMs(250);
+      expect(onMessage).not.toHaveBeenCalled();
+
+      await appendJsonl(transcriptPath, {
+        type: 'assistant',
+        uuid: 'live_row_after_resume',
+        timestamp: new Date().toISOString(),
+        sessionId: 'sess_baseline_failure',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'live' }] },
+      } as RawJSONLines);
+
+      await waitUntil(() => onMessage.mock.calls.length === 1);
+      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ uuid: 'live_row_after_resume' }));
     } finally {
       await bridge.dispose();
     }
@@ -731,7 +879,7 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
       transcriptPath: null,
       workingDirectory: dir,
       onMessage,
-      loadCommittedClaudeJsonlMessageKeys: () => committedKeys.promise,
+      loadCommittedClaudeJsonlMessageBaseline: async () => ({ keys: await committedKeys.promise, complete: true, oldestCoveredAtMs: null }),
       subscribeClaudeSessionHooks: (callback) => {
         subscribedHook = callback;
         return () => {
@@ -792,7 +940,7 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
       transcriptPath: null,
       workingDirectory: dir,
       onMessage,
-      loadCommittedClaudeJsonlMessageKeys: () => committedKeys.promise,
+      loadCommittedClaudeJsonlMessageBaseline: async () => ({ keys: await committedKeys.promise, complete: true, oldestCoveredAtMs: null }),
       subscribeClaudeSessionHooks: (callback) => {
         subscribedHook = callback;
         return () => {

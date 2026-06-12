@@ -59,6 +59,7 @@
 
 import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http';
 import { logger } from '@/ui/logger';
+import { parseClaudeStatuslinePayload, type ClaudeStatuslinePayload } from '../statusline/statuslinePayload';
 
 /**
  * Data received from Claude's SessionStart hook
@@ -143,6 +144,13 @@ export interface HookServerOptions {
     onSessionHook: (sessionId: string, data: SessionHookData) => void;
     /** Called when a permission hook is received */
     onPermissionHook?: (data: PermissionHookData) => PermissionHookResponse | Promise<PermissionHookResponse>;
+    /**
+     * Called when the statusline forwarder posts a Claude statusline payload.
+     *
+     * Always additive enrichment: the response is sent regardless of what the callback does,
+     * and consumer errors never fail the request (the forwarder is fire-and-forget anyway).
+     */
+    onStatuslineUpdate?: (payload: ClaudeStatuslinePayload) => void;
     /** Shared secret required for permission hook requests */
     permissionHookSecret?: string;
     /**
@@ -169,6 +177,35 @@ export interface HookServer {
  * @param options - Server options including the session hook callback
  * @returns Promise resolving to the server instance with port info
  */
+/**
+ * Hard cap on buffered hook request bodies. Real hook payloads are small JSON envelopes
+ * (well under 1 MB even with large tool inputs); anything bigger is malformed or hostile,
+ * and buffering it unbounded would let any local process exhaust this server's memory.
+ */
+const MAX_HOOK_BODY_BYTES = 10 * 1024 * 1024;
+
+async function readBoundedRequestBody(req: IncomingMessage): Promise<Buffer | null> {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    for await (const chunk of req) {
+        const buffer = chunk as Buffer;
+        totalBytes += buffer.length;
+        if (totalBytes > MAX_HOOK_BODY_BYTES) {
+            return null;
+        }
+        chunks.push(buffer);
+    }
+    return Buffer.concat(chunks);
+}
+
+function rejectOversizedBody(req: IncomingMessage, res: ServerResponse): void {
+    logger.debug('[hookServer] Rejected oversized hook body');
+    if (!res.headersSent) {
+        res.writeHead(413).end('payload too large');
+    }
+    req.destroy();
+}
+
 export async function startHookServer(options: HookServerOptions): Promise<HookServer> {
     const { onSessionHook, onPermissionHook, permissionHookSecret } = options;
     const resolvePermissionRequestTimeoutMs = (): number | null => {
@@ -198,13 +235,14 @@ export async function startHookServer(options: HookServerOptions): Promise<HookS
                 }, 5000);
 
                 try {
-                    const chunks: Buffer[] = [];
-                    for await (const chunk of req) {
-                        chunks.push(chunk as Buffer);
-                    }
+                    const rawBody = await readBoundedRequestBody(req);
                     clearTimeout(timeout);
-                    
-                    const body = Buffer.concat(chunks).toString('utf-8');
+                    if (rawBody === null) {
+                        rejectOversizedBody(req, res);
+                        return;
+                    }
+
+                    const body = rawBody.toString('utf-8');
 
                     let data: SessionHookData = {};
                     try {
@@ -275,13 +313,17 @@ export async function startHookServer(options: HookServerOptions): Promise<HookS
                 }, 5000);
 
                 try {
-                    const chunks: Buffer[] = [];
-                    for await (const chunk of req) {
-                        chunks.push(chunk as Buffer);
-                    }
+                    const rawBody = await readBoundedRequestBody(req);
                     clearTimeout(readTimeout);
+                    if (rawBody === null) {
+                        if (responseTimeout) {
+                            clearTimeout(responseTimeout);
+                        }
+                        rejectOversizedBody(req, res);
+                        return;
+                    }
 
-                    const body = Buffer.concat(chunks).toString('utf-8');
+                    const body = rawBody.toString('utf-8');
 
                     let data: PermissionHookData = {};
                     try {
@@ -319,6 +361,64 @@ export async function startHookServer(options: HookServerOptions): Promise<HookS
                         res.writeHead(200, { 'Content-Type': 'application/json' }).end(
                             JSON.stringify(buildDefaultPermissionHookResponse()),
                         );
+                    }
+                }
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/hook/statusline') {
+                const expectedSecret = typeof permissionHookSecret === 'string' && permissionHookSecret.length > 0
+                    ? permissionHookSecret
+                    : null;
+                if (expectedSecret) {
+                    const providedSecret = req.headers['x-happier-hook-secret'];
+                    const providedSecretValue = Array.isArray(providedSecret) ? providedSecret[0] : providedSecret;
+                    if (providedSecretValue !== expectedSecret) {
+                        logger.debug('[hookServer] Forbidden statusline hook request (secret mismatch)');
+                        res.writeHead(403).end('forbidden');
+                        return;
+                    }
+                }
+
+                const readTimeout = setTimeout(() => {
+                    if (!res.headersSent) {
+                        logger.debug('[hookServer] Statusline hook request read timeout');
+                        res.writeHead(408).end('timeout');
+                    }
+                }, 5000);
+
+                try {
+                    const rawBody = await readBoundedRequestBody(req);
+                    clearTimeout(readTimeout);
+                    if (rawBody === null) {
+                        rejectOversizedBody(req, res);
+                        return;
+                    }
+
+                    const body = rawBody.toString('utf-8');
+                    let payload: ClaudeStatuslinePayload | null = null;
+                    try {
+                        payload = parseClaudeStatuslinePayload(JSON.parse(body));
+                    } catch (parseError) {
+                        logger.debug('[hookServer] Failed to parse statusline payload as JSON:', parseError);
+                    }
+
+                    // Respond before the consumer runs: the forwarder is fire-and-forget and the
+                    // statusline pipeline is additive enrichment, never a request/response protocol.
+                    res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
+
+                    if (payload && options.onStatuslineUpdate) {
+                        try {
+                            options.onStatuslineUpdate(payload);
+                        } catch (error) {
+                            logger.debug('[hookServer] Statusline consumer failed (non-fatal):', error);
+                        }
+                    }
+                } catch (error) {
+                    clearTimeout(readTimeout);
+                    logger.debug('[hookServer] Error handling statusline hook:', error);
+                    if (!res.headersSent) {
+                        res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
                     }
                 }
                 return;

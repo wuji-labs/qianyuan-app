@@ -44,6 +44,14 @@ export interface EnhancedMode {
      * For Claude Code this maps to `--effort <level>` when supported.
      */
     reasoningEffort?: string;
+    /**
+     * Session-only Claude Code ultracode setting (generic config option id: ultracode).
+     *
+     * Forces xhigh effort + Dynamic Workflows. NOT an effort level: it rides the
+     * `--settings {"ultracode":true}` overlay (spawn) or `/effort ultracode` (unified TUI),
+     * never `--effort` or the SDK `effort` option. Only honored on xhigh-capable models.
+     */
+    ultracode?: boolean;
 
     // Claude remote-mode (provider-scoped) settings forwarded via message meta.
     claudeRemoteAgentSdkEnabled?: boolean;
@@ -88,6 +96,12 @@ interface LoopOptions {
      * silently dropped when a PATH-resident wrapper prepends its own overlay.
      */
     hookPluginDir?: string | null
+    /**
+     * Hook-server coordinates (port + shared secret) for the statusline forwarder wrapper.
+     * Threaded into the Unified terminal spawn's `--settings` overlay; null/absent simply
+     * disables statusline forwarding (additive enrichment).
+     */
+    statuslineForwarder?: Readonly<{ port: number; secret: string }> | null
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
     startedBy?: 'daemon' | 'terminal'
@@ -119,6 +133,7 @@ export async function loop(opts: LoopOptions): Promise<number> {
         onModeChange: opts.onModeChange,
         hookSettingsPath: opts.hookSettingsPath,
         hookPluginDir: opts.hookPluginDir ?? null,
+        claudeStatuslineForwarder: opts.statuslineForwarder ?? null,
         jsRuntime: opts.jsRuntime,
         startedBy: opts.startedBy ?? 'terminal',
         terminalRuntime: opts.terminalRuntime ?? null,

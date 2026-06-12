@@ -17,6 +17,14 @@ export class ClaudeUnifiedTerminalHostDeadError extends Error {
   }
 }
 
+export function isClaudeUnifiedTerminalHostDeadError(
+  error: unknown,
+): error is ClaudeUnifiedTerminalHostDeadError {
+  return Boolean(error)
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'claude_unified_terminal_host_dead';
+}
+
 export type ClaudeUnifiedController = Readonly<{
   run(): Promise<void>;
   dispose(): Promise<void>;

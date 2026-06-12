@@ -25,7 +25,7 @@ import { readProviderCliOverride } from '@/runtime/managedTools/providerCliResol
 import { isBun } from '@/utils/runtime';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
 import { handleResumeCommand } from '@/cli/commands/resume';
-import { partitionProviderSessionArgs } from '@/cli/providerSessionArgPartition';
+import { partitionProviderSessionArgs, type ProviderSessionArgPartitionResult } from '@/cli/providerSessionArgPartition';
 import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { HAPPY_STARTING_MODE_UNIFIED } from '@/terminal/tmux/headlessTmuxArgs';
 
@@ -110,6 +110,30 @@ function extractClaudeWrapperFlags(args: readonly string[]): {
   return { argsWithoutWrapperFlags, chromeOverride, jsRuntime };
 }
 
+/**
+ * Build the Claude runner StartOptions from the partitioned Happier session args.
+ *
+ * Every session-control flag the daemon passes (`buildHappySessionControlArgs`) must be threaded
+ * here: dropping one silently downgrades the session start. `--agent-mode plan` was dropped
+ * before (incident cmq9hemcs), so plan-created sessions spawned without plan mode.
+ */
+export function buildClaudeStartOptionsFromParsedArgs(
+  parsed: ProviderSessionArgPartitionResult,
+  jsRuntime: StartOptions['jsRuntime'],
+): StartOptions {
+  return {
+    ...(parsed.permissionMode ? { permissionMode: parsed.permissionMode } : {}),
+    ...(typeof parsed.permissionModeUpdatedAt === 'number' ? { permissionModeUpdatedAt: parsed.permissionModeUpdatedAt } : {}),
+    ...(parsed.agentModeId ? { agentModeId: parsed.agentModeId } : {}),
+    ...(typeof parsed.agentModeUpdatedAt === 'number' ? { agentModeUpdatedAt: parsed.agentModeUpdatedAt } : {}),
+    ...(parsed.modelId ? { modelId: parsed.modelId } : {}),
+    ...(typeof parsed.modelUpdatedAt === 'number' ? { modelUpdatedAt: parsed.modelUpdatedAt } : {}),
+    ...(parsed.startedBy ? { startedBy: parsed.startedBy } : {}),
+    ...(parsed.existingSessionId ? { existingSessionId: parsed.existingSessionId } : {}),
+    ...(jsRuntime ? { jsRuntime } : {}),
+  };
+}
+
 function shouldPromoteTmuxRemoteStartToUnifiedLocal(params: Readonly<{
   terminalRuntime: CommandContext['terminalRuntime'];
   startedBy: StartOptions['startedBy'];
@@ -142,15 +166,7 @@ export async function handleClaudeCliCommand(context: CommandContext): Promise<v
     yoloProviderArgs: ['--dangerously-skip-permissions'],
   });
 
-  const options: StartOptions = {
-    ...(parsed.permissionMode ? { permissionMode: parsed.permissionMode } : {}),
-    ...(typeof parsed.permissionModeUpdatedAt === 'number' ? { permissionModeUpdatedAt: parsed.permissionModeUpdatedAt } : {}),
-    ...(parsed.modelId ? { modelId: parsed.modelId } : {}),
-    ...(typeof parsed.modelUpdatedAt === 'number' ? { modelUpdatedAt: parsed.modelUpdatedAt } : {}),
-    ...(parsed.startedBy ? { startedBy: parsed.startedBy } : {}),
-    ...(parsed.existingSessionId ? { existingSessionId: parsed.existingSessionId } : {}),
-    ...(claudeWrapperFlags.jsRuntime ? { jsRuntime: claudeWrapperFlags.jsRuntime } : {}),
-  };
+  const options: StartOptions = buildClaudeStartOptionsFromParsedArgs(parsed, claudeWrapperFlags.jsRuntime);
   if (parsed.startingMode) {
     if (parsed.startingMode !== 'local' && parsed.startingMode !== 'remote' && parsed.startingMode !== HAPPY_STARTING_MODE_UNIFIED) {
       console.error(chalk.red(`Invalid --happy-starting-mode: ${parsed.startingMode}. Use "local", "remote", or "unified".`));

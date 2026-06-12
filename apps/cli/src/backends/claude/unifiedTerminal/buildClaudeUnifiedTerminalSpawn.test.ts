@@ -115,6 +115,314 @@ describe('buildClaudeUnifiedTerminalSpawn', () => {
     expect(launchSpec.env?.DISABLE_AUTOUPDATER).toBe('1');
   });
 
+
+async function readOverlayFromArgs(args: readonly string[], hookSettingsPath: string): Promise<Record<string, unknown>> {
+  const { readFile, stat } = await import('node:fs/promises');
+  const settingsFlagIndexes = args
+    .map((arg, index) => (arg === '--settings' ? index : -1))
+    .filter((index) => index >= 0);
+  // A single --settings overlay (Claude Code keeps only the first one).
+  expect(settingsFlagIndexes).toHaveLength(1);
+  const overlayArg = args[settingsFlagIndexes[0]! + 1]!;
+  // Merged overlays ride a 0600 sibling FILE so the hook secret never lands in argv.
+  expect(overlayArg).toBe(hookSettingsPath.replace(/\.json$/, '.overlay.json'));
+  const overlayStat = await stat(overlayArg);
+  expect(overlayStat.mode & 0o777).toBe(0o600);
+  return JSON.parse(await readFile(overlayArg, 'utf8')) as Record<string, unknown>;
+}
+
+  it('merges ultracode into the single --settings overlay when the mode enables it', async () => {
+    const { mkdtemp, readFile, stat, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const settingsDir = await mkdtemp(join(tmpdir(), 'happier-ultracode-settings-'));
+    const hookSettingsPath = join(settingsDir, 'settings.json');
+    await writeFile(hookSettingsPath, JSON.stringify({ permissions: { allow: ['mcp__happier__change_title'] } }));
+
+    try {
+      const spawn = await buildClaudeUnifiedTerminalSpawn({
+        path: '/workspace/project',
+        first: {
+          message: 'hello',
+          mode: {
+            permissionMode: 'default',
+            model: 'claude-fable-5',
+            ultracode: true,
+          },
+        },
+        hookSettingsPath,
+        deps: {
+          resolveClaudeCliPath: () => '/opt/claude/cli.js',
+          isClaudeCliJavaScriptFile: () => true,
+          ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+          claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+          terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+          resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+        },
+      });
+
+      const launchSpec = await readLaunchSpecFromSpawn(spawn);
+      const args = launchSpec.args ?? [];
+      const overlay = await readOverlayFromArgs(args, hookSettingsPath);
+      expect(overlay.ultracode).toBe(true);
+      // The hook settings content survives the merge.
+      expect(overlay.permissions).toEqual({ allow: ['mcp__happier__change_title'] });
+    } finally {
+      await rm(settingsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs permissions when rewriting an existing settings overlay', async () => {
+    const { chmod, mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const settingsDir = await mkdtemp(join(tmpdir(), 'happier-ultracode-existing-overlay-'));
+    const hookSettingsPath = join(settingsDir, 'settings.json');
+    await writeFile(hookSettingsPath, JSON.stringify({ permissions: { allow: ['mcp__happier__change_title'] } }));
+    const overlayPath = hookSettingsPath.replace(/\.json$/, '.overlay.json');
+    await writeFile(overlayPath, JSON.stringify({ stale: true }), { mode: 0o644 });
+    await chmod(overlayPath, 0o644);
+
+    try {
+      const spawn = await buildClaudeUnifiedTerminalSpawn({
+        path: '/workspace/project',
+        first: {
+          message: 'hello',
+          mode: {
+            permissionMode: 'default',
+            model: 'claude-fable-5',
+            ultracode: true,
+          },
+        },
+        hookSettingsPath,
+        deps: {
+          resolveClaudeCliPath: () => '/opt/claude/cli.js',
+          isClaudeCliJavaScriptFile: () => true,
+          ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+          claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+          terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+          resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+        },
+      });
+
+      const launchSpec = await readLaunchSpecFromSpawn(spawn);
+      const overlay = await readOverlayFromArgs(launchSpec.args ?? [], hookSettingsPath);
+      expect(overlay.ultracode).toBe(true);
+    } finally {
+      await rm(settingsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('installs the statusline forwarder in the single --settings overlay, preserving the user statusline', async () => {
+    const { mkdtemp, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const settingsDir = await mkdtemp(join(tmpdir(), 'happier-statusline-spawn-'));
+    const hookSettingsPath = join(settingsDir, 'hook-settings.json');
+    await writeFile(hookSettingsPath, JSON.stringify({ permissions: { allow: ['mcp__happier__change_title'] } }));
+    const configRoot = join(settingsDir, 'claude-config');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(configRoot, { recursive: true });
+    await writeFile(join(configRoot, 'settings.json'), JSON.stringify({
+      statusLine: { type: 'command', command: '~/.claude/my-statusline.sh', padding: 0 },
+    }));
+
+    try {
+      await withPatchedEnv({ CLAUDE_CONFIG_DIR: configRoot }, async () => {
+        const spawn = await buildClaudeUnifiedTerminalSpawn({
+          path: '/workspace/project',
+          first: {
+            message: 'hello',
+            mode: {
+              permissionMode: 'default',
+            },
+          },
+          hookSettingsPath,
+          statuslineForwarder: { port: 51234, secret: 'secret-xyz' },
+          deps: {
+            resolveClaudeCliPath: () => '/opt/claude/cli.js',
+            isClaudeCliJavaScriptFile: () => true,
+            ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+            claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+            terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+            resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+            statuslineForwarderScriptPath: '/happier/scripts/statusline_forwarder.cjs',
+            resolveStatuslineNodeExecutable: () => '/managed/node',
+          },
+        });
+
+        const launchSpec = await readLaunchSpecFromSpawn(spawn);
+        const args = launchSpec.args ?? [];
+        // The hook secret must never appear in Claude's argv (process listings are world-readable).
+        expect(args.join(' ')).not.toContain('secret-xyz');
+        const overlay = await readOverlayFromArgs(args, hookSettingsPath);
+        // The hook settings content survives the merge.
+        expect(overlay.permissions).toEqual({ allow: ['mcp__happier__change_title'] });
+        const statusLine = overlay.statusLine as Record<string, unknown>;
+        expect(statusLine.type).toBe('command');
+        expect(statusLine.padding).toBe(0);
+        const command = statusLine.command as string;
+        expect(command).toContain('statusline_forwarder.cjs');
+        expect(command).toContain('51234');
+        expect(command).toContain('--secret-file');
+        expect(command).not.toContain('secret-xyz');
+        const secretPath = command.match(/--secret-file\s+"([^"]+)"/)?.[1];
+        expect(secretPath).toBeTruthy();
+        expect(await readFile(secretPath!, 'utf8')).toBe('secret-xyz');
+        expect((await stat(secretPath!)).mode & 0o777).toBe(0o600);
+        // The user's original statusline command rides along base64-encoded.
+        const b64 = command.split(' ').at(-1)!;
+        expect(Buffer.from(b64, 'base64').toString('utf8')).toBe('~/.claude/my-statusline.sh');
+      });
+    } finally {
+      await rm(settingsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('installs the statusline forwarder without an original when none is configured, alongside ultracode', async () => {
+    const { mkdtemp, readFile, stat, writeFile, mkdir } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const settingsDir = await mkdtemp(join(tmpdir(), 'happier-statusline-noorig-'));
+    const hookSettingsPath = join(settingsDir, 'hook-settings.json');
+    await writeFile(hookSettingsPath, JSON.stringify({ permissions: { allow: ['mcp__happier__change_title'] } }));
+    const configRoot = join(settingsDir, 'claude-config');
+    await mkdir(configRoot, { recursive: true });
+
+    try {
+      await withPatchedEnv({ CLAUDE_CONFIG_DIR: configRoot }, async () => {
+        const spawn = await buildClaudeUnifiedTerminalSpawn({
+          path: '/workspace/project',
+          first: {
+            message: 'hello',
+            mode: {
+              permissionMode: 'default',
+              model: 'claude-fable-5',
+              ultracode: true,
+            },
+          },
+          hookSettingsPath,
+          statuslineForwarder: { port: 51234, secret: 'secret-xyz' },
+          deps: {
+            resolveClaudeCliPath: () => '/opt/claude/cli.js',
+            isClaudeCliJavaScriptFile: () => true,
+            ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+            claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+            terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+            resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+            statuslineForwarderScriptPath: '/happier/scripts/statusline_forwarder.cjs',
+            resolveStatuslineNodeExecutable: () => '/managed/node',
+          },
+        });
+
+        const launchSpec = await readLaunchSpecFromSpawn(spawn);
+        const args = launchSpec.args ?? [];
+        const overlay = await readOverlayFromArgs(args, hookSettingsPath);
+        // Ultracode and statusline ride the SAME single overlay.
+        expect(overlay.ultracode).toBe(true);
+        expect(overlay.permissions).toEqual({ allow: ['mcp__happier__change_title'] });
+        const statusLine = overlay.statusLine as Record<string, unknown>;
+        expect(statusLine.type).toBe('command');
+        const command = statusLine.command as string;
+        // No original configured → exactly node + script + port + secret-file args (no b64 tail).
+        const secretPath = command.match(/--secret-file\s+"([^"]+)"/)?.[1];
+        expect(secretPath).toBeTruthy();
+        expect(command).toBe(`"/managed/node" "/happier/scripts/statusline_forwarder.cjs" 51234 --secret-file "${secretPath}"`);
+        expect(command).not.toContain('secret-xyz');
+        expect(await readFile(secretPath!, 'utf8')).toBe('secret-xyz');
+        expect((await stat(secretPath!)).mode & 0o777).toBe(0o600);
+      });
+    } finally {
+      await rm(settingsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the hook settings file path untouched when statusline forwarding is not requested', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'default',
+        },
+      },
+      hookSettingsPath: '/tmp/settings.json',
+      deps: {
+        resolveClaudeCliPath: () => '/opt/claude/cli.js',
+        isClaudeCliJavaScriptFile: () => true,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const args = launchSpec.args ?? [];
+    const settingsIndex = args.indexOf('--settings');
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(args[settingsIndex + 1]).toBe('/tmp/settings.json');
+  });
+
+  it('fails open to no statusline forwarder when no node runtime can be resolved for the wrapper', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'default',
+        },
+      },
+      hookSettingsPath: '/tmp/settings.json',
+      statuslineForwarder: { port: 51234, secret: 'secret-xyz' },
+      deps: {
+        resolveClaudeCliPath: () => '/opt/claude/cli.js',
+        isClaudeCliJavaScriptFile: () => true,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+        statuslineForwarderScriptPath: '/happier/scripts/statusline_forwarder.cjs',
+        resolveStatuslineNodeExecutable: () => null,
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const args = launchSpec.args ?? [];
+    const settingsIndex = args.indexOf('--settings');
+    // No wrapper runtime → the user's own statusline stays in charge (file path passthrough).
+    expect(args[settingsIndex + 1]).toBe('/tmp/settings.json');
+  });
+
+  it('keeps the hook settings file path untouched when ultracode is off or unsupported', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'default',
+          model: 'claude-sonnet-4-6',
+          ultracode: true,
+        },
+      },
+      hookSettingsPath: '/tmp/settings.json',
+      deps: {
+        resolveClaudeCliPath: () => '/opt/claude/cli.js',
+        isClaudeCliJavaScriptFile: () => true,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const args = launchSpec.args ?? [];
+    const settingsIndex = args.indexOf('--settings');
+    expect(settingsIndex).toBeGreaterThanOrEqual(0);
+    expect(args[settingsIndex + 1]).toBe('/tmp/settings.json');
+  });
+
   it('uses the resolved native Claude executable directly when it is not a JavaScript file', async () => {
     const spawn = await buildClaudeUnifiedTerminalSpawn({
       path: '/workspace/project',
@@ -139,6 +447,61 @@ describe('buildClaudeUnifiedTerminalSpawn', () => {
     const launchSpec = await readLaunchSpecFromSpawn(spawn);
     expect(launchSpec.command).toBe('/usr/local/bin/claude');
     expect(launchSpec.env?.DISABLE_AUTOUPDATER).toBe('1');
+  });
+
+  it('launches safe-yolo startup mode as Claude auto mode', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'safe-yolo',
+        },
+      },
+      deps: {
+        resolveClaudeCliPath: () => '/usr/local/bin/claude',
+        isClaudeCliJavaScriptFile: () => false,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const launchArgs = launchSpec.args ?? [];
+    expect(launchArgs.slice(launchArgs.indexOf('--permission-mode'), launchArgs.indexOf('--permission-mode') + 2)).toEqual([
+      '--permission-mode',
+      'auto',
+    ]);
+  });
+
+  it('launches agentModeId=plan startup mode as Claude plan mode even when the permission mode is safe-yolo (incident cmq9hemcs)', async () => {
+    const spawn = await buildClaudeUnifiedTerminalSpawn({
+      path: '/workspace/project',
+      first: {
+        message: 'hello',
+        mode: {
+          permissionMode: 'safe-yolo',
+          agentModeId: 'plan',
+        },
+      },
+      deps: {
+        resolveClaudeCliPath: () => '/usr/local/bin/claude',
+        isClaudeCliJavaScriptFile: () => false,
+        ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+        claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+        terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        resolveCommandInvocation: ({ command, args }) => ({ command, args: [...args] }),
+      },
+    });
+
+    const launchSpec = await readLaunchSpecFromSpawn(spawn);
+    const launchArgs = launchSpec.args ?? [];
+    expect(launchArgs.slice(launchArgs.indexOf('--permission-mode'), launchArgs.indexOf('--permission-mode') + 2)).toEqual([
+      '--permission-mode',
+      'plan',
+    ]);
   });
 
   it('skips Claude Code onboarding so terminal-injected prompts reach the chat input on fresh hosts', async () => {

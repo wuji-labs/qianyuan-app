@@ -10,6 +10,7 @@ import {
   type ClaudeUnifiedPromptEchoSuppressor,
 } from './promptEchoSuppression';
 import { seedClaudeUnifiedPersistedPromptEchoes } from './promptEchoSeed';
+import { createClaudeOwnComposerTextLog, type ClaudeOwnComposerTextLog } from './ownComposerTextLog';
 
 type ClaudeUnifiedSessionBindingClient = Pick<
   SessionClientPort,
@@ -20,7 +21,7 @@ type ClaudeUnifiedSessionBindingClient = Pick<
 > & Readonly<{
   sessionTurnLifecycle?: Pick<
     NonNullable<SessionClientPort['sessionTurnLifecycle']>,
-    'beginTurn' | 'cancelTurn' | 'completeTurn'
+    'beginTurn' | 'cancelTurn' | 'completeTurn' | 'failTurn'
   > | undefined;
 }>;
 
@@ -47,6 +48,12 @@ export type ClaudeUnifiedTerminalSessionBinding<Mode extends EnhancedMode = Enha
     | 'setTurnInterrupt'
   >;
   seedPersistedPromptEchoes(opts?: Readonly<{ nowMs?: number | undefined }>): Promise<void>;
+  /**
+   * C11 (incident cmq8y3nlx): binding-owned own-injected-text registry, seeded from the persisted
+   * prompt store by `seedPersistedPromptEchoes` and handed to the unified terminal run so a
+   * respawned runner recognizes (and may clear) its predecessor's leftover composer injection.
+   */
+  ownComposerTexts: ClaudeOwnComposerTextLog;
   noteNextInjectedPromptShouldSuppressEcho(): void;
   noteNextInjectedPromptShouldImportEcho(): void;
   shouldSuppressTranscriptMessage(message: RawJSONLines): boolean;
@@ -54,6 +61,7 @@ export type ClaudeUnifiedTerminalSessionBinding<Mode extends EnhancedMode = Enha
   recordPromptTurnStarted(): Promise<void>;
   recordPromptTurnCompleted(): Promise<void>;
   recordPromptTurnCancelled(): Promise<void>;
+  recordPromptTurnFailed(): Promise<void>;
   notePromptTurnTerminal(): void;
 }>;
 
@@ -64,10 +72,42 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
     acceptedPromptEchoWindowMs: opts.acceptedPromptEchoWindowMs,
     nowMs: opts.nowMs,
   });
+  const nowMs = opts.nowMs ?? Date.now;
+  const ownComposerTexts = createClaudeOwnComposerTextLog();
   const acceptedPromptEchoSuppressionDecisions: boolean[] = [];
+  // A steered prompt's JSONL user echo only appears when Claude submits the queued prompt at TURN
+  // END, which for long autonomous turns is far beyond the fixed accepted-prompt echo window. Track
+  // steered echoes separately: unexpired until the steered turn completes (onReady), then bounded by
+  // one echo window so a stale entry can never suppress a later identical terminal-typed prompt.
+  const pendingSteerEchoes: Array<{ text: string; expiresAtMs: number | null }> = [];
   let readyTurnContext: ReadyNotificationTurnContext | undefined;
   let canonicalTurnOpen = false;
   let canonicalTurnStartPromise: Promise<void> | null = null;
+
+  function armPendingSteerEchoExpiry(): void {
+    const expiresAtMs = nowMs() + opts.acceptedPromptEchoWindowMs;
+    for (const echo of pendingSteerEchoes) {
+      if (echo.expiresAtMs === null) {
+        echo.expiresAtMs = expiresAtMs;
+      }
+    }
+  }
+
+  function consumePendingSteerEcho(message: RawJSONLines): boolean {
+    if (pendingSteerEchoes.length === 0 || message.type !== 'user') return false;
+    const content = message.message?.content;
+    if (typeof content !== 'string') return false;
+    const referenceMs = nowMs();
+    while (pendingSteerEchoes.length > 0) {
+      const head = pendingSteerEchoes[0];
+      if (!head || head.expiresAtMs === null || head.expiresAtMs >= referenceMs) break;
+      pendingSteerEchoes.shift();
+    }
+    const head = pendingSteerEchoes[0];
+    if (!head || head.text !== content) return false;
+    pendingSteerEchoes.shift();
+    return true;
+  }
 
   function beginReadyNotificationTurn(): void {
     if (typeof opts.session.beginTurnAssistantTextSnapshot !== 'function') return;
@@ -113,6 +153,21 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
     }
   }
 
+  // A failed prompt turn (e.g. hook StopFailure: API error, content filter) MUST terminalize the
+  // canonical turn. Leaving it open orphans the server turn 'in_progress' forever, which keeps the
+  // daemon pending-queue materialization gate blocked and strands queued messages (QA A-F3/C-F2).
+  async function recordPromptTurnFailed(): Promise<void> {
+    await canonicalTurnStartPromise;
+    if (!canonicalTurnOpen) return;
+    try {
+      await opts.session.sessionTurnLifecycle?.failTurn?.({ provider: 'claude' });
+    } catch (error) {
+      logger.debug(`${opts.logPrefix}: Failed to record Claude unified turn failure (non-fatal)`, error);
+    } finally {
+      canonicalTurnOpen = false;
+    }
+  }
+
   async function recordPromptTurnCancelled(): Promise<void> {
     await canonicalTurnStartPromise;
     if (!canonicalTurnOpen) return;
@@ -142,6 +197,10 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
   }
 
   function shouldSuppressTranscriptMessage(message: RawJSONLines): boolean {
+    if (consumePendingSteerEcho(message)) {
+      opts.session.recordClaudeJsonlMessageConsumed?.(message);
+      return true;
+    }
     if (!promptEchoSuppressor.shouldSuppressTranscriptMessage(message)) return false;
     opts.session.recordClaudeJsonlMessageConsumed?.(message);
     return true;
@@ -151,6 +210,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
     await seedClaudeUnifiedPersistedPromptEchoes({
       session: opts.session,
       suppressor: promptEchoSuppressor,
+      ownComposerTexts,
       logPrefix: opts.logPrefix,
       nowMs: seedOpts.nowMs,
     });
@@ -164,6 +224,9 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
         opts.onMessage(message);
       },
       onReady: async () => {
+        // The steered turn is over: its queued prompt is being submitted now, so the matching JSONL
+        // echo must arrive within one echo window from here (bounding stale-entry suppression risk).
+        armPendingSteerEchoExpiry();
         await recordPromptTurnCompleted();
         await opts.onReady(readyTurnContext);
       },
@@ -175,17 +238,23 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
         opts.onTurnInterruptChanged?.(handler);
       },
       onTerminalPromptInjected: async (acceptedPrompt) => {
-        if (shouldSuppressAcceptedPromptEcho()) {
+        const suppressEcho = shouldSuppressAcceptedPromptEcho();
+        if (acceptedPrompt.acceptedAs === 'in_flight_steer') {
+          if (suppressEcho) {
+            pendingSteerEchoes.push({ text: acceptedPrompt.message, expiresAtMs: null });
+          }
+          return;
+        }
+        if (suppressEcho) {
           promptEchoSuppressor.recordAcceptedPrompt(acceptedPrompt);
         }
-        if (acceptedPrompt.acceptedAs !== 'in_flight_steer') {
-          beginReadyNotificationTurn();
-          await recordPromptTurnStarted();
-          await opts.onPromptTurnStarted?.();
-        }
+        beginReadyNotificationTurn();
+        await recordPromptTurnStarted();
+        await opts.onPromptTurnStarted?.();
       },
     },
     seedPersistedPromptEchoes,
+    ownComposerTexts,
     noteNextInjectedPromptShouldSuppressEcho,
     noteNextInjectedPromptShouldImportEcho,
     shouldSuppressTranscriptMessage,
@@ -193,6 +262,7 @@ export function bindClaudeUnifiedTerminalSession<Mode extends EnhancedMode = Enh
     recordPromptTurnStarted,
     recordPromptTurnCompleted,
     recordPromptTurnCancelled,
+    recordPromptTurnFailed,
     notePromptTurnTerminal,
   };
 }

@@ -18,6 +18,7 @@ import { getEnvironmentInfo } from '@/ui/doctor';
 import { configuration } from '@/configuration';
 import { initialMachineMetadata } from '@/daemon/startDaemon';
 import { startHookServer, type PermissionHookData, type SessionHookData } from '@/backends/claude/utils/startHookServer';
+import { createClaudeStatuslineApplier } from '@/backends/claude/statusline/applyClaudeStatuslineUpdate';
 import { cleanupHookPluginDir, cleanupHookSettingsFile } from '@/backends/claude/utils/generateHookSettings';
 import {
     generateHookPluginDirWithEnsuredRuntime,
@@ -44,6 +45,7 @@ import { inferPermissionIntentFromClaudeArgs } from './utils/inferPermissionInte
 import { adoptModelOverrideFromMetadata } from './utils/adoptModelOverrideFromMetadata';
 import { adoptReasoningEffortOverrideFromMessageMeta } from './utils/adoptReasoningEffortOverrideFromMessageMeta';
 import { adoptReasoningEffortOverrideFromMetadata } from './utils/adoptReasoningEffortOverrideFromMetadata';
+import { adoptUltracodeOverrideFromMessageMeta, adoptUltracodeOverrideFromMetadata } from './utils/adoptUltracodeOverride';
 import { resolveSessionModeOverrideFromMetadataSnapshot } from '@/agent/runtime/permission/permissionModeFromMetadata';
 import { initializeBackendApiContext } from '@/agent/runtime/initializeBackendApiContext';
 import { ClaudeLocalPermissionBridge, DEFAULT_LOCAL_PERMISSION_HOOK_RESPONSE } from '@/backends/claude/localPermissions/localPermissionBridge';
@@ -66,6 +68,7 @@ import type { PushNotificationClient } from '@/api/pushNotifications';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { resolveEffectiveCodingPromptText } from '@/agent/prompting/coding/resolveEffectiveCodingPrompt';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
+import { CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID } from './unifiedTerminal/tuiControls';
 import { resolveInitialClaudeSystemPromptText } from './utils/resolveInitialClaudeSystemPromptText';
 import { shouldStartClaudeSessionCaffeinate } from './sessionCaffeinatePolicy';
 import { ensureManagedJavaScriptRuntimeCommand } from '@/runtime/js/managedJavaScriptRuntime';
@@ -181,6 +184,13 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     // Set backend for offline warnings (before any API calls)
     connectionState.setBackend('Claude');
+
+    // Lane Q: resolve once; published as the `inFlightConfigApplySupported` capability so the UI
+    // can offer "Apply setting & steer now" only when the unified runtime can own in-turn deltas.
+    const claudeTuiRuntimeControlEnabled = resolveCliFeatureDecision({
+        featureId: CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID,
+        env: process.env,
+    }).state === 'enabled';
 
     const startedBy = options.startedBy ?? 'terminal';
     const startingMode = options.startingMode ?? 'local';
@@ -571,7 +581,13 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     };
 
     // Start Hook server for receiving Claude session notifications
+    const statuslineApplier = createClaudeStatuslineApplier({ logPrefix: '[claude]' });
     const hookServerOptions: Parameters<typeof startHookServer>[0] = {
+        onStatuslineUpdate: (payload) => {
+            if (currentSession) {
+                statuslineApplier.apply(currentSession, payload);
+            }
+        },
         onSessionHook: (sessionId, data) => {
             logger.debug(`[START] Session hook received: ${sessionId}`, data);
             
@@ -630,6 +646,12 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         generateHookPluginDirWithEnsuredRuntime(hookServer.port, {
             enableLocalPermissionBridge: true,
             permissionHookSecret,
+            // Keep the provider-side permission hook ceiling aligned with the local permission bridge's
+            // own response timeout source so non-default configured timeouts do not silently fall back to
+            // Claude's undocumented default. Wait-indefinitely mode keeps the generateHookSettings default.
+            ...(localPermissionBridgeWaitIndefinitely
+                ? {}
+                : { permissionHookTimeoutSeconds: currentClaudeRemoteMetaState.claudeLocalPermissionBridgeTimeoutSeconds }),
         }),
     );
     if (hookPluginDir) {
@@ -650,6 +672,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             currentState,
             mode: startingMode === 'remote' ? 'remote' : 'local',
             claudeUnifiedTerminalEnabled: currentClaudeRemoteMetaState.claudeUnifiedTerminalEnabled === true,
+            tuiRuntimeControlEnabled: claudeTuiRuntimeControlEnabled,
             localPermissionBridgeEnabled,
         }),
         '[claude]',
@@ -672,6 +695,8 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     let currentAgentModeUpdatedAt = typeof options.agentModeUpdatedAt === 'number' ? options.agentModeUpdatedAt : 0;
         let currentReasoningEffort: string | undefined = undefined;
         let currentReasoningEffortUpdatedAt = 0;
+        let currentUltracode: boolean | undefined = undefined;
+        let currentUltracodeUpdatedAt = 0;
         let currentFallbackModel: string | undefined = undefined; // Track current fallback model
         let currentCustomSystemPrompt: string | undefined = undefined; // Track current custom system prompt
         let currentAppendSystemPrompt: string | undefined = resolveInitialClaudeSystemPromptText({
@@ -724,6 +749,32 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             currentReasoningEffort = adoptedReasoningEffortFromMessage.valueId ?? undefined;
             currentReasoningEffortUpdatedAt = adoptedReasoningEffortFromMessage.updatedAt;
             logger.debug(`[loop] Thinking updated from user message: ${currentReasoningEffort || 'default'}`);
+        }
+
+        const adoptedUltracode = adoptUltracodeOverrideFromMetadata({
+            currentValue: currentUltracode ?? null,
+            currentUpdatedAt: currentUltracodeUpdatedAt,
+            metadata: session.getMetadataSnapshot(),
+        });
+        if (adoptedUltracode.didChange) {
+            currentUltracode = adoptedUltracode.value ?? undefined;
+            currentUltracodeUpdatedAt = adoptedUltracode.updatedAt;
+            logger.debug(`[loop] Ultracode updated from session metadata: ${currentUltracode === true ? 'on' : 'off'}`);
+        }
+
+        const adoptedUltracodeFromMessage = adoptUltracodeOverrideFromMessageMeta({
+            currentValue: currentUltracode ?? null,
+            currentUpdatedAt: currentUltracodeUpdatedAt,
+            messageMeta: message.meta as Record<string, unknown> | null | undefined,
+            updatedAt:
+                typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) && message.createdAt > 0
+                    ? message.createdAt
+                    : Date.now(),
+        });
+        if (adoptedUltracodeFromMessage.didChange) {
+            currentUltracode = adoptedUltracodeFromMessage.value ?? undefined;
+            currentUltracodeUpdatedAt = adoptedUltracodeFromMessage.updatedAt;
+            logger.debug(`[loop] Ultracode updated from user message: ${currentUltracode === true ? 'on' : 'off'}`);
         }
 
         // Resolve permission mode from meta - pass through as-is, mapping happens at SDK boundary
@@ -804,6 +855,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                     currentState,
                     mode: currentState.controlledByUser === true ? 'local' : 'remote',
                     claudeUnifiedTerminalEnabled: currentClaudeRemoteMetaState.claudeUnifiedTerminalEnabled === true,
+                    tuiRuntimeControlEnabled: claudeTuiRuntimeControlEnabled,
                     localPermissionBridgeEnabled,
                 }),
                 '[claude]',
@@ -827,6 +879,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             customSystemPrompt: messageCustomSystemPrompt,
             appendSystemPrompt: messageAppendSystemPrompt,
             reasoningEffort: currentReasoningEffort,
+            ultracode: currentUltracode,
             ...currentClaudeRemoteMetaState,
         };
 
@@ -982,6 +1035,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 customSystemPrompt: currentCustomSystemPrompt,
                 appendSystemPrompt: currentAppendSystemPrompt,
                 reasoningEffort: currentReasoningEffort,
+                ultracode: currentUltracode,
                 ...currentClaudeRemoteMetaState,
             },
             claudeCodeExperimentalAgentTeamsEnabled: currentClaudeRemoteMetaState.claudeCodeExperimentalAgentTeamsEnabled,
@@ -1002,6 +1056,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                         currentState,
                         mode: newMode,
                         claudeUnifiedTerminalEnabled: currentClaudeRemoteMetaState.claudeUnifiedTerminalEnabled === true,
+                        tuiRuntimeControlEnabled: claudeTuiRuntimeControlEnabled,
                         localPermissionBridgeEnabled,
                     }),
                     '[claude]',
@@ -1037,6 +1092,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             claudeArgs: options.claudeArgs,
             hookSettingsPath,
             hookPluginDir,
+            statuslineForwarder: { port: hookServer.port, secret: permissionHookSecret },
             jsRuntime: options.jsRuntime,
             defaultSystemPromptText,
             signal: activeLoopShouldWaitOnTermination ? activeLoopAbortController.signal : undefined,
@@ -1116,6 +1172,12 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
     const nowMs = () => Date.now();
     const timing = createStartupTiming({ enabled: configuration.startupTimingEnabled, nowMs });
 
+    // Lane Q: same capability resolution as runClaude (see comment there).
+    const claudeTuiRuntimeControlEnabled = resolveCliFeatureDecision({
+        featureId: CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID,
+        env: process.env,
+    }).state === 'enabled';
+
     // Resolve initial permission mode for local starts without blocking on server-derived seeds.
     const explicitPermissionMode = options.permissionMode;
     const explicitPermissionModeUpdatedAt = options.permissionModeUpdatedAt;
@@ -1158,6 +1220,8 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
     let currentModelUpdatedAt = typeof options.modelUpdatedAt === 'number' ? options.modelUpdatedAt : 0;
     let currentReasoningEffort: string | undefined = undefined;
     let currentReasoningEffortUpdatedAt = 0;
+    let currentUltracode: boolean | undefined = undefined;
+    let currentUltracodeUpdatedAt = 0;
     let currentFallbackModel: string | undefined = undefined;
     let currentCustomSystemPrompt: string | undefined = undefined;
     let currentAppendSystemPrompt: string | undefined = undefined;
@@ -1207,7 +1271,13 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
         currentSession?.onClaudeSessionHook(buildPermissionLifecycleSessionHook(data, hookEventName));
     };
 
+    const statuslineApplier = createClaudeStatuslineApplier({ logPrefix: '[claude]' });
     const hookServerOptions: Parameters<typeof startHookServer>[0] = {
+        onStatuslineUpdate: (payload) => {
+            if (currentSession) {
+                statuslineApplier.apply(currentSession, payload);
+            }
+        },
         onSessionHook: (sessionId, data) => {
             if (currentSession) {
                 currentSession.onSessionFound(sessionId, data);
@@ -1373,6 +1443,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         currentState,
                         mode: startingMode === 'remote' ? 'remote' : 'local',
                         claudeUnifiedTerminalEnabled: currentClaudeRemoteMetaState.claudeUnifiedTerminalEnabled === true,
+                        tuiRuntimeControlEnabled: claudeTuiRuntimeControlEnabled,
                         localPermissionBridgeEnabled,
                     }),
                     '[claude]',
@@ -1436,6 +1507,30 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         currentReasoningEffortUpdatedAt = adoptedReasoningEffortFromMessage.updatedAt;
                     }
 
+                    const adoptedUltracode = adoptUltracodeOverrideFromMetadata({
+                        currentValue: currentUltracode ?? null,
+                        currentUpdatedAt: currentUltracodeUpdatedAt,
+                        metadata: session.getMetadataSnapshot(),
+                    });
+                    if (adoptedUltracode.didChange) {
+                        currentUltracode = adoptedUltracode.value ?? undefined;
+                        currentUltracodeUpdatedAt = adoptedUltracode.updatedAt;
+                    }
+
+                    const adoptedUltracodeFromMessage = adoptUltracodeOverrideFromMessageMeta({
+                        currentValue: currentUltracode ?? null,
+                        currentUpdatedAt: currentUltracodeUpdatedAt,
+                        messageMeta: message.meta as Record<string, unknown> | null | undefined,
+                        updatedAt:
+                            typeof message.createdAt === 'number' && Number.isFinite(message.createdAt) && message.createdAt > 0
+                                ? message.createdAt
+                                : Date.now(),
+                    });
+                    if (adoptedUltracodeFromMessage.didChange) {
+                        currentUltracode = adoptedUltracodeFromMessage.value ?? undefined;
+                        currentUltracodeUpdatedAt = adoptedUltracodeFromMessage.updatedAt;
+                    }
+
                     let messagePermissionMode: PermissionMode = currentPermissionMode;
                     const metaPermissionMode = message.meta?.permissionMode;
                     if (metaPermissionMode) {
@@ -1495,6 +1590,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                                 currentState,
                                 mode: currentState.controlledByUser === true ? 'local' : 'remote',
                                 claudeUnifiedTerminalEnabled: currentClaudeRemoteMetaState.claudeUnifiedTerminalEnabled === true,
+                                tuiRuntimeControlEnabled: claudeTuiRuntimeControlEnabled,
                                 localPermissionBridgeEnabled,
                             }),
                             '[claude]',
@@ -1516,6 +1612,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         customSystemPrompt: messageCustomSystemPrompt,
                         appendSystemPrompt: messageAppendSystemPrompt,
                         reasoningEffort: currentReasoningEffort,
+                        ultracode: currentUltracode,
                         ...currentClaudeRemoteMetaState,
                     };
                     const baseQueuedText = structuredRouting?.queuedText ?? message.content.text;
@@ -1634,6 +1731,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                             customSystemPrompt: currentCustomSystemPrompt,
                             appendSystemPrompt: currentAppendSystemPrompt,
                             reasoningEffort: currentReasoningEffort,
+                            ultracode: currentUltracode,
                             ...currentClaudeRemoteMetaState,
                         },
                         claudeCodeExperimentalAgentTeamsEnabled: currentClaudeRemoteMetaState.claudeCodeExperimentalAgentTeamsEnabled,
@@ -1648,6 +1746,7 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                                     currentState,
                                     mode: newMode,
                                     claudeUnifiedTerminalEnabled: currentClaudeRemoteMetaState.claudeUnifiedTerminalEnabled === true,
+                                    tuiRuntimeControlEnabled: claudeTuiRuntimeControlEnabled,
                                     localPermissionBridgeEnabled,
                                 }),
                                 '[claude]',
@@ -1691,6 +1790,9 @@ async function runClaudeLocalFastStart(credentials: Credentials, options: StartO
                         claudeArgs: options.claudeArgs,
                         hookSettingsPath,
                         hookPluginDir,
+                        statuslineForwarder: artifacts.hookServer
+                            ? { port: artifacts.hookServer.port, secret: permissionHookSecret }
+                            : null,
                         jsRuntime: options.jsRuntime,
                         defaultSystemPromptText,
                         pushSender: null,

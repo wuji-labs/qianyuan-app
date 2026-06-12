@@ -2,6 +2,7 @@ import { resolveTerminalInjectionReadiness } from '@/agent/runtime/terminal/inje
 import type { TerminalInputInjectionResult, TerminalLifecycleObservation, TerminalTurnState } from '@/agent/runtime/terminal/_types';
 
 import type {
+  ClaudeUnifiedInFlightSteerEvaluator,
   ClaudeUnifiedInputArbiter,
   ClaudeUnifiedInputArbiterSnapshot,
   ClaudeUnifiedPromptAcceptance,
@@ -19,6 +20,33 @@ type HeadInputState = ClaudeUnifiedInputArbiterSnapshot['headInputState'];
 const DEFAULT_INJECTION_RETRY_LIMIT = 3;
 const DEFAULT_INJECTION_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PROVIDER_ACCEPTANCE_TIMEOUT_MS = 5_000;
+// A pending-queue prompt deferred while the turn is running is normally redrained
+// by the turn-end lifecycle hook. This bounded fallback wake re-evaluates the
+// deferral even if that hook never arrives, so the prompt cannot starve forever.
+// It re-defers (no mid-turn injection) while the turn is still running.
+const DEFAULT_BUSY_TURN_FALLBACK_WAKE_MS = 15_000;
+// A 'running' turn state can be STALE: after a respawn, replayed transcript rows mark the
+// turn running but no live provider turn exists, so turn-end evidence never arrives and a
+// deferred ui_pending prompt starves forever (incident cmq7pyqkj, L1). When NO provider
+// lifecycle activity is observed for this bounded window, the turn is treated as not
+// running and the prompt drains normally as a new turn (never as an in-flight steer).
+const DEFAULT_STALE_TURN_RECOVERY_MS = 30_000;
+
+function normalizePromptText(value: string): string {
+  return value.replace(/\r\n?/g, '\n').trim();
+}
+
+function isCompactPrompt(batch: Readonly<{ message: string }>): boolean {
+  const message = normalizePromptText(batch.message);
+  return message === '/compact' || message.startsWith('/compact ');
+}
+
+// Slash-command prompts (/compact, /clear, …) must never be steered into a running
+// turn: Claude queues them and executes them as COMMANDS at turn end (probe P-D),
+// and their side effects must keep the existing defer-until-idle semantics.
+function isSlashCommandPrompt(batch: Readonly<{ message: string }>): boolean {
+  return normalizePromptText(batch.message).startsWith('/');
+}
 
 export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
   injectPrompt: ClaudeUnifiedPromptInjector<Mode>['injectPrompt'];
@@ -30,13 +58,39 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
   injectionRetryLimit?: number | undefined;
   injectionRetryBaseDelayMs?: number | undefined;
   providerAcceptanceTimeoutMs?: number | undefined;
+  busyTurnFallbackWakeMs?: number | undefined;
+  /**
+   * Bounded no-provider-activity window after which a 'running' turn is treated as stale and a
+   * deferred `ui_pending` prompt drains normally (L1). Screen evidence (`turnLikelyEnded`) is
+   * additionally required whenever an in-flight steer evaluation was possible for the prompt.
+   */
+  staleTurnRecoveryMs?: number | undefined;
+  /**
+   * Canonical session turn lifecycle probe (Lane N2). The canonical lifecycle (the session
+   * client's turn owner) is a stronger truth source than a one-frame screen parse: when it
+   * reports NO active turn during stale-turn recovery, the prompt drains without requiring
+   * turn-end screen evidence. Absent probe keeps the fail-closed screen-evidence requirement.
+   */
+  isCanonicalTurnActive?: (() => boolean) | undefined;
   onInjectionFailure?: ClaudeUnifiedPromptInjectionFailureHandler<Mode> | undefined;
+  /**
+   * Screen-evidence evaluation for steering a pending UI prompt into a RUNNING turn (D19). When
+   * absent or vetoing, the prompt keeps the existing bounded defer-until-idle behavior.
+   */
+  evaluateInFlightSteer?: ClaudeUnifiedInFlightSteerEvaluator<Mode> | undefined;
+  /**
+   * Fired once per steered prompt when turn-end evidence arms its provider-acceptance expectation
+   * (the queued prompt's UserPromptSubmit/JSONL row arrives only after the steered turn ends).
+   */
+  onSteerAcceptanceArmed?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => void) | undefined;
 }>): ClaudeUnifiedInputArbiter<Mode> {
   const queue: Array<ClaudeUnifiedPromptBatch<Mode>> = [];
   const nowMs = opts.nowMs ?? Date.now;
   const injectionRetryLimit = Math.max(0, Math.trunc(opts.injectionRetryLimit ?? DEFAULT_INJECTION_RETRY_LIMIT));
   const injectionRetryBaseDelayMs = Math.max(0, Math.trunc(opts.injectionRetryBaseDelayMs ?? DEFAULT_INJECTION_RETRY_BASE_DELAY_MS));
   const providerAcceptanceTimeoutMs = Math.max(0, Math.trunc(opts.providerAcceptanceTimeoutMs ?? DEFAULT_PROVIDER_ACCEPTANCE_TIMEOUT_MS));
+  const busyTurnFallbackWakeMs = Math.max(0, Math.trunc(opts.busyTurnFallbackWakeMs ?? DEFAULT_BUSY_TURN_FALLBACK_WAKE_MS));
+  const staleTurnRecoveryMs = Math.max(0, Math.trunc(opts.staleTurnRecoveryMs ?? DEFAULT_STALE_TURN_RECOVERY_MS));
 
   let disposed = false;
   let turnState: TerminalTurnState = 'idle';
@@ -63,6 +117,14 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     batch: ClaudeUnifiedPromptBatch<Mode>;
     acceptance: ClaudeUnifiedPromptAcceptance;
   }> | null = null;
+  let ambiguousProviderAcceptanceRetryAttempt = 0;
+  let lastInjectedNotifiedBatch: ClaudeUnifiedPromptBatch<Mode> | null = null;
+  // An in-flight steer's provider acceptance (UserPromptSubmit/JSONL row) arrives only when Claude
+  // submits the queued prompt at TURN END. While this flag is set, the short provider-acceptance
+  // timeout is deferred; turn-end evidence arms it (and the normal ambiguous recovery thereafter).
+  let steerAcceptanceAwaitingTurnEnd = false;
+  let steerAcceptanceTimeoutResult: Extract<TerminalInputInjectionResult, { status: 'failed' }> | null = null;
+  let steerTurnEndFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   const snapshot = (): ClaudeUnifiedInputArbiterSnapshot => ({
     queuedCount: queue.length,
@@ -87,6 +149,9 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         permissionBlocked = true;
       } else if (observation.state === 'idle') {
         permissionBlocked = false;
+        // Turn-end evidence: a steered prompt queued by Claude's TUI is submitted now, so its
+        // provider-acceptance expectation can finally be armed.
+        armSteerAcceptanceAfterTurnEnd();
       }
       return;
     }
@@ -107,6 +172,7 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         pendingProviderAcceptance = ambiguousProviderAcceptanceFailure;
         pendingAcceptanceCompletedCompaction = true;
         ambiguousProviderAcceptanceFailure = null;
+        ambiguousProviderAcceptanceRetryAttempt = 0;
         lastFailureReason = null;
         headInputState = 'awaiting_provider_acceptance';
       }
@@ -134,6 +200,63 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     if (!providerAcceptanceTimer) return;
     clearTimeout(providerAcceptanceTimer);
     providerAcceptanceTimer = null;
+  }
+
+  function clearSteerTurnEndFallbackTimer(): void {
+    if (!steerTurnEndFallbackTimer) return;
+    clearTimeout(steerTurnEndFallbackTimer);
+    steerTurnEndFallbackTimer = null;
+  }
+
+  function clearPendingSteerArming(): void {
+    steerAcceptanceAwaitingTurnEnd = false;
+    steerAcceptanceTimeoutResult = null;
+    clearSteerTurnEndFallbackTimer();
+  }
+
+  function armSteerAcceptanceAfterTurnEnd(): void {
+    if (!steerAcceptanceAwaitingTurnEnd || !pendingProviderAcceptance) return;
+    const armedBatch = pendingProviderAcceptance.batch;
+    const timeoutResult = steerAcceptanceTimeoutResult ?? buildProviderAcceptanceTimeoutResult();
+    clearPendingSteerArming();
+    scheduleProviderAcceptanceTimeout(providerAcceptanceTimeoutMs, timeoutResult);
+    opts.onSteerAcceptanceArmed?.(armedBatch);
+  }
+
+  // Hooks can be lost mid-turn. While a steer acceptance waits for turn-end evidence, periodically
+  // re-check the screen; an idle interactive composer is trusted turn-end evidence and arms the
+  // acceptance expectation so the steered prompt can never wedge as awaiting acceptance forever.
+  function scheduleSteerTurnEndFallbackWake(): void {
+    clearSteerTurnEndFallbackTimer();
+    steerTurnEndFallbackTimer = setTimeout(() => {
+      steerTurnEndFallbackTimer = null;
+      void (async () => {
+        if (disposed || !steerAcceptanceAwaitingTurnEnd || !pendingProviderAcceptance) return;
+        if (turnState !== 'running') {
+          armSteerAcceptanceAfterTurnEnd();
+          return;
+        }
+        try {
+          const decision = await opts.evaluateInFlightSteer?.(pendingProviderAcceptance.batch);
+          if (
+            !disposed
+            && steerAcceptanceAwaitingTurnEnd
+            && pendingProviderAcceptance
+            && decision
+            && decision.turnLikelyEnded === true
+          ) {
+            armSteerAcceptanceAfterTurnEnd();
+            return;
+          }
+        } catch {
+          // Screen evidence unavailable; keep waiting for lifecycle evidence.
+        }
+        if (!disposed && steerAcceptanceAwaitingTurnEnd) {
+          scheduleSteerTurnEndFallbackWake();
+        }
+      })();
+    }, busyTurnFallbackWakeMs);
+    steerTurnEndFallbackTimer.unref?.();
   }
 
   function scheduleRetryDrain(retryAfterMs: number | undefined): void {
@@ -182,6 +305,9 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
           result,
           failureState: 'failed_ambiguous',
         });
+        if (!isCompactPrompt(timedOutAcceptance.batch)) {
+          scheduleRetryDrain(0);
+        }
       }
     }, timeoutMs);
     providerAcceptanceTimer.unref?.();
@@ -202,6 +328,7 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     lastFailureReason = null;
     headInputState = 'submitted';
     retryAttempt = 0;
+    ambiguousProviderAcceptanceRetryAttempt = 0;
     firstObservedAtMs = nowMs();
     outputObserved = false;
     lastOutputAtMs = null;
@@ -209,7 +336,9 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
     pendingProviderAcceptance = null;
     pendingAcceptanceCompletedCompaction = false;
     ambiguousProviderAcceptanceFailure = null;
+    lastInjectedNotifiedBatch = null;
     clearProviderAcceptanceTimer();
+    clearPendingSteerArming();
     await opts.onPromptAccepted?.(batch, acceptance);
   }
 
@@ -240,9 +369,20 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
           headInputState = 'awaiting_provider_acceptance';
           return;
         }
+        const completedAcceptance = pendingProviderAcceptance;
         pendingProviderAcceptance = null;
         pendingAcceptanceCompletedCompaction = false;
         clearProviderAcceptanceTimer();
+        clearPendingSteerArming();
+        // Compaction completion is provider acceptance of a pending /compact prompt.
+        // Consume it so a PostCompact hook racing ahead of the compact_boundary
+        // transcript row cannot leave /compact at the queue head and re-inject it.
+        // Regular prompts interrupted by compaction stay queued for re-injection.
+        if (queue[0] === completedAcceptance.batch && isCompactPrompt(completedAcceptance.batch)) {
+          queue.shift();
+          await acceptBatch(completedAcceptance.batch, completedAcceptance.acceptance);
+          continue;
+        }
       }
       if (compactionActive) {
         lastDeferredReason = 'compaction';
@@ -250,7 +390,38 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         return;
       }
       if (headInputState === 'failed_ambiguous' || headInputState === 'failed_terminal') {
-        return;
+        if (
+          headInputState === 'failed_ambiguous'
+          && ambiguousProviderAcceptanceFailure
+          && queue[0] === ambiguousProviderAcceptanceFailure.batch
+          && ambiguousProviderAcceptanceRetryAttempt < 1
+        ) {
+          ambiguousProviderAcceptanceRetryAttempt += 1;
+          pendingProviderAcceptance = null;
+          pendingAcceptanceCompletedCompaction = false;
+          ambiguousProviderAcceptanceFailure = null;
+          lastFailureReason = null;
+          headInputState = 'waiting_for_readiness';
+        } else {
+          if (
+            headInputState === 'failed_ambiguous'
+            && ambiguousProviderAcceptanceFailure
+            && queue[0] === ambiguousProviderAcceptanceFailure.batch
+          ) {
+            const failure = ambiguousProviderAcceptanceFailure;
+            pendingProviderAcceptance = null;
+            pendingAcceptanceCompletedCompaction = false;
+            ambiguousProviderAcceptanceFailure = null;
+            lastFailureReason = 'timeout';
+            headInputState = 'failed_terminal';
+            notifyInjectionFailure({
+              batch: failure.batch,
+              result: buildProviderAcceptanceTimeoutResult(),
+              failureState: 'failed_terminal',
+            });
+          }
+          return;
+        }
       }
       const readiness = resolveTerminalInjectionReadiness({
         nowMs: nowMs(),
@@ -273,30 +444,100 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       }
 
       const next = queue[0];
+      let injectAsInFlightSteer = false;
       if (next.origin.kind === 'ui_pending' && turnState === 'running') {
-        lastDeferredReason = 'terminal_busy';
-        headInputState = 'waiting_for_readiness';
-        return;
+        // In-flight steering (D19): evaluate the SCREEN before deciding. Claude's TUI natively
+        // queues text typed mid-generation and submits it at turn end (probe P-D), so a safe
+        // actively-generating screen can take the prompt now instead of holding it invisibly
+        // until the turn ends. Slash commands and vetoed/unknown screens keep the existing
+        // bounded defer-until-idle behavior.
+        let steerSafe = false;
+        let steerEvaluationAttempted = false;
+        let steerTurnLikelyEnded = false;
+        if (opts.evaluateInFlightSteer && !isSlashCommandPrompt(next)) {
+          steerEvaluationAttempted = true;
+          try {
+            const decision = await opts.evaluateInFlightSteer(next);
+            steerSafe = decision.steer === true;
+            steerTurnLikelyEnded = decision.turnLikelyEnded === true;
+          } catch {
+            steerSafe = false;
+          }
+        }
+        if (disposed || queue[0] !== next) continue;
+        if (turnState !== 'running') continue;
+        if (!steerSafe) {
+          // Stale-turn recovery (incident cmq7pyqkj, L1): a 'running' state with NO provider
+          // lifecycle activity for a bounded window is treated as stale (e.g. set from replayed
+          // transcript rows after a respawn, with no live turn behind it). When the steer
+          // evaluation also proved an idle composer (`turnLikelyEnded`) — or no evaluation was
+          // possible for this prompt (slash command / no evaluator) — drain the prompt normally
+          // as a new turn instead of deferring forever. A veto without turn-end screen evidence
+          // keeps the bounded deferred path (fail-closed).
+          let canonicalTurnInactive = false;
+          if (opts.isCanonicalTurnActive) {
+            try {
+              canonicalTurnInactive = opts.isCanonicalTurnActive() === false;
+            } catch {
+              canonicalTurnInactive = false;
+            }
+          }
+          const screenAllowsStaleRecovery = !steerEvaluationAttempted || steerTurnLikelyEnded || canonicalTurnInactive;
+          const lastProviderEvidenceMs = lastOutputAtMs ?? firstObservedAtMs;
+          if (screenAllowsStaleRecovery && nowMs() - lastProviderEvidenceMs >= staleTurnRecoveryMs) {
+            turnState = 'unknown';
+            continue;
+          }
+          lastDeferredReason = 'terminal_busy';
+          headInputState = 'waiting_for_readiness';
+          // The turn-end lifecycle hook normally redrains this deferral. Schedule a
+          // bounded fallback wake so a missing turn-end signal cannot starve the
+          // prompt forever; re-evaluation re-defers while still running.
+          scheduleRetryDrain(busyTurnFallbackWakeMs);
+          return;
+        }
+        injectAsInFlightSteer = true;
       }
       const acceptance = resolvePromptAcceptance(turnState);
       headInputState = 'injecting';
-      const result: TerminalInputInjectionResult = await opts.injectPrompt(next);
+      const result: TerminalInputInjectionResult = await opts.injectPrompt(
+        next,
+        injectAsInFlightSteer ? { inFlightSteer: true } : undefined,
+      );
       if (result.status === 'injected') {
         lastDeferredReason = null;
         lastFailureReason = null;
         pendingProviderAcceptance = { batch: next, acceptance };
         pendingAcceptanceCompletedCompaction = false;
         headInputState = 'awaiting_provider_acceptance';
-        await opts.onPromptInjected?.(next, acceptance, result);
-        scheduleProviderAcceptanceTimeout(providerAcceptanceTimeoutMs, buildProviderAcceptanceTimeoutResult());
+        // Notify a successful injection at most once per batch. An ambiguous retry
+        // re-injects the same batch; re-firing onPromptInjected would double-record
+        // its accepted-echo bookkeeping and could suppress a later identical
+        // terminal-typed prompt.
+        if (lastInjectedNotifiedBatch !== next) {
+          lastInjectedNotifiedBatch = next;
+          await opts.onPromptInjected?.(next, acceptance, result);
+        }
+        if (acceptance.acceptedAs === 'in_flight_steer') {
+          // Acceptance evidence arrives only at turn end; defer the acceptance timeout until
+          // turn-end evidence so a long steered turn cannot mark the prompt ambiguous (and
+          // retry/double-queue it) while it is still legitimately queued in the TUI.
+          steerAcceptanceAwaitingTurnEnd = true;
+          steerAcceptanceTimeoutResult = buildProviderAcceptanceTimeoutResult();
+          scheduleSteerTurnEndFallbackWake();
+        } else {
+          scheduleProviderAcceptanceTimeout(providerAcceptanceTimeoutMs, buildProviderAcceptanceTimeoutResult());
+        }
         return;
       }
       if (result.status === 'deferred') {
         lastDeferredReason = result.reason;
         pendingProviderAcceptance = null;
         ambiguousProviderAcceptanceFailure = null;
+        ambiguousProviderAcceptanceRetryAttempt = 0;
         pendingAcceptanceCompletedCompaction = false;
         clearProviderAcceptanceTimer();
+        clearPendingSteerArming();
         headInputState = 'waiting_for_readiness';
         scheduleRetryDrain(result.retryAfterMs);
         return;
@@ -311,8 +552,10 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       if (failureAction.kind === 'retry') {
         pendingProviderAcceptance = null;
         ambiguousProviderAcceptanceFailure = null;
+        ambiguousProviderAcceptanceRetryAttempt = 0;
         pendingAcceptanceCompletedCompaction = false;
         clearProviderAcceptanceTimer();
+        clearPendingSteerArming();
         retryAttempt += 1;
         headInputState = 'failed_retryable';
         scheduleRetryDrain(failureAction.retryAfterMs);
@@ -322,13 +565,23 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
         pendingProviderAcceptance = { batch: next, acceptance };
         pendingAcceptanceCompletedCompaction = false;
         headInputState = 'awaiting_provider_acceptance';
-        scheduleProviderAcceptanceTimeout(failureAction.timeoutMs, result);
+        if (acceptance.acceptedAs === 'in_flight_steer') {
+          // Same turn-end semantics as a successful steer write: the queued prompt cannot be
+          // accepted before the running turn ends, so defer the confirmation timeout too.
+          steerAcceptanceAwaitingTurnEnd = true;
+          steerAcceptanceTimeoutResult = result;
+          scheduleSteerTurnEndFallbackWake();
+        } else {
+          scheduleProviderAcceptanceTimeout(failureAction.timeoutMs, result);
+        }
         return;
       }
       pendingProviderAcceptance = null;
       ambiguousProviderAcceptanceFailure = null;
+      ambiguousProviderAcceptanceRetryAttempt = 0;
       pendingAcceptanceCompletedCompaction = false;
       clearProviderAcceptanceTimer();
+      clearPendingSteerArming();
       headInputState = 'failed_terminal';
       notifyInjectionFailure({
         batch: next,
@@ -365,10 +618,13 @@ export function createClaudeUnifiedInputArbiter<Mode = unknown>(opts: Readonly<{
       disposed = true;
       clearRetryDrainTimer();
       clearProviderAcceptanceTimer();
+      clearPendingSteerArming();
       queue.length = 0;
       pendingProviderAcceptance = null;
       pendingAcceptanceCompletedCompaction = false;
       ambiguousProviderAcceptanceFailure = null;
+      ambiguousProviderAcceptanceRetryAttempt = 0;
+      lastInjectedNotifiedBatch = null;
       headInputState = null;
     },
   };

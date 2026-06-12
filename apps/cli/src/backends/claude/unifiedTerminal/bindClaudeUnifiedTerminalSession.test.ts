@@ -33,6 +33,7 @@ function createBinding(overrides: Partial<Parameters<typeof bindClaudeUnifiedTer
     beginTurn: vi.fn(async () => ({ turnId: 'turn-1' })),
     completeTurn: vi.fn(async () => undefined),
     cancelTurn: vi.fn(async () => undefined),
+    failTurn: vi.fn(async () => undefined),
   };
   const session = {
     fetchRecentTranscriptTextItemsForAcpImport,
@@ -109,6 +110,23 @@ describe('bindClaudeUnifiedTerminalSession', () => {
     ]);
   });
 
+  it('seeds the own-composer registry from persisted user prompts so a respawned runner recognizes predecessor leftovers (C11, incident cmq8y3nlx)', async () => {
+    const { binding, session } = createBinding();
+    session.fetchRecentTranscriptTextItemsForAcpImport.mockResolvedValueOnce([
+      { role: 'user', text: 'please continue and keep waiting for the agents until full completion' },
+      { role: 'agent', text: 'still working through the agents' },
+    ]);
+
+    expect(binding.ownComposerTexts.matches('please continue and keep waiting for the agents until full completion')).toBe(false);
+
+    await binding.seedPersistedPromptEchoes({ nowMs: 2_000 });
+
+    expect(binding.ownComposerTexts.matches('please continue and keep waiting for the agents until full completion')).toBe(true);
+    // Agent texts and unseen texts must NEVER classify as our own composer writes.
+    expect(binding.ownComposerTexts.matches('still working through the agents')).toBe(false);
+    expect(binding.ownComposerTexts.matches('a genuine fresh user draft')).toBe(false);
+  });
+
   it('opens one canonical turn for accepted prompts and completes it on ready', async () => {
     const { binding, readyContexts, session, sessionTurnLifecycle } = createBinding();
 
@@ -126,6 +144,95 @@ describe('bindClaudeUnifiedTerminalSession', () => {
     expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
     expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledWith({ provider: 'claude' });
     expect(readyContexts).toEqual([{ turnToken: 'ready-turn-1', startSeqExclusive: 41 }]);
+  });
+
+  it('suppresses a steered prompt echo that arrives at turn end, beyond the fixed echo window', async () => {
+    let nowMs = 1_000;
+    const { binding, consumedMessages, observedMessages } = createBinding({ nowMs: () => nowMs });
+
+    binding.noteNextInjectedPromptShouldSuppressEcho();
+    await binding.sessionOptions.onTerminalPromptInjected?.({
+      message: 'steer the long turn',
+      mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+      acceptedAs: 'in_flight_steer',
+      turnStateAtInjection: 'running',
+    });
+
+    // The steered turn runs far beyond the 100ms echo window; the JSONL user row
+    // for the queued prompt only appears once the turn ends.
+    nowMs = 120_000;
+    await binding.sessionOptions.onReady?.();
+    binding.sessionOptions.onMessage?.(userMessage('steer the long turn', new Date(120_010).toISOString()));
+
+    expect(observedMessages).toEqual([]);
+    expect(consumedMessages).toEqual([expect.objectContaining({ type: 'user' })]);
+  });
+
+  it('does not suppress later identical prompts once a steered echo expires after turn end', async () => {
+    let nowMs = 1_000;
+    const { binding, observedMessages } = createBinding({ nowMs: () => nowMs });
+
+    binding.noteNextInjectedPromptShouldSuppressEcho();
+    await binding.sessionOptions.onTerminalPromptInjected?.({
+      message: 'repeatable steer',
+      mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+      acceptedAs: 'in_flight_steer',
+      turnStateAtInjection: 'running',
+    });
+
+    // Turn ends; the pending steer echo gets one echo window (100ms) to match.
+    nowMs = 50_000;
+    await binding.sessionOptions.onReady?.();
+    // No row ever matches it. A later identical terminal-typed prompt must NOT be
+    // suppressed by the stale steer entry.
+    nowMs = 50_500;
+    binding.sessionOptions.onMessage?.(userMessage('repeatable steer', new Date(50_500).toISOString(), 'typed-later'));
+
+    expect(observedMessages).toEqual([expect.objectContaining({ uuid: 'typed-later' })]);
+  });
+
+  it('keeps importing steered prompt echoes when import was requested', async () => {
+    let nowMs = 1_000;
+    const { binding, consumedMessages, observedMessages } = createBinding({ nowMs: () => nowMs });
+
+    binding.noteNextInjectedPromptShouldImportEcho();
+    await binding.sessionOptions.onTerminalPromptInjected?.({
+      message: 'imported steer',
+      mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+      acceptedAs: 'in_flight_steer',
+      turnStateAtInjection: 'running',
+    });
+
+    nowMs = 120_000;
+    await binding.sessionOptions.onReady?.();
+    binding.sessionOptions.onMessage?.(userMessage('imported steer', new Date(120_010).toISOString()));
+
+    expect(consumedMessages).toEqual([]);
+    expect(observedMessages).toEqual([expect.objectContaining({ type: 'user' })]);
+  });
+
+  it('fails the canonical turn when the prompt turn terminates with a failure (hook StopFailure leak)', async () => {
+    const { binding, sessionTurnLifecycle } = createBinding();
+
+    await binding.sessionOptions.onProviderPromptStarted?.();
+    expect(sessionTurnLifecycle.beginTurn).toHaveBeenCalledTimes(1);
+
+    await binding.recordPromptTurnFailed();
+
+    expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledWith({ provider: 'claude' });
+    expect(sessionTurnLifecycle.completeTurn).not.toHaveBeenCalled();
+
+    // Idempotent: a second failure record must not double-fail.
+    await binding.recordPromptTurnFailed();
+    expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('recordPromptTurnFailed is a no-op with no open canonical turn', async () => {
+    const { binding, sessionTurnLifecycle } = createBinding();
+
+    await binding.recordPromptTurnFailed();
+
+    expect(sessionTurnLifecycle.failTurn).not.toHaveBeenCalled();
   });
 
   it('forwards terminal interrupt handler installation and removal', () => {

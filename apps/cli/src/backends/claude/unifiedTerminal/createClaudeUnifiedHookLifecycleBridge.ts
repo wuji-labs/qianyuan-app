@@ -52,6 +52,14 @@ function readHookString(data: SessionHookData, key: string): string {
   return typeof raw === 'string' ? raw.trim() : '';
 }
 
+function readHookRequestId(data: SessionHookData): string {
+  return readHookString(data, 'tool_use_id')
+    || readHookString(data, 'toolUseId')
+    || readHookString(data, 'request_id')
+    || readHookString(data, 'requestId')
+    || readHookString(data, 'id');
+}
+
 function readSystemSubtype(message: RawJSONLines): string {
   if (message.type !== 'system') return '';
   const raw = (message as Record<string, unknown>).subtype;
@@ -67,6 +75,18 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   onUsageLimitDetails?: ((details: NormalizedProviderUsageLimitDetailsV1) => void | Promise<void>) | undefined;
   onRuntimeAuthFailureEvent?: ((error: unknown) => void | Promise<void>) | undefined;
   onProviderPromptStarted?: (() => void | Promise<void>) | undefined;
+  /**
+   * Provider lifecycle evidence from `UserPromptSubmit` (e.g. the active permission mode). Used by the
+   * runtime-control bridge to reconcile the controller's last-verified config — the strongest verification
+   * rung. Optional; only the fields Claude includes on the hook are forwarded.
+   */
+  onProviderPromptSubmitMetadata?: ((metadata: Readonly<{
+    permissionMode?: string | undefined;
+    model?: string | undefined;
+    reasoningEffort?: string | undefined;
+  }>) => void) | undefined;
+  onProviderSessionStarted?: (() => void) | undefined;
+  onTrustedProviderProgress?: (() => void) | undefined;
   onPromptTurnTerminal?: ((event: ClaudeUnifiedPromptTurnTerminalEvent) => void | Promise<void>) | undefined;
   onSessionEnd?: ((event: ClaudeUnifiedSessionEndEvent) => void | Promise<void>) | undefined;
 }>): ClaudeUnifiedHookLifecycleBridge {
@@ -76,6 +96,8 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   let tracker: ReturnType<typeof createClaudeLocalLifecycleTracker> | null = null;
   let quietDrainTimer: NodeJS.Timeout | null = null;
   let terminalSideEffects: Promise<void> = Promise.resolve();
+  let anonymousPermissionBlockCount = 0;
+  const pendingPermissionRequestIds = new Set<string>();
 
   const clearQuietDrainTimer = (): void => {
     if (!quietDrainTimer) return;
@@ -122,14 +144,6 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
     await terminalSideEffects.catch(() => undefined);
   };
 
-  const observeStartupReady = (): void => {
-    opts.arbiter.observeLifecycle({ type: 'output' });
-    drainWhenSafe();
-    clearQuietDrainTimer();
-    quietDrainTimer = setTimeout(drainWhenSafe, TERMINAL_INPUT_QUIET_PERIOD_MS);
-    quietDrainTimer.unref?.();
-  };
-
   const observeCompactionStarted = (): void => {
     clearQuietDrainTimer();
     opts.arbiter.observeLifecycle({ type: 'compaction', phase: 'started' });
@@ -145,11 +159,36 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
     quietDrainTimer.unref?.();
   };
 
-  const observePermissionBlocked = (): void => {
+  const hasPendingPermissionBlock = (): boolean => (
+    anonymousPermissionBlockCount > 0 || pendingPermissionRequestIds.size > 0
+  );
+
+  const observePermissionBlocked = (data: SessionHookData): void => {
+    const requestId = readHookRequestId(data);
+    if (requestId) {
+      pendingPermissionRequestIds.add(requestId);
+    } else {
+      anonymousPermissionBlockCount += 1;
+    }
     opts.arbiter.observeLifecycle({ type: 'permission', blocked: true });
   };
 
-  const observePermissionReleased = (optsOverride?: Readonly<{ redrain?: boolean }>): void => {
+  const observePermissionReleased = (
+    data: SessionHookData,
+    optsOverride?: Readonly<{ redrain?: boolean; releaseAll?: boolean }>,
+  ): void => {
+    if (optsOverride?.releaseAll === true) {
+      anonymousPermissionBlockCount = 0;
+      pendingPermissionRequestIds.clear();
+    } else {
+      const requestId = readHookRequestId(data);
+      if (requestId) {
+        pendingPermissionRequestIds.delete(requestId);
+      } else if (anonymousPermissionBlockCount > 0) {
+        anonymousPermissionBlockCount -= 1;
+      }
+    }
+    if (hasPendingPermissionBlock()) return;
     opts.arbiter.observeLifecycle({ type: 'permission', blocked: false });
     if (optsOverride?.redrain === false) return;
     drainWhenSafe();
@@ -197,15 +236,23 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
   ): Promise<void> => {
     if (disposed || !snapshot.terminal) return;
     opts.arbiter.observeLifecycle({ type: 'turn_state', state: 'finalizing' });
-    opts.onThinkingChange?.(false);
     if (snapshot.lastTerminalReason === 'completed') {
+      opts.onThinkingChange?.(false);
       chainTerminalSideEffect('ready', opts.onReady);
     } else {
+      // A failed/aborted terminal turn must win over task-completion bookkeeping.
+      // Run the terminal projection (which may abort/fail the canonical turn)
+      // before clearing the thinking state; otherwise onThinkingChange(false)
+      // emits task_complete first and a failed turn is recorded as completed.
       chainTerminalSideEffect('prompt-turn-terminal', () => opts.onPromptTurnTerminal?.({
         reason: snapshot.lastTerminalReason ?? 'unknown',
         source: event.source,
         ...(event.type === 'turn_terminal' && event.detail ? { detail: event.detail } : {}),
       }));
+      chainTerminalSideEffect(
+        'thinking-cleared',
+        opts.onThinkingChange ? () => { opts.onThinkingChange?.(false); } : undefined,
+      );
     }
     await waitForTerminalSideEffects();
     if (disposed) return;
@@ -236,27 +283,40 @@ export function createClaudeUnifiedHookLifecycleBridge(opts: Readonly<{
       unsubscribe = opts.subscribeClaudeSessionHooks((data) => {
         const hookEventName = readHookEventName(data);
         if (hookEventName === 'SessionStart') {
-          observeStartupReady();
+          opts.onProviderSessionStarted?.();
         } else if (hookEventName === 'PreCompact') {
           observeCompactionStarted();
         } else if (hookEventName === 'PostCompact') {
           observeCompactionCompleted();
         } else if (hookEventName === 'UserPromptSubmit') {
+          opts.onTrustedProviderProgress?.();
           observeProviderPromptStarted();
+          if (opts.onProviderPromptSubmitMetadata) {
+            const permissionMode = readHookString(data, 'permission_mode') || readHookString(data, 'permissionMode');
+            const model = readHookString(data, 'model');
+            const reasoningEffort = readHookString(data, 'reasoning_effort') || readHookString(data, 'effort');
+            if (permissionMode || model || reasoningEffort) {
+              opts.onProviderPromptSubmitMetadata({
+                ...(permissionMode ? { permissionMode } : {}),
+                ...(model ? { model } : {}),
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+              });
+            }
+          }
           void opts.arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
         } else if (hookEventName === 'PermissionRequest') {
-          observePermissionBlocked();
+          observePermissionBlocked(data);
         } else if (
           hookEventName === 'PostToolUse'
           || hookEventName === 'PermissionRequestCompleted'
         ) {
-          observePermissionReleased();
+          observePermissionReleased(data);
         } else if (
           hookEventName === 'Stop'
           || hookEventName === 'StopFailure'
           || hookEventName === 'SessionEnd'
         ) {
-          observePermissionReleased({ redrain: false });
+          observePermissionReleased(data, { redrain: false, releaseAll: true });
         }
         if (hookEventName === 'SessionEnd') {
           observeSessionEnd(data);

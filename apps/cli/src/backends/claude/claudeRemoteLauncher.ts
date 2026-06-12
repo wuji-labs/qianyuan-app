@@ -5,11 +5,23 @@ import { MessageBuffer } from "@/ui/ink/messageBuffer";
 import { RemoteModeDisplay } from "@/backends/claude/ui/RemoteModeDisplay";
 import React from "react";
 import { claudeRemoteDispatch } from "./remote/claudeRemoteDispatch";
+import { createClaudeInFlightSteerCapabilityPublisher } from './unifiedTerminal/createClaudeInFlightSteerCapabilityPublisher';
 import {
     runClaudeUnifiedTerminalSession,
     type ClaudeUnifiedTerminalSessionOptions,
 } from './unifiedTerminal/runClaudeUnifiedTerminalSession';
+import { CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID } from './unifiedTerminal/tuiControls';
+import type { ClaudeUnifiedRuntimeConfigOutcomeEvent } from './unifiedTerminal/runtimeControlIntegration';
+import { buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent } from './unifiedTerminal/runtimeControlIntegration';
+import {
+    buildUnifiedTerminalRuntimeConfigRestartChanges,
+    CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE,
+    CLAUDE_UNIFIED_TERMINAL_UNSUPPORTED_OPTIONS_MESSAGE,
+    type ClaudeRuntimeConfigOutcomeChange,
+} from './unifiedTerminal/runtimeConfigRestartNotice';
+import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { bindClaudeUnifiedTerminalSession } from './unifiedTerminal/bindClaudeUnifiedTerminalSession';
+import { surfaceClaudeUnifiedTerminalRuntimeIssue } from './unifiedTerminal/surfaceClaudeUnifiedTerminalRuntimeIssue';
 import { PermissionHandler } from "./utils/permissionHandler";
 import { Future } from "@/utils/future";
 import { AbortError, type SDKAssistantMessage, type SDKMessage, type SDKUserMessage } from "./sdk/types";
@@ -21,6 +33,7 @@ import { RawJSONLines } from "@/backends/claude/types";
 import { OutgoingMessageQueue } from "./utils/OutgoingMessageQueue";
 import { getToolName } from "./utils/getToolName";
 import { syncClaudePermissionModeFromMetadata } from "./utils/syncPermissionModeFromMetadata";
+import { resolveClaudeSdkPermissionModeFromEnhancedMode } from "./utils/permissionMode";
 import { formatErrorForUi } from '@/ui/formatErrorForUi';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import { resolveSessionPendingQueueMaxPopPerWake } from '@/agent/runtime/sessionInput/pendingQueueDrainPolicy';
@@ -73,6 +86,7 @@ import {
     surfaceClaudeRateLimitRuntimeIssue,
 } from './connectedServices/surfaceClaudeRuntimeIssues';
 import type { NormalizedProviderUsageLimitDetailsV1 } from './connectedServices/mapClaudeRateLimitEventToUsageDetails';
+import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 
 function mergeSessionWorkStateIntoMetadata(
     metadata: Metadata,
@@ -262,12 +276,31 @@ function resolveClaudeProjectDir(session: Session): string {
 
 export { createClaudeReadyHandler as createClaudeRemoteReadyHandler };
 
-const CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE =
-    'Claude unified terminal is already running. Model, permission, reasoning, and launch option changes apply when Claude restarts; this prompt was sent to the current Claude terminal session.';
+// Canonical comparator + notice constants now live in the shared unified-terminal owner so the
+// standalone launcher's gate-off notice path (QA-B B6) and this daemon path cannot drift.
+function buildUnifiedTerminalRuntimeConfigRestartChangesForHashChange(
+    currentMode: EnhancedMode | null,
+    nextMode: EnhancedMode,
+): ClaudeRuntimeConfigOutcomeChange[] {
+    const changes = buildUnifiedTerminalRuntimeConfigRestartChangesForHashChange(currentMode, nextMode);
+    // This is only called when the launch-options HASH changed, so an empty classified delta still
+    // means something changed (e.g. a hash input not modeled above).
+    if (changes.length === 0) {
+        return [{ key: 'launchOption', reason: 'unclassified_launch_option_hash_change' }];
+    }
+    return changes;
+}
 
 export async function claudeRemoteLauncher(session: Session): Promise<'switch' | 'exit'> {
     logger.debug('[claudeRemoteLauncher] Starting remote launcher');
     const turnAssistantPreviewTracker = createTurnAssistantPreviewTracker();
+    // Resolve the Claude Unified TUI runtime-control feature gate once per launch. It defaults ON
+    // (riding the unified-mode opt-in); the env flag is a kill-switch that restores the legacy
+    // restart-notice path, and the controller fails closed on any unverified control regardless.
+    const tuiRuntimeControlEnabled = resolveCliFeatureDecision({
+        featureId: CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID,
+        env: process.env,
+    }).state === 'enabled';
 
     // Check if we have a TTY for UI rendering
     const terminalInkAvailable = resolveHasTTY({
@@ -297,6 +330,11 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     let abortController: AbortController | null = null;
     let abortFuture: Future<void> | null = null;
     let turnInterrupt: (() => Promise<void>) | null = null;
+    // Cancels the canonical Claude unified terminal turn on abort so an aborted
+    // turn is never recorded completed by a later lifecycle settle. Mirrors the
+    // standalone unified launcher abort path. Set when the unified binding is
+    // created; cleared when the launch iteration tears down.
+    let recordUnifiedPromptTurnCancelled: (() => Promise<void>) | null = null;
     let permissionHandler: PermissionHandler | null = null;
     let didUserAbortThisLaunch = false;
     const turnChangeTracker = new ClaudeTurnChangeTracker();
@@ -375,15 +413,18 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             } catch (error) {
                 logger.debug('[remote]: turn interrupt failed; falling back to process abort', { error });
                 session.noteUserAbortRequested();
+                await recordUnifiedPromptTurnCancelled?.();
                 session.abortCurrentTaskTurn();
                 await abort();
                 return;
             }
+            await recordUnifiedPromptTurnCancelled?.();
             session.abortCurrentTaskTurn();
             session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
             return;
         }
 	        session.noteUserAbortRequested();
+	        await recordUnifiedPromptTurnCancelled?.();
 	        session.abortCurrentTaskTurn();
 	        await abort();
 	    }
@@ -946,13 +987,52 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 launchOptionsChanged
                 && currentMode?.claudeUnifiedTerminalEnabled === true
                 && nextMode.claudeUnifiedTerminalEnabled === true;
-            const surfaceUnifiedTerminalRestartOnlyOptionsNotice = (nextHash: string): void => {
+            const surfaceUnifiedTerminalRestartOnlyOptionsNotice = (
+                currentMode: EnhancedMode | null,
+                nextMode: EnhancedMode,
+                nextHash: string,
+            ): void => {
                 if (lastUnifiedTerminalRestartOnlyNoticeHash === nextHash) return;
                 lastUnifiedTerminalRestartOnlyNoticeHash = nextHash;
-                session.client.sendSessionEvent({
-                    type: 'message',
-                    message: CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE,
-                });
+                const changes = buildUnifiedTerminalRuntimeConfigRestartChanges(currentMode, nextMode);
+                // When the TUI runtime-control controller is active it applies model/permission/effort live
+                // and reports max-thinking as unsupported through the verified-control outcome path, so those
+                // keys must NOT also ride the blanket restart/unsupported notice. Truly launch-only options
+                // (fallbackModel, host/launchOption) keep the restart notice.
+                const tuiControllerHandledKeys: ReadonlySet<ClaudeRuntimeConfigOutcomeChange['key']> = tuiRuntimeControlEnabled
+                    ? new Set(['model', 'permissionMode', 'reasoningEffort', 'maxThinkingTokens'])
+                    : new Set();
+                const unsupportedChanges = changes.filter(
+                    (change) => change.key === 'maxThinkingTokens' && !tuiControllerHandledKeys.has(change.key),
+                );
+                const restartChanges = changes.filter(
+                    (change) => change.key !== 'maxThinkingTokens' && !tuiControllerHandledKeys.has(change.key),
+                );
+
+                if (restartChanges.length > 0) {
+                    session.client.sendSessionEvent({
+                        type: 'message',
+                        message: CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE,
+                    });
+                    session.client.sendSessionEvent(buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent({
+                        status: 'requires_restart',
+                        reason: 'unified_terminal_launch_options_changed',
+                        message: CLAUDE_UNIFIED_TERMINAL_RESTART_ONLY_OPTIONS_MESSAGE,
+                        changes: restartChanges,
+                    }));
+                }
+                if (unsupportedChanges.length > 0) {
+                    session.client.sendSessionEvent({
+                        type: 'message',
+                        message: CLAUDE_UNIFIED_TERMINAL_UNSUPPORTED_OPTIONS_MESSAGE,
+                    });
+                    session.client.sendSessionEvent(buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent({
+                        status: 'unsupported',
+                        reason: 'unified_terminal_unsupported_options_changed',
+                        message: CLAUDE_UNIFIED_TERMINAL_UNSUPPORTED_OPTIONS_MESSAGE,
+                        changes: unsupportedChanges,
+                    }));
+                }
             };
             const beginPromptTurn = async (): Promise<void> => {
                 beginReadyNotificationTurn();
@@ -964,6 +1044,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 mode?.claudeUnifiedTerminalEnabled === true
                 || pending?.mode.claudeUnifiedTerminalEnabled === true
                 || hasQueuedUnifiedTerminalPrompt();
+            let surfaceUnifiedTerminalRuntimeIssue: (error: unknown) => Promise<boolean> = async () => false;
             try {
                 const inputConsumer = createSessionProviderInputConsumer<EnhancedMode, string>({
                     messageQueue: session.queue,
@@ -1057,7 +1138,22 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         session.setThinkingWithoutTaskLifecycle(true);
                     },
                 });
+                recordUnifiedPromptTurnCancelled = unifiedBinding.recordPromptTurnCancelled;
                 await unifiedBinding.seedPersistedPromptEchoes();
+                surfaceUnifiedTerminalRuntimeIssue = async (error: unknown): Promise<boolean> => {
+                    session.onThinkingChange(false);
+                    const surfaced = await surfaceClaudeUnifiedTerminalRuntimeIssue({
+                        error,
+                        session: session.client,
+                        onSurfaceError: (surfaceError) => {
+                            logger.debug('[remote]: failed to surface Claude unified terminal runtime issue (non-fatal)', surfaceError);
+                        },
+                    });
+                    if (surfaced) {
+                        unifiedBinding.notePromptTurnTerminal();
+                    }
+                    return surfaced;
+                };
                 activeUnifiedTranscriptBinding = {
                     isActive: isUnifiedTerminalTranscriptActive,
                     shouldSuppressTranscriptMessage: unifiedBinding.shouldSuppressTranscriptMessage,
@@ -1085,6 +1181,16 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     canCallTool: permissionHandler.handleToolCall,
                     isAborted: (toolCallId: string) => {
                         return permissionHandler.isAborted(toolCallId);
+                    },
+                    // A message pulled by the unified runner's input pump during a death/dispose
+                    // unwind must come back to the session queue instead of being dropped into
+                    // the dead host (silent queue-swallow, incident cmq8y3nlx).
+                    returnUnconsumedMessage: ({ message, mode: unconsumedMode }: { message: string; mode: EnhancedMode }) => {
+                        try {
+                            session.queue.unshift(message, unconsumedMode);
+                        } catch (error) {
+                            logger.debug('[remote]: failed to requeue undeliverable unified terminal message', error);
+                        }
                     },
                     nextMessage: async () => {
                         if (pending) {
@@ -1125,7 +1231,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             && nextUnifiedTerminalLaunchOptionsHash !== unifiedTerminalLaunchOptionsHash,
                         );
                         if (shouldSurfaceUnifiedTerminalRestartOnlyOptionsNotice(mode, msg.mode, unifiedTerminalLaunchOptionsChanged)) {
-                            surfaceUnifiedTerminalRestartOnlyOptionsNotice(nextUnifiedTerminalLaunchOptionsHash ?? msg.hash);
+                            surfaceUnifiedTerminalRestartOnlyOptionsNotice(mode, msg.mode, nextUnifiedTerminalLaunchOptionsHash ?? msg.hash);
                         }
                         modeHash = msg.hash;
                         const nextMode = msg.mode;
@@ -1156,8 +1262,11 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         const transcriptPath = typeof (data as any)?.transcript_path === 'string' ? String((data as any).transcript_path) : null;
                         void seedTeamInboxFromTranscriptPath(sessionId, transcriptPath);
                     },
-                    loadCommittedClaudeJsonlMessageKeys: () =>
-                        session.client.fetchCommittedClaudeJsonlMessageKeys?.() ?? new Set<string>(),
+                    loadCommittedClaudeJsonlMessageBaseline: () =>
+                        session.client.fetchCommittedClaudeJsonlMessageBaseline?.()
+                        ?? { keys: new Set<string>(), complete: true, oldestCoveredAtMs: null },
+                    // Unknown canonical state (no accessor) counts as ACTIVE (fail-closed).
+                    isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
                     onCheckpointCaptured: (checkpointId: string) => {
                         updateMetadataBestEffort(
                             session.client,
@@ -1208,6 +1317,51 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     onRateLimitEvent: async (details: NormalizedProviderUsageLimitDetailsV1) => {
                         await surfaceClaudeRateLimitRuntimeIssue(session, details, '[remote]');
                     },
+                    // Unified terminal usage-limit evidence is detected by the hook lifecycle
+                    // bridge and surfaced through onUsageLimitDetails (the legacy/agent-SDK
+                    // runners use onRateLimitEvent instead). Without this the unified path
+                    // would silently drop hook-detected usage limits.
+                    onUsageLimitDetails: async (details: NormalizedProviderUsageLimitDetailsV1) => {
+                        try {
+                            await surfaceClaudeRateLimitRuntimeIssue(session, details, '[remote]');
+                        } finally {
+                            unifiedBinding.notePromptTurnTerminal();
+                        }
+                    },
+                    // Forward unified terminal turn-terminal projection so failed/aborted
+                    // turns terminalize the canonical turn instead of being recorded
+                    // completed. Parity with the standalone unified launcher.
+                    onPromptTurnTerminal: async (
+                        event: Parameters<NonNullable<ClaudeUnifiedTerminalSessionOptions['onPromptTurnTerminal']>>[0],
+                    ) => {
+                        try {
+                            if (event.reason === 'aborted') {
+                                await unifiedBinding.recordPromptTurnCancelled();
+                                session.abortCurrentTaskTurn();
+                                return;
+                            }
+                            if (event.reason === 'failed' && event.source === 'claude_transcript_api_error') {
+                                await surfacePrimarySessionRuntimeIssue({
+                                    provider: 'claude',
+                                    cause: 'status_error',
+                                    error: {
+                                        code: event.source,
+                                        message: event.detail ?? event.source,
+                                    },
+                                    session: session.client,
+                                }).catch((error) => {
+                                    logger.debug('[remote]: failed to surface Claude transcript API-error turn failure (non-fatal)', error);
+                                    return null;
+                                });
+                            }
+                        } finally {
+                            // Any non-aborted terminal projection (hook StopFailure, process exit,
+                            // unknown) must terminalize the canonical turn; leaving it open keeps the
+                            // server turn 'in_progress' forever and permanently blocks daemon
+                            // pending-queue draining (QA A-F3/C-F2).
+                            await unifiedBinding.recordPromptTurnFailed().catch(() => undefined);
+                        }
+                    },
                     onRuntimeAuthFailureEvent: async (error: unknown) => {
                         await surfaceClaudeConnectedServiceRuntimeAuthFailure(session, error, '[remote]');
                     },
@@ -1243,19 +1397,73 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         beginReadyNotificationTurn();
                         return undefined;
                     },
+                    onTerminalInjectionFailure: surfaceUnifiedTerminalRuntimeIssue,
                     signal: abortController.signal,
                 }, {
-                    claudeUnifiedTerminal: (dispatchOpts: unknown) =>
-                        runClaudeUnifiedTerminalSession({
+                    claudeUnifiedTerminal: async (dispatchOpts: unknown) => {
+                        // Lane P (O-design Seam A): publish live steer availability (+reason) to agentState.
+                        const inFlightSteerCapabilityPublisher = createClaudeInFlightSteerCapabilityPublisher({
+                            session: session.client,
+                            isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
+                        });
+                        try {
+                        return await runClaudeUnifiedTerminalSession({
                             ...(dispatchOpts as ClaudeUnifiedTerminalSessionOptions),
                             happySessionId: session.client.sessionId,
+                            statuslineForwarder: session.claudeStatuslineForwarder ?? undefined,
+                            // Persist a consumed marker for controller-command echoes the runner
+                            // suppresses, so they join the committed baseline and cannot replay as
+                            // "new" messages after a respawn (resume-replay leak, 2026-06-11).
+                            onTranscriptMessageSuppressed: (message: RawJSONLines) => {
+                                session.client.recordClaudeJsonlMessageConsumed?.(message, {
+                                    suppressedBy: 'control_command_echo',
+                                });
+                            },
+                            onInFlightSteerAvailabilitySnapshot: inFlightSteerCapabilityPublisher.publish,
+                            // C11 (incident cmq8y3nlx): binding-owned registry, seeded from the
+                            // persisted prompt store above, so a respawned runner recognizes its
+                            // predecessor's leftover composer injection as our own text.
+                            ownComposerTexts: unifiedBinding.ownComposerTexts,
+                            // Lane X (incident cmq8y3nlx): one honest notice per starvation
+                            // episode — the queued message is blocked by a terminal composer draft.
+                            onInFlightSteerUserDraftStarvation: () => {
+                                session.client.sendSessionEvent({
+                                    type: 'message',
+                                    message: 'Your queued message can\'t steer the running turn: the terminal composer holds an unsent draft. Clear the draft in the terminal (or interrupt the turn) to deliver it.',
+                                });
+                            },
                             subscribeClaudeSessionHooks: (callback) => {
                                 session.addClaudeSessionHookCallback(callback);
                                 return () => {
                                     session.removeClaudeSessionHookCallback(callback);
                                 };
                             },
-                        }),
+                            tuiRuntimeControl: {
+                                featureEnabled: tuiRuntimeControlEnabled,
+                                // sessionMode change-key emission stays gated off until UI/dev consumers ship
+                                // the widened enum (Lane B version-skew); plan-mode rides permissionMode.
+                                emitRuntimeConfigOutcome: (event: ClaudeUnifiedRuntimeConfigOutcomeEvent) => {
+                                    session.client.sendSessionEvent(buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent(event));
+                                },
+                                // F2 (qa/QA-B.md): one honest notice per stuck-unsafe-window episode —
+                                // an idle queued message kept deferring because runtime controls could
+                                // not be applied over a composer draft/dialog on the TUI.
+                                onBlockedApplyStarvation: () => {
+                                    session.client.sendSessionEvent({
+                                        type: 'message',
+                                        message: 'Your queued message is waiting: the terminal shows a draft or dialog that blocks applying your settings change. Clear the terminal composer (or dismiss the dialog) to deliver it.',
+                                    });
+                                },
+                                // Lane Y: feed statusline-reported effective model/effort into the
+                                // controller's lastVerified through the session statusline applier.
+                                registerStatuslineRuntimeReconciler: (reconcile) =>
+                                    session.setClaudeStatuslineRuntimeReconciler(reconcile),
+                            },
+                        });
+                        } finally {
+                            inFlightSteerCapabilityPublisher.dispose();
+                        }
+                    },
                 });
 
                 // Consume one-time Claude flags after spawn
@@ -1298,6 +1506,10 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                     }
                     continue;
                 } else {
+                    if (await surfaceUnifiedTerminalRuntimeIssue(e)) {
+                        waitForMessageBeforeNextLaunch = true;
+                        continue;
+                    }
                     const exitCode = resolveClaudeCodeExitCode(e);
                     if (exitCode === 1) {
                         const artifacts = resolveClaudeCodeArtifacts(e);
@@ -1353,6 +1565,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 abortFuture?.resolve(undefined);
                 abortFuture = null;
                 turnInterrupt = null;
+                recordUnifiedPromptTurnCancelled = null;
                 activeUnifiedTranscriptBinding = null;
                 logger.debug('[remote]: launch done');
                 await permissionHandler.resetAndFlush();

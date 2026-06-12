@@ -33,6 +33,40 @@ export type ClaudeUnifiedTelemetryEvent =
         hostKind: TerminalHostKind;
         multiline: boolean;
           originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
+          inFlightSteer?: boolean | undefined;
+        }>;
+      }>
+    | Readonly<{
+        name: 'unified.steer.decision';
+        properties: Readonly<{
+          decision:
+            | 'safe'
+            | 'vetoed'
+            | 'acceptance_armed'
+            | 'queued_banner_check'
+            // Lane X (incident cmq8y3nlx): bounded own-leftover composer clear + one-shot
+            // starvation escalation leave explicit log evidence (the incident's veto loop had
+            // no draft evidence at all).
+            | 'own_draft_clear_attempted'
+            | 'starvation_escalated';
+          reason?: TelemetryReason | undefined;
+          originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
+          queuedBannerVisible?: boolean | undefined;
+          /** Length of the composer draft blocking a steer (`user_draft` evidence, lane X). */
+          draftLength?: number | undefined;
+          /** True when the blocking draft exactly matches a text the runtime itself wrote. */
+          ownDraft?: boolean | undefined;
+          consecutiveVetoes?: number | undefined;
+        }>;
+      }>
+    | Readonly<{
+        // C11: pre-injection composer guard outcome (own leftover cleared / genuine draft deferral).
+        name: 'unified.injection.draft_guard';
+        properties: Readonly<{
+          status: 'cleared' | 'foreign_draft' | 'generating' | 'capture_failed' | 'clear_failed';
+          attempts?: number | undefined;
+          draftLength?: number | undefined;
+          originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
         }>;
       }>
     | Readonly<{
@@ -109,6 +143,7 @@ export function emitClaudeUnifiedInjectionOutcome(
     hostKind: TerminalHostKind;
     multiline: boolean;
     originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
+    inFlightSteer?: boolean | undefined;
   }>,
 ): void {
   telemetry.emit({
@@ -126,7 +161,33 @@ export function emitClaudeUnifiedInjectionOutcome(
       hostKind: params.hostKind,
       multiline: params.multiline,
       originKind: params.originKind,
+      ...(params.inFlightSteer ? { inFlightSteer: true } : {}),
     },
+  });
+}
+
+/**
+ * Observability for in-flight steering (D19): every steer evaluation (safe/vetoed + reason),
+ * acceptance arming at turn end, and the optional queued-message banner diagnostic emit a line so
+ * a steered-or-held prompt always leaves log evidence (incident cmq8171vw had none).
+ */
+export function emitClaudeUnifiedInjectionDraftGuard(
+  telemetry: ClaudeUnifiedTelemetrySink,
+  properties: Extract<ClaudeUnifiedTelemetryEvent, { name: 'unified.injection.draft_guard' }>['properties'],
+): void {
+  telemetry.emit({
+    name: 'unified.injection.draft_guard',
+    properties,
+  });
+}
+
+export function emitClaudeUnifiedSteerDecision(
+  telemetry: ClaudeUnifiedTelemetrySink,
+  properties: Extract<ClaudeUnifiedTelemetryEvent, { name: 'unified.steer.decision' }>['properties'],
+): void {
+  telemetry.emit({
+    name: 'unified.steer.decision',
+    properties,
   });
 }
 

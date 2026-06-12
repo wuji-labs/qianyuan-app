@@ -478,4 +478,29 @@ describe('Session', () => {
       session.cleanup();
     }
   });
+
+  it('routes statusline runtime reconciles to the registered reconciler; a stale unregister never clobbers a newer one', () => {
+    const client = createSessionClientStub();
+    const session = createSession(client);
+
+    try {
+      // No reconciler registered: forwarding is a silent no-op.
+      session.reconcileClaudeRuntimeFromStatusline({ model: 'claude-fable-5' });
+
+      const first = vi.fn();
+      const unregisterFirst = session.setClaudeStatuslineRuntimeReconciler(first);
+      session.reconcileClaudeRuntimeFromStatusline({ model: 'claude-fable-5', reasoningEffort: 'high' });
+      expect(first).toHaveBeenCalledWith({ model: 'claude-fable-5', reasoningEffort: 'high' });
+
+      // A relaunched host registers a fresh reconciler; the stale unregister must not clear it.
+      const second = vi.fn();
+      session.setClaudeStatuslineRuntimeReconciler(second);
+      unregisterFirst();
+      session.reconcileClaudeRuntimeFromStatusline({ reasoningEffort: 'medium' });
+      expect(second).toHaveBeenCalledWith({ reasoningEffort: 'medium' });
+      expect(first).toHaveBeenCalledTimes(1);
+    } finally {
+      session.cleanup();
+    }
+  });
 });

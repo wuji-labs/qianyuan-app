@@ -1,4 +1,4 @@
-import type { DrainPendingOptions, DrainPendingResult } from '@/agent/runtime/sessionInput/types';
+import type { DrainPendingOptions, DrainPendingResult, MessageBatch } from '@/agent/runtime/sessionInput/types';
 
 import type {
   ClaudeUnifiedInputArbiter,
@@ -9,6 +9,13 @@ import type {
 export function createClaudeUnifiedPendingQueuePump<Mode = unknown>(opts: Readonly<{
   inputConsumer: ClaudeUnifiedInputConsumer<Mode>;
   arbiter: Pick<ClaudeUnifiedInputArbiter<Mode>, 'enqueueUiMessage' | 'drainWhenSafe'>;
+  /**
+   * Called when a batch was already pulled from the input consumer but the pump
+   * can no longer deliver it (aborted/disposed mid-wait, e.g. host-death
+   * unwind). Lets the owner return the message to its queue instead of
+   * permanently dropping it into a dead session.
+   */
+  onUndeliverableBatch?: (batch: MessageBatch<Mode, string>) => void;
 }>): ClaudeUnifiedPendingQueuePump<Mode> {
   let disposed = false;
   let runPromise: Promise<void> | null = null;
@@ -18,7 +25,11 @@ export function createClaudeUnifiedPendingQueuePump<Mode = unknown>(opts: Readon
       return false;
     }
     const batch = await opts.inputConsumer.waitForNextInput({ abortSignal: pumpOpts.abortSignal });
-    if (!batch || pumpOpts.abortSignal.aborted || disposed) {
+    if (!batch) {
+      return false;
+    }
+    if (pumpOpts.abortSignal.aborted || disposed) {
+      opts.onUndeliverableBatch?.(batch);
       return false;
     }
     await opts.arbiter.enqueueUiMessage({

@@ -33,6 +33,35 @@ describe('buildClaudeAgentState', () => {
     });
   });
 
+  it('publishes inFlightConfigApplySupported for unified sessions with TUI runtime control (lane Q)', () => {
+    const withControl = buildClaudeAgentState({
+      currentState: {},
+      mode: 'remote',
+      claudeUnifiedTerminalEnabled: true,
+      localPermissionBridgeEnabled: false,
+      tuiRuntimeControlEnabled: true,
+    });
+    expect(withControl.capabilities).toMatchObject({ inFlightConfigApplySupported: true });
+
+    const withoutControl = buildClaudeAgentState({
+      currentState: {},
+      mode: 'remote',
+      claudeUnifiedTerminalEnabled: true,
+      localPermissionBridgeEnabled: false,
+      tuiRuntimeControlEnabled: false,
+    });
+    expect((withoutControl.capabilities as Record<string, unknown>).inFlightConfigApplySupported).toBeUndefined();
+
+    const legacy = buildClaudeAgentState({
+      currentState: {},
+      mode: 'local',
+      claudeUnifiedTerminalEnabled: false,
+      localPermissionBridgeEnabled: false,
+      tuiRuntimeControlEnabled: true,
+    });
+    expect((legacy.capabilities as Record<string, unknown>).inFlightConfigApplySupported).toBeUndefined();
+  });
+
   it('preserves legacy Claude local-control semantics when unified terminal is disabled', () => {
     expect(buildClaudeAgentState({
       currentState: {

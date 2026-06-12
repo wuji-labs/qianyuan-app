@@ -171,6 +171,84 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
     }
   });
 
+  it('does not treat SessionStart alone as trusted prompt progress', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const onTrustedProviderProgress = vi.fn();
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle: vi.fn(),
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe: vi.fn().mockResolvedValue(undefined),
+      },
+      completionQuiescenceMs: 0,
+      onTrustedProviderProgress,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({ hook_event_name: 'SessionStart', session_id: 'claude-session-id' });
+      expect(onTrustedProviderProgress).not.toHaveBeenCalled();
+
+      hook({ hook_event_name: 'UserPromptSubmit', session_id: 'claude-session-id' });
+      expect(onTrustedProviderProgress).toHaveBeenCalledTimes(1);
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it('keeps input injection blocked until all correlated permission requests complete', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const observeLifecycle = vi.fn();
+    const drainWhenSafe = vi.fn().mockResolvedValue(undefined);
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle,
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe,
+      },
+      completionQuiescenceMs: 0,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({ hook_event_name: 'PermissionRequest', session_id: 'claude-session-id', tool_use_id: 'toolu_1' });
+      hook({ hook_event_name: 'PermissionRequest', session_id: 'claude-session-id', tool_use_id: 'toolu_2' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'permission', blocked: true });
+
+      hook({ hook_event_name: 'PostToolUse', session_id: 'claude-session-id', tool_use_id: 'toolu_1' });
+      expect(observeLifecycle).not.toHaveBeenCalledWith({ type: 'permission', blocked: false });
+      expect(drainWhenSafe).not.toHaveBeenCalled();
+
+      hook({ hook_event_name: 'PermissionRequestCompleted', session_id: 'claude-session-id', tool_use_id: 'toolu_2' });
+      expect(observeLifecycle).toHaveBeenCalledWith({ type: 'permission', blocked: false });
+      await vi.waitFor(() => {
+        expect(drainWhenSafe).toHaveBeenCalled();
+      });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
   it('forwards Claude compaction hooks to the input arbiter lifecycle', async () => {
     let subscribedHook: ((data: SessionHookData) => void) | undefined;
     const observeLifecycle = vi.fn();
@@ -428,6 +506,67 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
       await vi.waitFor(() => {
         expect(observeLifecycle).toHaveBeenCalledWith({ type: 'turn_state', state: 'idle' });
       });
+    } finally {
+      bridge.dispose();
+    }
+  });
+
+  it('runs the terminal prompt-failure projection before clearing the thinking state', async () => {
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const order: string[] = [];
+    const onThinkingChange = vi.fn((thinking: boolean) => {
+      order.push(`thinking:${thinking}`);
+    });
+    const onPromptTurnTerminal = vi.fn(() => {
+      order.push('prompt_turn_terminal');
+    });
+    const bridge = createClaudeUnifiedHookLifecycleBridge({
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      arbiter: {
+        observeLifecycle: vi.fn(),
+        confirmPromptAcceptedByProvider: vi.fn().mockResolvedValue(false),
+        drainWhenSafe: vi.fn().mockResolvedValue(undefined),
+      },
+      completionQuiescenceMs: 0,
+      onThinkingChange,
+      onPromptTurnTerminal,
+    });
+
+    try {
+      bridge.start({ abortSignal: new AbortController().signal });
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({ hook_event_name: 'UserPromptSubmit', session_id: 'claude-session-id' });
+      bridge.observeTranscript({
+        type: 'assistant',
+        uuid: 'assistant-provider-error-ordering',
+        isApiErrorMessage: true,
+        apiErrorStatus: 529,
+        error: 'server_error',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'API Error: 529 Overloaded.' }],
+        },
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(onPromptTurnTerminal).toHaveBeenCalledTimes(1);
+      });
+      await vi.waitFor(() => {
+        expect(onThinkingChange).toHaveBeenCalledWith(false);
+      });
+      // A failed terminal turn must terminalize before the thinking state is
+      // cleared; otherwise onThinkingChange(false) emits task_complete first and
+      // the failed turn is recorded as completed.
+      expect(order.indexOf('prompt_turn_terminal')).toBeGreaterThanOrEqual(0);
+      expect(order.indexOf('prompt_turn_terminal')).toBeLessThan(order.indexOf('thinking:false'));
     } finally {
       bridge.dispose();
     }

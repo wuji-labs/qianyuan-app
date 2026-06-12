@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,8 +12,15 @@ import { getClaudeSystemPrompt } from '../utils/systemPrompt';
 import { isClaudeCliJavaScriptFile, resolveClaudeCliPath } from '../utils/resolveClaudeCliPath';
 import { ensureClaudeJsRuntimeExecutable } from '../utils/ensureClaudeJsRuntimeExecutable';
 import { buildClaudeSubprocessEnv } from '../spawn/buildClaudeSubprocessEnv';
+import {
+  buildClaudeStatuslineOverlaySettings,
+  resolveClaudeStatuslineOriginalCommand,
+  type ClaudeStatuslineOverlaySettings,
+} from '../statusline/buildClaudeStatuslineOverlay';
 import { stripNestedSessionDetectionEnv } from '@/utils/processEnv/stripNestedSessionDetectionEnv';
 import { buildMissingJavaScriptRuntimeMessage } from '@/runtime/js/buildMissingJavaScriptRuntimeMessage';
+import { resolveJavaScriptRuntimeExecutable } from '@/runtime/js/resolveJavaScriptRuntimeExecutable';
+import { isBun } from '@/utils/runtime';
 import { isEmbeddedBunBundlePath } from '@/runtime/js/isEmbeddedBunBundlePath';
 import { resolveCliRuntimeAssetPath } from '@/runtime/assets/resolveCliRuntimeAssetPath';
 import { isAllowedExactEnvKey } from '@/utils/env/isAllowedExactEnvKey';
@@ -44,12 +51,24 @@ export class ClaudeUnifiedTerminalUnsupportedOptionError extends Error {
   }
 }
 
+function chmodPrivateFileIfSupported(path: string): void {
+  if (process.platform === 'win32') return;
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best-effort hardening; write mode still applies on first creation.
+  }
+}
+
 type ClaudeUnifiedTerminalSpawnDeps = Readonly<{
   resolveClaudeCliPath: () => string;
   isClaudeCliJavaScriptFile: (path: string) => boolean;
   ensureClaudeJsRuntimeExecutable: () => Promise<string | null>;
   claudeLocalLauncherPath: string;
   terminalLaunchSpecRunnerPath: string;
+  statuslineForwarderScriptPath: string;
+  /** Same node-binary resolution as the hook artifacts (`generateHookSettings`). */
+  resolveStatuslineNodeExecutable: () => string | null;
   resolveCommandInvocation: (params: Readonly<{
     command: string;
     args: readonly string[];
@@ -66,6 +85,12 @@ type ClaudeUnifiedTerminalSpawnInput<Mode extends EnhancedMode = EnhancedMode> =
   happierMcpConfigJson?: string | undefined;
   envOverlay?: Readonly<Record<string, string>> | undefined;
   systemPromptText?: string | null | undefined;
+  /**
+   * Session hook-server coordinates for the statusline forwarder wrapper. When present, a
+   * `statusLine` command pointing at `statusline_forwarder.cjs` is merged into the single
+   * `--settings` overlay (the user's original statusline command is exec-chained by the wrapper).
+   */
+  statuslineForwarder?: Readonly<{ port: number; secret: string }> | undefined;
   deps?: Partial<ClaudeUnifiedTerminalSpawnDeps> | undefined;
 }>;
 
@@ -126,7 +151,123 @@ function appendClaudeArgsWithoutManagedPromptAndSpawnMode(
   }
 }
 
-function buildClaudeArgs<Mode extends EnhancedMode>(input: ClaudeUnifiedTerminalSpawnInput<Mode>): string[] {
+/**
+ * Resolve the single `--settings` overlay value for the spawned Claude CLI.
+ *
+ * Claude Code keeps only the FIRST `--settings` overlay, so ultracode and the statusline
+ * forwarder cannot ride a second flag next to the hook settings file: when either is needed,
+ * the hook settings content is merged with `{"ultracode":true}` / `{"statusLine":{...}}` and
+ * passed as one inline JSON overlay (`--settings` accepts a file path or a JSON string).
+ * Otherwise the file path is passed through untouched.
+ *
+ * KNOWN pre-existing caveat: a user-supplied `--settings` in claudeArgs precedes this overlay
+ * in the argv, and Claude keeps the first one — their overlay then wins over hooks settings,
+ * ultracode, and the statusline forwarder alike.
+ *
+ * Merged overlays are written to a 0600 SIBLING FILE of the hook settings file and passed as a
+ * path. The statusline forwarder secret rides in a separate 0600 sibling file; the command string
+ * contains only that path, never the secret itself. If the sibling cannot be written, the
+ * statusline overlay is dropped fail-open and the secret-free remainder is passed inline.
+ */
+function resolveSettingsOverlayArg(params: Readonly<{
+  hookSettingsPath: string | undefined;
+  ultracodeEnabled: boolean;
+  statuslineSettings: ClaudeStatuslineOverlaySettings | undefined;
+}>): string | undefined {
+  if (!params.ultracodeEnabled && !params.statuslineSettings) return params.hookSettingsPath;
+
+  let base: Record<string, unknown> = {};
+  if (params.hookSettingsPath) {
+    try {
+      const parsed = JSON.parse(readFileSync(params.hookSettingsPath, 'utf8')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        base = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Unreadable hook settings: fall through to the merged-only overlay — passing the
+      // broken file path would lose the merged keys AND the hook settings alike.
+    }
+  }
+  const merged = {
+    ...base,
+    ...(params.ultracodeEnabled ? { ultracode: true } : {}),
+    ...(params.statuslineSettings ? { statusLine: params.statuslineSettings } : {}),
+  };
+  if (params.hookSettingsPath) {
+    const overlayPath = params.hookSettingsPath.replace(/\.json$/, '.overlay.json');
+    try {
+      writeFileSync(overlayPath, JSON.stringify(merged, null, 2), { mode: 0o600 });
+      chmodPrivateFileIfSupported(overlayPath);
+      return overlayPath;
+    } catch {
+      // Cannot write the 0600 sibling: never put the secret-bearing statusline command into
+      // argv — drop it (the user's own statusline stays in charge) and inline the remainder.
+      const { statusLine: _dropped, ...withoutStatusline } = merged;
+      return JSON.stringify(withoutStatusline);
+    }
+  }
+  // No hook settings file (hooks disabled) also means no hook server, hence no statusline
+  // forwarder/secret — the remaining ultracode-only overlay is safe inline.
+  return JSON.stringify(merged);
+}
+
+function writePrivateStatuslineSecretFile(params: Readonly<{
+  hookSettingsPath: string;
+  secret: string;
+}>): string | null {
+  const secretPath = params.hookSettingsPath.replace(/\.json$/, '.statusline-secret');
+  if (secretPath === params.hookSettingsPath) return null;
+  try {
+    writeFileSync(secretPath, params.secret, { mode: 0o600 });
+    chmodPrivateFileIfSupported(secretPath);
+    return secretPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the statusline forwarder `statusLine` overlay value, or undefined when forwarding is
+ * not requested or cannot be honored. STRICTLY fail-open: any miss (no wrapper runtime, missing
+ * script asset) leaves the user's own statusline configuration in charge.
+ */
+function resolveStatuslineOverlaySettings<Mode extends EnhancedMode>(params: Readonly<{
+  input: ClaudeUnifiedTerminalSpawnInput<Mode>;
+  deps: ClaudeUnifiedTerminalSpawnDeps;
+  env: Readonly<Record<string, string>>;
+}>): ClaudeStatuslineOverlaySettings | undefined {
+  const forwarder = params.input.statuslineForwarder;
+  if (!forwarder) return undefined;
+  const scriptPath = params.deps.statuslineForwarderScriptPath;
+  if (
+    !existsSync(scriptPath)
+    && !isEmbeddedBunBundlePath(scriptPath)
+    && !params.input.deps?.statuslineForwarderScriptPath
+  ) {
+    return undefined;
+  }
+  const nodeExecutable = params.deps.resolveStatuslineNodeExecutable();
+  if (!nodeExecutable) return undefined;
+  const hookSettingsPath = params.input.hookSettingsPath;
+  if (!hookSettingsPath) return undefined;
+  const secretFilePath = writePrivateStatuslineSecretFile({
+    hookSettingsPath,
+    secret: forwarder.secret,
+  });
+  if (!secretFilePath) return undefined;
+  return buildClaudeStatuslineOverlaySettings({
+    nodeExecutable,
+    forwarderScriptPath: scriptPath,
+    port: forwarder.port,
+    secretFilePath,
+    original: resolveClaudeStatuslineOriginalCommand({ env: { ...params.env } }),
+  });
+}
+
+function buildClaudeArgs<Mode extends EnhancedMode>(
+  input: ClaudeUnifiedTerminalSpawnInput<Mode>,
+  statuslineSettings: ClaudeStatuslineOverlaySettings | undefined,
+): string[] {
   const args: string[] = [];
   const terminalOptions = resolveClaudeTerminalCliOptions({
     mode: input.first.mode,
@@ -150,8 +291,13 @@ function buildClaudeArgs<Mode extends EnhancedMode>(input: ClaudeUnifiedTerminal
   if (input.hookPluginDir) {
     args.push('--plugin-dir', input.hookPluginDir);
   }
-  if (input.hookSettingsPath) {
-    args.push('--settings', input.hookSettingsPath);
+  const settingsOverlay = resolveSettingsOverlayArg({
+    hookSettingsPath: input.hookSettingsPath,
+    ultracodeEnabled: terminalOptions.ultracodeEnabled,
+    statuslineSettings,
+  });
+  if (settingsOverlay) {
+    args.push('--settings', settingsOverlay);
   }
   if (typeof input.happierMcpConfigJson === 'string' && input.happierMcpConfigJson.trim().length > 0) {
     args.push('--mcp-config', input.happierMcpConfigJson.trim());
@@ -272,6 +418,11 @@ function defaultDeps(inputDeps: Partial<ClaudeUnifiedTerminalSpawnDeps> | undefi
       inputDeps?.claudeLocalLauncherPath ?? resolveCliRuntimeAssetPath('scripts', 'claude_local_launcher.cjs'),
     terminalLaunchSpecRunnerPath:
       inputDeps?.terminalLaunchSpecRunnerPath ?? resolveCliRuntimeAssetPath('scripts', 'terminal_launch_spec_runner.cjs'),
+    statuslineForwarderScriptPath:
+      inputDeps?.statuslineForwarderScriptPath ?? resolveCliRuntimeAssetPath('scripts', 'statusline_forwarder.cjs'),
+    resolveStatuslineNodeExecutable:
+      inputDeps?.resolveStatuslineNodeExecutable
+      ?? (() => resolveJavaScriptRuntimeExecutable({ isBunRuntime: isBun() })),
     resolveCommandInvocation:
       inputDeps?.resolveCommandInvocation
       ?? ((params) => resolveWindowsCommandInvocation({
@@ -287,8 +438,11 @@ export async function buildClaudeUnifiedTerminalSpawn<Mode extends EnhancedMode 
 ): Promise<ClaudeUnifiedTerminalSpawn> {
   const deps = defaultDeps(input.deps);
   const resolvedClaudeCliPath = deps.resolveClaudeCliPath();
-  const args = buildClaudeArgs(input);
+  // Env first: the statusline overlay resolves the user's original statusline command from the
+  // EFFECTIVE config root of the spawned process (CLAUDE_CONFIG_DIR / HOME in the child env).
   const env = buildClaudeEnv(input.envOverlay);
+  const statuslineSettings = resolveStatuslineOverlaySettings({ input, deps, env });
+  const args = buildClaudeArgs(input, statuslineSettings);
 
   const nodeExecutable = await deps.ensureClaudeJsRuntimeExecutable();
   if (!nodeExecutable) {

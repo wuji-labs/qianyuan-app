@@ -3,6 +3,7 @@ import { EnhancedMode } from "./loop";
 import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SessionHookData } from "./utils/startHookServer";
+import type { ClaudeStatuslineRuntimeReconcileInput } from "./statusline/applyClaudeStatuslineUpdate";
 import type { PermissionMode } from "@/api/types";
 import { randomUUID } from "node:crypto";
 import { join, relative, sep } from 'node:path';
@@ -102,6 +103,13 @@ export class Session {
      * channel (resilient to other wrappers in PATH that inject their own `--settings`).
      */
     readonly hookPluginDir: string | null;
+    /**
+     * Hook-server coordinates (port + shared secret) for the statusline forwarder wrapper.
+     * Consumed by the Unified terminal spawn to merge a forwarding `statusLine` command into
+     * the per-spawn `--settings` overlay. Null when unavailable — statusline forwarding is
+     * additive enrichment and nothing may block on its absence.
+     */
+    readonly claudeStatuslineForwarder: Readonly<{ port: number; secret: string }> | null;
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     readonly jsRuntime: JsRuntime;
     /** How this session was started (affects TTY/UI behavior). */
@@ -150,6 +158,13 @@ export class Session {
     /** Callbacks to be notified when session ID is found/changed */
     private sessionFoundCallbacks: ((info: SessionFoundInfo) => void)[] = [];
     private claudeSessionHookCallbacks: ((data: SessionHookData) => void)[] = [];
+    /**
+     * Active runtime-control statusline reconciler (lane Y). Registered by the Claude Unified
+     * terminal runner while its runtime-control bridge is live; the statusline applier feeds
+     * effective model/effort through it into the controller's `lastVerified`. Effective-truth
+     * only — the reconciler must never write desired-state surfaces.
+     */
+    private claudeStatuslineRuntimeReconciler: ((input: ClaudeStatuslineRuntimeReconcileInput) => void) | null = null;
     private readonly criticalMetadataWrites = new Set<Promise<void>>();
     private readonly reportSessionMetadataToDaemon: SessionMetadataDaemonReporter | null;
     
@@ -173,6 +188,8 @@ export class Session {
         hookSettingsPath: string,
         /** Optional plugin dir carrying hooks; see field docstring above. */
         hookPluginDir?: string | null,
+        /** Hook-server coordinates for the statusline forwarder wrapper; see field docstring above. */
+        claudeStatuslineForwarder?: Readonly<{ port: number; secret: string }> | null,
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
         startedBy?: 'daemon' | 'terminal',
@@ -193,6 +210,7 @@ export class Session {
         this._onModeChange = opts.onModeChange;
         this.hookSettingsPath = opts.hookSettingsPath;
         this.hookPluginDir = opts.hookPluginDir ?? null;
+        this.claudeStatuslineForwarder = opts.claudeStatuslineForwarder ?? null;
         this.jsRuntime = opts.jsRuntime ?? 'node';
         this.startedBy = opts.startedBy ?? 'terminal';
         this.terminalRuntime = opts.terminalRuntime ?? null;
@@ -567,6 +585,26 @@ export class Session {
         if (index !== -1) {
             this.claudeSessionHookCallbacks.splice(index, 1);
         }
+    }
+
+    /**
+     * Register the live statusline → runtime-control reconciler. Returns an unregister function
+     * that only clears its own registration (a stale unregister never clobbers a newer one).
+     */
+    setClaudeStatuslineRuntimeReconciler = (
+        reconcile: (input: ClaudeStatuslineRuntimeReconcileInput) => void,
+    ): (() => void) => {
+        this.claudeStatuslineRuntimeReconciler = reconcile;
+        return () => {
+            if (this.claudeStatuslineRuntimeReconciler === reconcile) {
+                this.claudeStatuslineRuntimeReconciler = null;
+            }
+        };
+    }
+
+    /** Forward statusline-reported effective model/effort to the registered reconciler, if any. */
+    reconcileClaudeRuntimeFromStatusline = (input: ClaudeStatuslineRuntimeReconcileInput): void => {
+        this.claudeStatuslineRuntimeReconciler?.(input);
     }
 
     /**

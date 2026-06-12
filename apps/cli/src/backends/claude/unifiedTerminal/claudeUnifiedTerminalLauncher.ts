@@ -8,9 +8,20 @@ import {
   surfaceClaudeConnectedServiceRuntimeAuthFailure,
   surfaceClaudeRateLimitRuntimeIssue,
 } from '../connectedServices/surfaceClaudeRuntimeIssues';
+import { createClaudeInFlightSteerCapabilityPublisher } from './createClaudeInFlightSteerCapabilityPublisher';
 import { runClaudeUnifiedTerminalSession } from './runClaudeUnifiedTerminalSession';
+import { CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID } from './tuiControls';
+import type { ClaudeUnifiedRuntimeConfigOutcomeEvent } from './runtimeControlIntegration';
+import { buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent } from './runtimeControlIntegration';
+import { createUnifiedTerminalGateOffRestartNoticeTracker } from './runtimeConfigRestartNotice';
+import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { bindClaudeUnifiedTerminalSession } from './bindClaudeUnifiedTerminalSession';
-import { isClaudeUnifiedTerminalInjectionFailureError } from './terminalInjectionFailureError';
+import { isClaudeUnifiedTerminalHostDeadError } from './createClaudeUnifiedController';
+import { isClaudeUnifiedTerminalReadinessTimeoutError } from './createClaudeUnifiedTerminalReadinessBridge';
+import {
+  isClaudeUnifiedTerminalRuntimeIssueError,
+  surfaceClaudeUnifiedTerminalRuntimeIssue,
+} from './surfaceClaudeUnifiedTerminalRuntimeIssue';
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { runTmuxAttach } from '@/terminal/attachment/tmuxAttach';
 import { runZellijAttach } from '@/terminal/attachment/zellijAttach';
@@ -48,12 +59,6 @@ function startForegroundAttach(params: Readonly<{
   }
 }
 
-function isClaudeUnifiedTerminalHostDeadError(error: unknown): boolean {
-  return Boolean(error)
-    && typeof error === 'object'
-    && (error as { code?: unknown }).code === 'claude_unified_terminal_host_dead';
-}
-
 function sendUnifiedTerminalHostDeadMessage(session: Session): void {
   session.client.sendSessionEvent({
     type: 'message',
@@ -89,6 +94,31 @@ export async function claudeUnifiedTerminalLauncher(
   }>,
 ): Promise<LauncherResult> {
   const abortController = new AbortController();
+  // Standalone/local Unified gets the SAME runtime-control integration as remote Unified (gap 26).
+  const tuiRuntimeControlEnabled = resolveCliFeatureDecision({
+    featureId: CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL_FEATURE_ID,
+    env: process.env,
+  }).state === 'enabled';
+  // QA-B B6 (live 2026-06-12, session cmqawdqzj): with the gate OFF the standalone launcher had no
+  // legacy restart-notice path — runtime-config changes between turns were silently dropped. The
+  // daemon launcher surfaces these notices at its mode boundary; the standalone launcher observes
+  // each outgoing batch mode instead (one notice per distinct change signature).
+  const gateOffRestartNoticeTracker = tuiRuntimeControlEnabled
+    ? null
+    : createUnifiedTerminalGateOffRestartNoticeTracker({
+        emit: (emission) => {
+          session.client.sendSessionEvent({ type: 'message', message: emission.message });
+          session.client.sendSessionEvent(buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent({
+            status: emission.status,
+            reason: emission.reason,
+            message: emission.message,
+            changes: emission.changes,
+          }));
+        },
+      });
+  const observeOutgoingBatchMode = (mode: EnhancedMode): void => {
+    gateOffRestartNoticeTracker?.observeBatchMode(mode);
+  };
   let removeExternalAbortListener: (() => void) | null = null;
   if (opts.signal) {
     const abortFromExternalSignal = () => {
@@ -175,18 +205,22 @@ export async function claudeUnifiedTerminalLauncher(
         });
       }
     } finally {
-      binding.notePromptTurnTerminal();
+      // Any non-aborted terminal projection (hook StopFailure, process exit, unknown) must
+      // terminalize the canonical turn; leaving it open keeps the server turn 'in_progress'
+      // forever and permanently blocks daemon pending-queue draining (QA A-F3/C-F2).
+      await binding.recordPromptTurnFailed().catch(() => undefined);
     }
   };
-  const surfaceTerminalInjectionFailure = async (error: unknown): Promise<void> => {
+  const surfaceTerminalRuntimeIssue = async (error: unknown): Promise<void> => {
     session.onThinkingChange(false);
-    await surfacePrimarySessionRuntimeIssue({
-      provider: 'claude',
-      cause: 'session_error',
+    await surfaceClaudeUnifiedTerminalRuntimeIssue({
       error,
       session: session.client,
+      onSurfaceError: (surfaceError) => {
+        logger.debug('[unified]: failed to surface Claude unified terminal runtime issue (non-fatal)', surfaceError);
+      },
     }).catch((surfaceError) => {
-      logger.debug('[unified]: failed to surface Claude unified terminal injection failure (non-fatal)', surfaceError);
+      logger.debug('[unified]: failed to surface Claude unified terminal runtime issue (non-fatal)', surfaceError);
       return null;
     });
     binding.notePromptTurnTerminal();
@@ -214,7 +248,32 @@ export async function claudeUnifiedTerminalLauncher(
     return true;
   });
 
-  try {
+  // Lane P (O-design Seam A): publish live steer availability (+reason) to agentState.
+  const inFlightSteerCapabilityPublisher = createClaudeInFlightSteerCapabilityPublisher({
+    session: session.client,
+    isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
+  });
+
+  // A classified unified runtime failure (injection failure, host death) must NEVER escape as a
+  // process-killing `[claude] Fatal command error` (incident cmq7pyqkj: a mid-turn steer injection
+  // hit its provider-acceptance timeout, the failed_terminal error was surfaced and then RETHROWN
+  // out of this launcher, and loop.ts has no retry loop around it — the runner exited and the
+  // session went dead). Instead the launcher parks: it surfaces the structured runtime issue,
+  // waits for the next queued message, and relaunches the unified host with that message.
+  let parkedMessage: Readonly<{ message: string; mode: EnhancedMode }> | null = null;
+  const parkForNextMessageAfterRuntimeIssue = async (reason: string): Promise<boolean> => {
+    session.client.sendSessionEvent({
+      type: 'message',
+      message: 'Claude unified terminal exited unexpectedly. Waiting for the next message to retry...',
+    });
+    await flushUnifiedStartupFailureSurface(session, reason);
+    const batch = await session.queue.waitForMessagesAndGetAsString(abortController.signal);
+    if (!batch) return false;
+    parkedMessage = { message: batch.message, mode: batch.mode };
+    return true;
+  };
+
+  const runUnifiedTerminalSessionOnce = async (): Promise<void> => {
     await runClaudeUnifiedTerminalSession({
       path: session.path,
       happySessionId: session.client.sessionId,
@@ -223,27 +282,53 @@ export async function claudeUnifiedTerminalLauncher(
       claudeArgs: initialPrompt.claudeArgs,
       hookSettingsPath: session.hookSettingsPath,
       hookPluginDir: session.hookPluginDir,
+      statuslineForwarder: session.claudeStatuslineForwarder ?? undefined,
       happierMcpConfigJson: mcpConfigJson,
       systemPromptText: session.defaultSystemPromptText,
-      initialMode: initialPromptPending ? undefined : opts.initialMode,
+      // A parked message (post-runtime-issue relaunch) must drive the relaunch mode itself,
+      // so initialMode stays undefined and the parked batch becomes the first message.
+      initialMode: initialPromptPending || parkedMessage ? undefined : opts.initialMode,
+      // C11 (incident cmq8y3nlx): binding-owned registry, seeded from the persisted prompt store,
+      // so a respawned runner recognizes its predecessor's leftover composer injection as our own.
+      ownComposerTexts: binding.ownComposerTexts,
       ...binding.sessionOptions,
       signal: abortController.signal,
+      // A message pulled by the runner's input pump during a death/dispose unwind
+      // must come back to the session queue instead of being dropped into the
+      // dead host (silent queue-swallow, incident cmq8y3nlx).
+      returnUnconsumedMessage: ({ message, mode }) => {
+        try {
+          session.queue.unshift(message, mode);
+        } catch (error) {
+          logger.debug('[unified]: failed to requeue undeliverable unified terminal message', error);
+        }
+      },
       nextMessage: async () => {
+        if (parkedMessage) {
+          const parked = parkedMessage;
+          parkedMessage = null;
+          binding.noteNextInjectedPromptShouldSuppressEcho();
+          observeOutgoingBatchMode(parked.mode);
+          return parked;
+        }
         if (initialPromptPending && initialPrompt.prompt) {
           initialPromptPending = false;
           binding.noteNextInjectedPromptShouldImportEcho();
+          const initialBatchMode: EnhancedMode = opts.initialMode ?? {
+            permissionMode: session.lastPermissionMode ?? 'default',
+            claudeUnifiedTerminalEnabled: true,
+          };
+          observeOutgoingBatchMode(initialBatchMode);
           return {
             message: initialPrompt.prompt,
-            mode: opts.initialMode ?? {
-              permissionMode: session.lastPermissionMode ?? 'default',
-              claudeUnifiedTerminalEnabled: true,
-            },
+            mode: initialBatchMode,
           };
         }
         initialPromptPending = false;
         const batch = await session.queue.waitForMessagesAndGetAsString(abortController.signal);
         if (!batch) return null;
         binding.noteNextInjectedPromptShouldSuppressEcho();
+        observeOutgoingBatchMode(batch.mode);
         return {
           message: batch.message,
           mode: batch.mode,
@@ -255,8 +340,28 @@ export async function claudeUnifiedTerminalLauncher(
           session.removeClaudeSessionHookCallback(callback);
         };
       },
-      loadCommittedClaudeJsonlMessageKeys: () =>
-        session.client.fetchCommittedClaudeJsonlMessageKeys?.() ?? new Set<string>(),
+      loadCommittedClaudeJsonlMessageBaseline: () =>
+        session.client.fetchCommittedClaudeJsonlMessageBaseline?.()
+        ?? { keys: new Set<string>(), complete: true, oldestCoveredAtMs: null },
+      // Unknown canonical state (no accessor) counts as ACTIVE (fail-closed).
+      isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
+      // Persist a consumed marker for controller-command echoes the runner suppresses, so they
+      // join the committed baseline and cannot replay as "new" messages after a respawn
+      // (resume-replay leak, 2026-06-11).
+      onTranscriptMessageSuppressed: (message) => {
+        session.client.recordClaudeJsonlMessageConsumed?.(message, {
+          suppressedBy: 'control_command_echo',
+        });
+      },
+      onInFlightSteerAvailabilitySnapshot: inFlightSteerCapabilityPublisher.publish,
+      // Lane X (incident cmq8y3nlx): one honest notice per starvation episode instead of a silent
+      // 15s retry loop — the queued message is blocked by a draft in the terminal composer.
+      onInFlightSteerUserDraftStarvation: () => {
+        session.client.sendSessionEvent({
+          type: 'message',
+          message: 'Your queued message can\'t steer the running turn: the terminal composer holds an unsent draft. Clear the draft in the terminal (or interrupt the turn) to deliver it.',
+        });
+      },
       onSessionFound: (sessionId, data) => {
         session.onSessionFound(sessionId, data);
       },
@@ -275,7 +380,26 @@ export async function claudeUnifiedTerminalLauncher(
         }
       },
       onPromptTurnTerminal: surfacePromptTurnTerminal,
-      onTerminalInjectionFailure: surfaceTerminalInjectionFailure,
+      onTerminalInjectionFailure: surfaceTerminalRuntimeIssue,
+      tuiRuntimeControl: {
+        featureEnabled: tuiRuntimeControlEnabled,
+        emitRuntimeConfigOutcome: (event: ClaudeUnifiedRuntimeConfigOutcomeEvent) => {
+          session.client.sendSessionEvent(buildClaudeUnifiedRuntimeConfigOutcomeSessionEvent(event));
+        },
+        // F2 (qa/QA-B.md): one honest notice per stuck-unsafe-window episode — an idle queued
+        // message kept deferring because runtime controls could not be applied over a composer
+        // draft/dialog on the TUI. Mirrors the daemon-resume launcher wiring.
+        onBlockedApplyStarvation: () => {
+          session.client.sendSessionEvent({
+            type: 'message',
+            message: 'Your queued message is waiting: the terminal shows a draft or dialog that blocks applying your settings change. Clear the terminal composer (or dismiss the dialog) to deliver it.',
+          });
+        },
+        // Lane Y: feed statusline-reported effective model/effort into the controller's
+        // lastVerified through the session-level statusline applier.
+        registerStatuslineRuntimeReconciler: (reconcile) =>
+          session.setClaudeStatuslineRuntimeReconciler(reconcile),
+      },
       onTerminalHostReady: ({ terminal }) => {
         startForegroundAttach({
           sessionId: session.client.sessionId,
@@ -283,38 +407,63 @@ export async function claudeUnifiedTerminalLauncher(
         });
       },
     });
-  } catch (error) {
-    if (isClaudeUnifiedTerminalHostDeadError(error)) {
-      session.onThinkingChange(false);
-      if (isRecentClaudeUnifiedTerminalAuthFailure({
-        authFailureAtMs: lastSurfacedRuntimeAuthFailureAtMs,
-        nowMs: Date.now(),
-      })) {
-        logger.debug('[unified]: terminal host died after Claude auth failure; keeping auth diagnostic primary');
-        await flushUnifiedStartupFailureSurface(session, 'host_dead_after_auth_failure');
-        binding.notePromptTurnTerminal();
+  };
+
+  try {
+    while (true) {
+      try {
+        await runUnifiedTerminalSessionOnce();
+        return { type: 'exit', code: 0 };
+      } catch (error) {
+        if (isClaudeUnifiedTerminalHostDeadError(error)) {
+          session.onThinkingChange(false);
+          if (isRecentClaudeUnifiedTerminalAuthFailure({
+            authFailureAtMs: lastSurfacedRuntimeAuthFailureAtMs,
+            nowMs: Date.now(),
+          })) {
+            logger.debug('[unified]: terminal host died after Claude auth failure; keeping auth diagnostic primary');
+            await flushUnifiedStartupFailureSurface(session, 'host_dead_after_auth_failure');
+            binding.notePromptTurnTerminal();
+            throw error;
+          }
+          await surfacePrimarySessionRuntimeIssue({
+            provider: 'claude',
+            cause: 'process_exit',
+            error,
+            session: session.client,
+            // Host death routinely lands between turns (incident cmq8y3nlx); an
+            // idle lifecycle must still surface it instead of no-opping.
+            allocateTurnWhenIdle: true,
+          }).catch((surfaceError) => {
+            logger.debug('[unified]: failed to surface Claude unified terminal host death (non-fatal)', surfaceError);
+            return null;
+          });
+          sendUnifiedTerminalHostDeadMessage(session);
+          await flushUnifiedStartupFailureSurface(session, 'host_dead');
+          binding.notePromptTurnTerminal();
+          if (await parkForNextMessageAfterRuntimeIssue('host_dead')) continue;
+          return { type: 'exit', code: 1 };
+        }
+        if (isClaudeUnifiedTerminalReadinessTimeoutError(error)) {
+          // Startup readiness timed out on a (possibly slow) live host. Surface a structured runtime issue
+          // with diagnostics, then exit gracefully (D16) instead of escalating to a generic
+          // `[claude] Fatal command error` / silent dead session in the standalone startup path.
+          await surfaceTerminalRuntimeIssue(error);
+          await flushUnifiedStartupFailureSurface(session, 'readiness_timeout');
+          return { type: 'exit', code: 1 };
+        }
+        if (isClaudeUnifiedTerminalRuntimeIssueError(error)) {
+          // Classified injection failure: surface structured, park for the next message, relaunch.
+          // Never rethrow into `[claude] Fatal command error` (incident cmq7pyqkj).
+          await surfaceTerminalRuntimeIssue(error);
+          if (await parkForNextMessageAfterRuntimeIssue('injection_failure')) continue;
+          return { type: 'exit', code: 1 };
+        }
         throw error;
       }
-      await surfacePrimarySessionRuntimeIssue({
-        provider: 'claude',
-        cause: 'process_exit',
-        error,
-        session: session.client,
-      }).catch((surfaceError) => {
-        logger.debug('[unified]: failed to surface Claude unified terminal host death (non-fatal)', surfaceError);
-        return null;
-      });
-      sendUnifiedTerminalHostDeadMessage(session);
-      await flushUnifiedStartupFailureSurface(session, 'host_dead');
-      binding.notePromptTurnTerminal();
     }
-    if (isClaudeUnifiedTerminalInjectionFailureError(error)) {
-      await surfaceTerminalInjectionFailure(error);
-    }
-    throw error;
   } finally {
+    inFlightSteerCapabilityPublisher.dispose();
     removeExternalAbortListener?.();
   }
-
-  return { type: 'exit', code: 0 };
 }

@@ -8,6 +8,12 @@ export function buildClaudeAgentState(params: Readonly<{
     mode: ClaudeControlMode;
     claudeUnifiedTerminalEnabled: boolean;
     localPermissionBridgeEnabled: boolean;
+    /**
+     * Lane Q: TUI runtime-control feature decision. When on (with unified terminal), the runtime
+     * can apply a steered message's permission/plan mode delta IN-TURN, so the UI may offer
+     * "Apply setting & steer now" instead of interrupt-or-queue only.
+     */
+    tuiRuntimeControlEnabled?: boolean;
 }>): AgentState {
     const currentCapabilities =
         params.currentState.capabilities && typeof params.currentState.capabilities === 'object'
@@ -36,6 +42,7 @@ export function buildClaudeAgentState(params: Readonly<{
                 inFlightSteer: true,
                 inFlightSteerSupported: true,
                 inFlightSteerAvailable: true,
+                ...(params.tuiRuntimeControlEnabled === true ? { inFlightConfigApplySupported: true } : {}),
             },
         };
     }

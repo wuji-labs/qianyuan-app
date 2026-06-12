@@ -20,8 +20,32 @@ import { createClaudeUnifiedHostLivenessBridge } from './createClaudeUnifiedHost
 import { createClaudeUnifiedInputArbiter } from './createClaudeUnifiedInputArbiter';
 import { createClaudeUnifiedPendingQueuePump } from './createClaudeUnifiedPendingQueuePump';
 import { createClaudeUnifiedPromptInjector } from './createClaudeUnifiedPromptInjector';
+import { clearOwnLeftoverComposerDraft } from './ownComposerDraftGuard';
+import {
+  createClaudeUnifiedInFlightSteerEvaluator,
+  type ClaudeUnifiedInFlightSteerWiring,
+} from './createClaudeUnifiedInFlightSteerEvaluator';
+import { createClaudeOwnComposerTextLog, type ClaudeOwnComposerTextLog } from './ownComposerTextLog';
 import { createClaudeUnifiedAcceptedPromptTranscriptDiscovery } from './acceptedPromptTranscriptDiscovery';
 import { ClaudeUnifiedTerminalInjectionFailureError } from './terminalInjectionFailureError';
+import {
+  createBlockedApplyStarvationTracker,
+  createClaudeUnifiedRuntimeControlBridge,
+  resolveBlockedApplyRetryMs,
+  type BlockedApplyStarvationInfo,
+  type ClaudeUnifiedRuntimeConfigOutcomeEvent,
+  type ClaudeUnifiedRuntimeControlBridge,
+} from './runtimeControlIntegration';
+import {
+  createClaudeSettingsGuard,
+  createClaudeUnifiedTuiControlController,
+  resolveClaudeConfigRootFromEnv,
+  type ClaudeStatuslineRuntimeMetadata,
+} from './tuiControls';
+import {
+  createClaudeUnifiedControlCommandEchoSuppressor,
+  type ClaudeUnifiedControlCommandEchoSuppressor,
+} from './controlCommandEcho';
 import type {
   ClaudeUnifiedInputConsumer,
   ClaudeUnifiedPromptAcceptance,
@@ -93,9 +117,17 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   hookPluginDir?: string | null | undefined;
   happierMcpConfigJson?: string | undefined;
   systemPromptText?: string | null | undefined;
+  /** Hook-server coordinates for the statusline forwarder wrapper (see buildClaudeUnifiedTerminalSpawn). */
+  statuslineForwarder?: Readonly<{ port: number; secret: string }> | undefined;
   signal?: AbortSignal | undefined;
   initialMode?: Mode | undefined;
   nextMessage: () => Promise<ClaudeUnifiedTerminalQueuedInput<Mode> | null>;
+  /**
+   * Hands back a queued message that was already consumed by the input pump but
+   * can no longer be delivered (host-death/dispose unwind), so the owner can
+   * requeue it instead of the message being silently dropped into a dead session.
+   */
+  returnUnconsumedMessage?: ((input: ClaudeUnifiedTerminalQueuedInput<Mode>) => void) | undefined;
   resolveHostAdapter?: ((preference: ClaudeUnifiedTerminalHostPreference) => Promise<TerminalHostResolution>) | undefined;
   buildSpawn?: ((params: Readonly<{
     first: ClaudeUnifiedTerminalQueuedInput<Mode>;
@@ -105,6 +137,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
     hookPluginDir?: string | null | undefined;
     happierMcpConfigJson?: string | undefined;
     systemPromptText?: string | null | undefined;
+    statuslineForwarder?: Readonly<{ port: number; secret: string }> | undefined;
   }>) => Promise<ClaudeUnifiedTerminalSpawn>) | undefined;
   createSessionName?: (() => string) | undefined;
   telemetry?: ClaudeUnifiedTelemetrySink | undefined;
@@ -117,11 +150,50 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   onProviderPromptStarted?: (() => void | Promise<void>) | undefined;
   onPromptTurnTerminal?: ((event: ClaudeUnifiedPromptTurnTerminalEvent) => void | Promise<void>) | undefined;
   onMessage?: ((message: RawJSONLines) => void) | undefined;
+  /**
+   * Invoked for every transcript row the runner suppresses from `onMessage` (controller-typed
+   * slash-command echoes, L3). Launchers must persist a consumed marker
+   * (`recordClaudeJsonlMessageConsumed`) so the row joins the committed baseline and cannot
+   * replay as a "new" message after a same-session relaunch (resume-replay leak, 2026-06-11).
+   */
+  onTranscriptMessageSuppressed?: ((message: RawJSONLines) => void) | undefined;
   onSessionFound?: ((sessionId: string, data?: SessionHookData) => void) | undefined;
-  loadCommittedClaudeJsonlMessageKeys?: (() => Promise<ReadonlySet<string>> | ReadonlySet<string>) | undefined;
+  loadCommittedClaudeJsonlMessageBaseline?: (() =>
+    | Promise<import('../utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline>
+    | import('../utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline) | undefined;
   allowFirstInputBeforeSessionStart?: boolean | undefined;
+  /** Canonical session-turn lifecycle probe for the arbiter's stale-turn recovery (Lane N2). */
+  isCanonicalTurnActive?: (() => boolean) | undefined;
+  /**
+   * Lane P (O-design Seam A): de-duplicated session-level steer availability tee from the steer
+   * evaluator. Launchers publish it to agentState via the capability publisher.
+   */
+  onInFlightSteerAvailabilitySnapshot?: ((snapshot: Readonly<{ available: boolean; reason: 'unsafe_window' | 'user_terminal_draft' | null }>) => void) | undefined;
+  /**
+   * Lane X (incident cmq8y3nlx): one-shot per starvation episode — a steered pending prompt has
+   * been blocked by a terminal composer draft past the bounded veto threshold. Launchers surface
+   * a single user-visible session notice (never a silent retry loop).
+   */
+  onInFlightSteerUserDraftStarvation?: ((info: Readonly<{
+    consecutiveVetoes: number;
+    ownLeftover: boolean;
+    draftLength: number;
+  }>) => void) | undefined;
+  /**
+   * C11 (incident cmq8y3nlx): caller-owned own-injected-text registry. Launchers pass the binding's
+   * registry, which is seeded from the persisted prompt store BEFORE the run, so a respawned runner
+   * still recognizes (and may clear) its predecessor's leftover composer injection instead of
+   * starving behind an honest-but-unresolvable `user_draft` veto. Defaults to a fresh in-memory log.
+   */
+  ownComposerTexts?: ClaudeOwnComposerTextLog | undefined;
   initialHostLivenessTimeoutMs?: number | undefined;
   initialHostLivenessPollMs?: number | undefined;
+  /**
+   * How long an uninterrupted streak of FAILED liveness probes (thrown, e.g. zellij CLI timeouts —
+   * inconclusive, unlike conclusive dead observations) must last before the host is declared dead.
+   * Incident cmq8y3nlx 2026-06-12: two timed-out probes ~1s apart must not kill a healthy session.
+   */
+  hostLivenessProbeFailureConfirmDeadMs?: number | undefined;
   providerAcceptanceTimeoutMs?: number | undefined;
   setTurnInterrupt?: ((handler: (() => Promise<void>) | null) => void) | null | undefined;
   onTerminalPromptInjected?: ((input: ClaudeUnifiedTerminalAcceptedInput<Mode>) => void | Promise<void>) | undefined;
@@ -144,7 +216,44 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
     inputInjection: TerminalInputInjectionV1;
     inputConsumer: ClaudeUnifiedInputConsumer<Mode>;
   }>) => ClaudeUnifiedController | Promise<ClaudeUnifiedController>) | undefined;
+  tuiRuntimeControl?: ClaudeUnifiedTuiRuntimeControlOptions<Mode> | undefined;
 }>;
+
+/**
+ * Lane E runtime-control integration options. When `featureEnabled` is true and the resolved host exposes
+ * a runtime-control port, the runner instantiates the Claude Unified TUI control controller + bridge and
+ * applies verified model/effort/permission-mode controls before each dependent prompt injection. When the
+ * gate is off (or no control port is available), the runner does not gate injection and the existing
+ * restart-notice path is preserved (no regression).
+ */
+export type ClaudeUnifiedTuiRuntimeControlOptions<Mode extends EnhancedMode = EnhancedMode> = Readonly<{
+  featureEnabled: boolean;
+  sessionModeEmissionEnabled?: boolean | undefined;
+  emitRuntimeConfigOutcome: (event: ClaudeUnifiedRuntimeConfigOutcomeEvent) => void;
+  /** Delay before a control-gated prompt injection is retried after a blocked apply. */
+  blockedInjectionRetryMs?: number | undefined;
+  /**
+   * F2 starvation honesty (qa/QA-B.md): fired ONCE per episode when consecutive blocked
+   * before-prompt applies cross the bounded threshold — the queued prompt is honestly stuck behind
+   * an unsafe TUI window (draft/dialog/overlay) instead of silently re-deferring forever.
+   */
+  onBlockedApplyStarvation?: ((info: BlockedApplyStarvationInfo) => void) | undefined;
+  /** Test seam: blocked-apply starvation threshold override. */
+  blockedApplyStarvationThreshold?: number | undefined;
+  /** Test seam: inject a prebuilt bridge instead of constructing one from the host control port. */
+  createBridge?: (() => ClaudeUnifiedRuntimeControlBridge | null) | undefined;
+  /**
+   * Lane Y: register the live statusline → lastVerified reconciler with the session-level
+   * statusline feed (the statusline applier forwards effective model/effort through it into the
+   * controller). Returns an unregister function; the runner unregisters on teardown so a stale
+   * bridge never consumes payloads meant for a relaunched host.
+   */
+  registerStatuslineRuntimeReconciler?: ((
+    reconcile: (metadata: ClaudeStatuslineRuntimeMetadata) => void,
+  ) => () => void) | undefined;
+}>;
+
+const DEFAULT_RUNTIME_CONTROL_BLOCKED_INJECTION_RETRY_MS = 250;
 
 function sanitizeSessionName(value: string): string {
   const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -216,6 +325,7 @@ async function buildDefaultSpawn(params: Readonly<{
   hookPluginDir?: string | null | undefined;
   happierMcpConfigJson?: string | undefined;
   systemPromptText?: string | null | undefined;
+  statuslineForwarder?: Readonly<{ port: number; secret: string }> | undefined;
 }>): Promise<ClaudeUnifiedTerminalSpawn> {
   return buildClaudeUnifiedTerminalSpawn(params);
 }
@@ -488,11 +598,15 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     hookPluginDir: opts.hookPluginDir,
     happierMcpConfigJson: opts.happierMcpConfigJson,
     systemPromptText: opts.systemPromptText,
+    statuslineForwarder: opts.statuslineForwarder,
   });
   const hookSubscription = createReplayableHookSubscription(opts.subscribeClaudeSessionHooks);
   const sessionName = opts.createSessionName?.() ?? createDefaultSessionName();
   let handle: TerminalHostHandle | null = null;
   let controller: ClaudeUnifiedController | null = null;
+  let runtimeControlBridge: ClaudeUnifiedRuntimeControlBridge | null = null;
+  let unregisterStatuslineRuntimeReconciler: (() => void) | null = null;
+  let inFlightSteerWiring: ClaudeUnifiedInFlightSteerWiring<Mode> | null = null;
   let terminalAttachment: NonNullable<Metadata['terminal']> | null = null;
   let removeProcessSignalCleanup: (() => void) | null = null;
   let turnInterruptRegistered = false;
@@ -500,11 +614,29 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   const processSignalAbortController = new AbortController();
   let fatalRuntimeError: unknown = null;
   let startupHostLivenessGraceActive = true;
+  let providerSessionStartedObserved = false;
+  let trustedProviderProgressObserved = false;
   let expectedPromptInputExit = false;
   let preHandleProcessSignalCleanupRan = false;
   let concreteHostDisposedByProcessSignal = false;
   const endStartupHostLivenessGrace = (): void => {
     startupHostLivenessGraceActive = false;
+  };
+  // Startup-readiness gate (Lane N3, incident cmq8y3nlx): no controls or prompt bytes may be
+  // typed into the TUI until the SINGLE startup-readiness owner (the readiness bridge's
+  // composer-evidence check) reports ready, or the provider provably accepted a prompt. The
+  // arbiter's quietness heuristic alone can pass while the TUI is still initializing.
+  let startupReadinessObservedForInjection = false;
+  const observeStartupReadyForInjection = (): void => {
+    startupReadinessObservedForInjection = true;
+  };
+  const observeTrustedProviderProgress = (): void => {
+    trustedProviderProgressObserved = true;
+    observeStartupReadyForInjection();
+  };
+  const observeProviderSessionStarted = (): void => {
+    providerSessionStartedObserved = true;
+    endStartupHostLivenessGrace();
   };
   const provisionalHandle = createProvisionalTerminalHostHandle({
     kind: hostResolution.adapter.kind,
@@ -565,9 +697,101 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       return;
     }
 
+    // Runtime-control integration (Lane E): when the feature gate is on and the host exposes a control
+    // port, run verified TUI controls (model/effort/permission/plan mode) before each dependent prompt
+    // injection. Gated-off / no-control-port → bridge stays null and injection is never gated (the
+    // existing restart-notice path remains the behavior).
+    const runtimeControlOptions = opts.tuiRuntimeControl;
+    let currentInjectionMode: Mode = startupInput.mode;
+    // Lane X (incident cmq8y3nlx): bounded log of texts this runtime wrote into the TUI; the steer
+    // evaluator uses it to classify a `user_draft` veto as our own leftover vs a genuine user draft.
+    // C11: launchers pass a registry pre-seeded from the persisted prompt store so a RESPAWNED
+    // runner also recognizes its predecessor's leftovers.
+    // RESUME2 (runner pid 86645, 2026-06-12): controller-TYPED slash commands feed it too — a
+    // typed-but-never-submitted `/effort medium` leftover otherwise classifies as a foreign draft
+    // and deadlocks idle injection forever.
+    const ownComposerTextLog = opts.ownComposerTexts ?? createClaudeOwnComposerTextLog();
+    // Controller-typed slash commands produce JSONL `<command-name>…`/`<local-command-stdout>…`
+    // user rows; registration-based suppression (L3) keeps them out of the UI transcript while
+    // genuine user-typed TUI commands still surface.
+    let controlCommandEchoSuppressor: ClaudeUnifiedControlCommandEchoSuppressor | null = null;
+    if (runtimeControlOptions?.featureEnabled === true) {
+      runtimeControlBridge = runtimeControlOptions.createBridge?.() ?? null;
+      if (!runtimeControlBridge) {
+        const controlPort = hostResolution.adapter.createControlPort?.(activeHandle) ?? null;
+        if (controlPort) {
+          const configDir = resolveClaudeConfigRootFromEnv({ ...spawn.spawnEnv }, process.platform);
+          const commandEchoSuppressor = createClaudeUnifiedControlCommandEchoSuppressor({
+            onSuppressed: opts.onTranscriptMessageSuppressed,
+          });
+          controlCommandEchoSuppressor = commandEchoSuppressor;
+          const tuiController = createClaudeUnifiedTuiControlController({
+            port: controlPort,
+            featureEnabled: true,
+            settingsGuard: createClaudeSettingsGuard({ configDir }),
+            onControlCommandTyped: (commandText) => commandEchoSuppressor.recordTypedControlCommand(commandText),
+            onControlCommandTextEntered: (commandText) => ownComposerTextLog.record(commandText),
+          });
+          runtimeControlBridge = createClaudeUnifiedRuntimeControlBridge({
+            controller: tuiController,
+            emitRuntimeConfigOutcome: runtimeControlOptions.emitRuntimeConfigOutcome,
+            ...(runtimeControlOptions.sessionModeEmissionEnabled !== undefined
+              ? { sessionModeEmissionEnabled: runtimeControlOptions.sessionModeEmissionEnabled }
+              : {}),
+            startupMode: startupInput.mode,
+          });
+        }
+      }
+      if (runtimeControlBridge && runtimeControlOptions.registerStatuslineRuntimeReconciler) {
+        // Lane Y: statusline → lastVerified effective-truth feed. The applier dedups re-emits;
+        // here we only hand the live bridge to the session-level statusline feed.
+        const bridgeForStatusline = runtimeControlBridge;
+        unregisterStatuslineRuntimeReconciler = runtimeControlOptions.registerStatuslineRuntimeReconciler(
+          (metadata: ClaudeStatuslineRuntimeMetadata) => bridgeForStatusline.reconcileFromStatusline(metadata),
+        );
+      }
+    }
+    const blockedInjectionRetryMs = runtimeControlOptions?.blockedInjectionRetryMs
+      ?? DEFAULT_RUNTIME_CONTROL_BLOCKED_INJECTION_RETRY_MS;
+
+    // F2 starvation honesty: one bounded escalation per blocked-apply episode (never a loop).
+    const blockedApplyStarvationTracker = createBlockedApplyStarvationTracker({
+      threshold: runtimeControlOptions?.blockedApplyStarvationThreshold,
+      onStarvation: (info: BlockedApplyStarvationInfo) => runtimeControlOptions?.onBlockedApplyStarvation?.(info),
+    });
+    // The gate is armed only for the default controller wiring (which constructs the readiness
+    // bridge below); a custom `createController` seam owns its own readiness.
+    const startupReadinessGateArmed = !opts.createController;
     const inputInjection: TerminalInputInjectionV1 = {
       hostKind: hostResolution.adapter.kind,
       injectUserPrompt: async (input) => {
+        if (startupReadinessGateArmed && !startupReadinessObservedForInjection) {
+          return {
+            status: 'deferred',
+            reason: 'pane_initializing',
+            retryAfterMs: 250,
+          };
+        }
+        if (runtimeControlBridge) {
+          // Apply verified runtime controls before the prompt is written. A blocked apply must NOT inject
+          // under the wrong config; returning a `deferred` result hands the message back to the arbiter's
+          // existing retry/terminalize machinery (the desired config is re-attempted on the next try).
+          // Re-attempts back off exponentially (L5(a)): a fixed short retry hot-looped the apply path
+          // when the safe window stayed blocked (incident cmq8y3nlx).
+          const apply = await runtimeControlBridge.applyBeforePrompt(currentInjectionMode);
+          if (!apply.promptMayProceed) {
+            const consecutiveBlockedApplies = blockedApplyStarvationTracker.recordBlocked();
+            return {
+              status: 'deferred',
+              reason: 'terminal_busy',
+              retryAfterMs: resolveBlockedApplyRetryMs(consecutiveBlockedApplies, blockedInjectionRetryMs),
+            };
+          }
+          blockedApplyStarvationTracker.reset();
+        }
+        // Lane X: every text we attempt to write is recorded so a later leftover composer draft
+        // can be exact-match classified as OUR OWN residue (vs an untouchable genuine user draft).
+        ownComposerTextLog.record(input.text);
         const result = await hostResolution.adapter.injectUserPrompt(activeHandle, input);
         if (result.status === 'injected') {
           acceptedPromptTranscriptDiscovery.recordAcceptedPrompt({
@@ -586,16 +810,85 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     });
     opts.setTurnInterrupt?.(() => hostResolution.adapter.interruptTurn(activeHandle));
     turnInterruptRegistered = true;
-    const inputConsumer = createInputConsumer(first, opts.nextMessage);
+    const baseInputConsumer = createInputConsumer(first, opts.nextMessage);
+    // Track the mode of the most recently pulled batch so the injection gate applies the runtime config
+    // desired by the prompt that is about to be injected.
+    const inputConsumer: ClaudeUnifiedInputConsumer<Mode> = runtimeControlBridge
+      ? {
+          async waitForNextInput(consumerOpts) {
+            const batch = await baseInputConsumer.waitForNextInput(consumerOpts);
+            if (batch) currentInjectionMode = batch.mode;
+            return batch;
+          },
+        }
+      : baseInputConsumer;
     controller = await (opts.createController?.({
       hostAdapter: hostResolution.adapter,
       inputInjection,
       inputConsumer,
     }) ?? (() => {
+      // Lane X: a dedicated control port for the bounded own-leftover composer clear (Escape on a
+      // NON-generating screen only). Separate from the runtime-control controller's port — the
+      // evaluator never routes through controller state. Shared with the pre-injection guard below.
+      const steerDraftClearPort = hostResolution.adapter.createControlPort?.(activeHandle) ?? null;
+      const captureInputStateForGuard = hostResolution.adapter.captureInputState;
       const promptInjector = createClaudeUnifiedPromptInjector<Mode>({
         inputInjection,
         telemetry,
+        // C11 (live-proven, runner pid 83791): never type an idle injection next to a leftover
+        // composer draft. Own leftovers (respawn-seeded registry) are cleared; anything else
+        // defers the injection untouched.
+        ...(captureInputStateForGuard && steerDraftClearPort
+          ? {
+              composerDraftGuard: async () => {
+                const result = await clearOwnLeftoverComposerDraft({
+                  captureInputState: () => captureInputStateForGuard(activeHandle),
+                  sendClearKey: async () => {
+                    await steerDraftClearPort.sendSpecialKey('Escape');
+                  },
+                  ownComposerTexts: ownComposerTextLog,
+                });
+                const draftLength =
+                  'screen' in result ? (result.screen.composerContent?.length ?? 0) : undefined;
+                return {
+                  status: result.status,
+                  ...(result.status === 'cleared' ? { attempts: result.attempts } : {}),
+                  ...(draftLength !== undefined ? { draftLength } : {}),
+                };
+              },
+            }
+          : {}),
       });
+      // In-flight steering (D19, incident cmq8171vw): a `ui_pending` prompt delivered mid-turn is
+      // steered into the live TUI when the shared screen-state parser proves the screen is safe
+      // (actively generating, no dialog/picker/draft); otherwise it keeps the bounded deferred path.
+      // Lane Q: when the runtime-control bridge exists, a mode-carrying pending prompt may have
+      // its permission/plan mode applied to the RUNNING turn (verified ShiftTab, probe Q-A) so the
+      // text steers instead of deferring to turn end. No bridge -> unchanged refusal/defer behavior.
+      const bridgeForInFlightModeApply = runtimeControlBridge;
+      const steerWiring = createClaudeUnifiedInFlightSteerEvaluator<Mode>({
+        hostAdapter: hostResolution.adapter,
+        handle: activeHandle,
+        telemetry,
+        initialPermissionMode: startupInput.mode.permissionMode,
+        onAvailabilitySnapshot: opts.onInFlightSteerAvailabilitySnapshot,
+        ownComposerTexts: ownComposerTextLog,
+        ...(steerDraftClearPort
+          ? {
+              clearOwnLeftoverDraft: async () => {
+                await steerDraftClearPort.sendSpecialKey('Escape');
+              },
+            }
+          : {}),
+        onUserDraftStarvation: opts.onInFlightSteerUserDraftStarvation,
+        ...(bridgeForInFlightModeApply
+          ? {
+              applyPermissionModeDeltaInFlight: (mode: Mode) =>
+                bridgeForInFlightModeApply.applyPermissionModeForInFlightSteer(mode),
+            }
+          : {}),
+      });
+      inFlightSteerWiring = steerWiring;
       const arbiter = createClaudeUnifiedInputArbiter<Mode>({
         injectPrompt: promptInjector.injectPrompt,
         injectionRetryLimit: configuration.claudeUnifiedTerminalInjectionRetryLimit,
@@ -603,6 +896,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         providerAcceptanceTimeoutMs:
           opts.providerAcceptanceTimeoutMs ??
           configuration.claudeUnifiedTerminalProviderAcceptanceTimeoutMs,
+        evaluateInFlightSteer: steerWiring.evaluateInFlightSteer,
+        onSteerAcceptanceArmed: steerWiring.onSteerAcceptanceArmed,
+        isCanonicalTurnActive: opts.isCanonicalTurnActive,
         onInjectionFailure: (failure) => {
           const error = new ClaudeUnifiedTerminalInjectionFailureError(failure);
           if (failure.failureState === 'failed_terminal') {
@@ -615,6 +911,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           });
         },
         onPromptInjected: (batch, acceptance) => {
+          steerWiring.observeInjectedPrompt(batch, acceptance);
           if (batch.mode === undefined) return undefined;
           endStartupHostLivenessGrace();
           return opts.onTerminalPromptInjected?.({
@@ -628,6 +925,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       });
       const confirmPromptAcceptedFromTranscript = (messages: readonly RawJSONLines[]): boolean => {
         if (!acceptedPromptTranscriptDiscovery.consumeMatchingTranscript(messages)) return false;
+        observeTrustedProviderProgress();
         void arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
         return true;
       };
@@ -639,6 +937,11 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       const pendingQueuePump = createClaudeUnifiedPendingQueuePump<Mode>({
         inputConsumer,
         arbiter,
+        // A batch pulled during the death/dispose unwind must be returned to the
+        // owner's queue, never silently dropped into a dead session.
+        onUndeliverableBatch: (batch) => {
+          opts.returnUnconsumedMessage?.({ message: batch.message, mode: batch.mode });
+        },
       });
       const lifecycleBridge = hookSubscription.subscribe
         ? createClaudeUnifiedHookLifecycleBridge({
@@ -651,6 +954,11 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             onUsageLimitDetails: opts.onUsageLimitDetails,
             onRuntimeAuthFailureEvent: opts.onRuntimeAuthFailureEvent,
             onProviderPromptStarted: opts.onProviderPromptStarted,
+            onProviderPromptSubmitMetadata: runtimeControlBridge
+              ? (metadata) => runtimeControlBridge?.reconcileFromPromptSubmitMetadata(metadata)
+              : undefined,
+            onProviderSessionStarted: observeProviderSessionStarted,
+            onTrustedProviderProgress: observeTrustedProviderProgress,
             onPromptTurnTerminal: opts.onPromptTurnTerminal,
             onSessionEnd: (event) => {
               if (isClaudePromptInputExit(event)) {
@@ -665,7 +973,12 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             transcriptPath: opts.transcriptPath,
             workingDirectory: opts.path,
             claudeConfigDir: resolveClaudeConfigDirOverride(process.env),
-            onMessage: opts.onMessage,
+            onMessage: opts.onMessage
+              ? (message) => {
+                  if (controlCommandEchoSuppressor?.shouldSuppressTranscriptMessage(message)) return;
+                  opts.onMessage?.(message);
+                }
+              : undefined,
             onTranscriptMessage: (message) => {
               if (!confirmPromptAcceptedFromTranscript([message])) {
                 confirmCompactBoundaryPromptAcceptedFromTranscript(message);
@@ -673,7 +986,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
               lifecycleBridge?.observeTranscript(message);
             },
             onSessionFound: opts.onSessionFound,
-            loadCommittedClaudeJsonlMessageKeys: opts.loadCommittedClaudeJsonlMessageKeys,
+            loadCommittedClaudeJsonlMessageBaseline: opts.loadCommittedClaudeJsonlMessageBaseline,
             transcriptMissingWarningMs: configuration.claudeTranscriptMissingWarningMs,
             subscribeClaudeSessionHooks: hookSubscription.subscribe,
             classifyDiscoveredSession: ({ messages }) => (
@@ -705,18 +1018,32 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             arbiter,
             pollIntervalMs: configuration.claudeUnifiedTerminalStartupReadinessPollMs,
             timeoutMs: configuration.claudeUnifiedTerminalStartupReadinessTimeoutMs,
-            onStartupReady: endStartupHostLivenessGrace,
-            emitOutputReadiness:
-              allowEmptyStartupInputBeforeSessionStart ||
-              allowReadinessBeforeSessionStart ||
-              !opts.subscribeClaudeSessionHooks ||
-              Boolean(opts.sessionId || opts.transcriptPath),
+            extendedTimeoutMs: configuration.claudeUnifiedTerminalStartupReadinessExtendedTimeoutMs,
+            progressGraceMs: configuration.claudeUnifiedTerminalStartupReadinessProgressGraceMs,
+            onStartupReady: () => {
+              observeStartupReadyForInjection();
+              endStartupHostLivenessGrace();
+            },
+            hasTrustedProviderProgress: () => trustedProviderProgressObserved,
+            // SessionStart proves the host process is ALIVE (D17). It does not prove the interactive
+            // composer is ready, so it extends the startup window instead of standing it down — a
+            // slow-but-alive fresh session must not be killed before injection.
+            hasHostAliveEvidence: () => providerSessionStartedObserved,
+            canReportStartupReady: () => (
+              allowEmptyStartupInputBeforeSessionStart
+              || allowReadinessBeforeSessionStart
+              || !opts.subscribeClaudeSessionHooks
+              || Boolean(opts.sessionId || opts.transcriptPath)
+              || providerSessionStartedObserved
+            ),
+            emitOutputReadiness: true,
           }),
           createClaudeUnifiedHostLivenessBridge({
             hostAdapter: hostResolution.adapter,
             handle: activeHandle,
             telemetry,
             pollIntervalMs: configuration.claudeUnifiedTerminalHostLivenessPollMs,
+            probeFailureConfirmDeadMs: opts.hostLivenessProbeFailureConfirmDeadMs,
             startupGraceMs: configuration.claudeUnifiedTerminalStartupReadinessTimeoutMs,
             startupGraceActive: () => startupHostLivenessGraceActive,
             isExpectedHostExit: (liveness) => expectedPromptInputExit && isCleanTerminalExit(liveness),
@@ -765,6 +1092,13 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       opts.setTurnInterrupt?.(null);
     }
     removeProcessSignalCleanup?.();
+    unregisterStatuslineRuntimeReconciler?.();
+    if (runtimeControlBridge) {
+      await runtimeControlBridge.dispose().catch((error) => {
+        logger.debug('[unified]: failed to dispose Claude unified runtime-control bridge (non-fatal)', error);
+      });
+    }
+    inFlightSteerWiring?.dispose();
     if (controller) {
       await controller.dispose();
     } else if (!concreteHostDisposedByProcessSignal) {

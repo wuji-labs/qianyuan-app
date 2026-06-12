@@ -264,6 +264,8 @@ class Configuration {
   public readonly claudeLocalTurnCompletionQuiescenceMs: number
   public readonly claudeUnifiedTerminalStartupReadinessPollMs: number
   public readonly claudeUnifiedTerminalStartupReadinessTimeoutMs: number
+  public readonly claudeUnifiedTerminalStartupReadinessExtendedTimeoutMs: number
+  public readonly claudeUnifiedTerminalStartupReadinessProgressGraceMs: number
   public readonly claudeUnifiedTerminalHostLivenessPollMs: number
   public readonly claudeUnifiedTerminalHostActionTimeoutMs: number
   public readonly claudeUnifiedTerminalAcceptedPromptEchoWindowMs: number
@@ -730,9 +732,22 @@ class Configuration {
       'HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS',
       { min: 250, max: 120_000, default: 15_000 },
     );
+    // Hard ceiling for the adaptive startup-readiness window (D17): a live host that is still
+    // progressing (heavy/xhigh fresh startups) keeps polling past the base timeout up to this ceiling
+    // instead of being killed before the interactive composer renders.
+    this.claudeUnifiedTerminalStartupReadinessExtendedTimeoutMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_EXTENDED_TIMEOUT_MS',
+      { min: 250, max: 300_000, default: 60_000 },
+    );
+    // Static-screen grace past the base window (D17): a live host whose screen is unchanged for this
+    // long is considered stuck and times out (surfacing diagnostics) instead of extending forever.
+    this.claudeUnifiedTerminalStartupReadinessProgressGraceMs = resolveIntEnvWithBounds(
+      'HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_PROGRESS_GRACE_MS',
+      { min: 250, max: 60_000, default: 8_000 },
+    );
     this.claudeUnifiedTerminalHostLivenessPollMs = resolveIntEnvWithBounds(
       'HAPPIER_CLAUDE_UNIFIED_TERMINAL_HOST_LIVENESS_POLL_MS',
-      { min: 100, max: 30_000, default: 1_000 },
+      { min: 1_000, max: 30_000, default: 30_000 },
     );
     this.claudeUnifiedTerminalHostActionTimeoutMs = resolveIntEnvWithBounds(
       'HAPPIER_CLAUDE_UNIFIED_TERMINAL_HOST_ACTION_TIMEOUT_MS',

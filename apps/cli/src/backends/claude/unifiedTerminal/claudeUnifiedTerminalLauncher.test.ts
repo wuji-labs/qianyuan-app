@@ -41,6 +41,7 @@ vi.mock('@/daemon/connectedServices/runtimeAuth/reportConnectedServiceRuntimeAut
 }));
 
 import { claudeUnifiedTerminalLauncher } from './claudeUnifiedTerminalLauncher';
+import { ClaudeUnifiedTerminalReadinessTimeoutError } from './createClaudeUnifiedTerminalReadinessBridge';
 
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 const originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
@@ -71,7 +72,7 @@ function createSession(): Session {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       recordClaudeJsonlMessageConsumed: vi.fn(),
-      fetchCommittedClaudeJsonlMessageKeys: vi.fn(() => new Set<string>()),
+      fetchCommittedClaudeJsonlMessageBaseline: vi.fn(async () => ({ keys: new Set<string>(), complete: true, oldestCoveredAtMs: null })),
       fetchRecentTranscriptTextItemsForAcpImport: vi.fn(async () => []),
       sessionTurnLifecycle: {
         beginTurn: vi.fn(async () => ({ turnId: 'turn-1' })),
@@ -94,6 +95,7 @@ function createSession(): Session {
     queue: {
       size: vi.fn(() => 0),
       waitForMessagesAndGetAsString: vi.fn(),
+      unshift: vi.fn(),
     },
     getOrCreateHappierMcpBridge: vi.fn(async () => ({ mcpConfigJson: '{}' })),
     addClaudeSessionHookCallback: vi.fn(),
@@ -201,6 +203,31 @@ describe('claudeUnifiedTerminalLauncher', () => {
       sessionId: 'happy-session-id',
       terminal,
     });
+  });
+
+  it('requeues a message the runner could not deliver back onto the session queue (silent queue-swallow fix)', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      returnUnconsumedMessage?: (input: { message: string; mode: unknown }) => void;
+    }) => {
+      opts.returnUnconsumedMessage?.({
+        message: 'arrived during unwind',
+        mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+      });
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'tmux',
+      },
+    });
+
+    expect(session.queue.unshift).toHaveBeenCalledWith(
+      'arrived during unwind',
+      { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+    );
   });
 
   it('suppresses Claude transcript user echoes for accepted UI prompts', async () => {
@@ -1132,7 +1159,7 @@ describe('claudeUnifiedTerminalLauncher', () => {
     });
   });
 
-  it('surfaces terminal host death through the primary turn runtime issue path', async () => {
+  it('surfaces terminal host death through the primary turn runtime issue path and exits gracefully instead of escaping as a fatal command error', async () => {
     setProcessTty(false);
     const session = createSession();
     const hostDeadError = Object.assign(new Error('Claude unified terminal host is not alive'), {
@@ -1145,7 +1172,7 @@ describe('claudeUnifiedTerminalLauncher', () => {
         permissionMode: 'default',
         claudeUnifiedTerminalHost: 'zellij',
       },
-    })).rejects.toBe(hostDeadError);
+    })).resolves.toEqual({ type: 'exit', code: 1 });
 
     expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
       provider: 'claude',
@@ -1154,12 +1181,13 @@ describe('claudeUnifiedTerminalLauncher', () => {
         source: 'provider_process_exit',
         provider: 'claude',
       }),
+      allocateWhenIdle: true,
     });
     expect(session.client.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'message',
       message: expect.stringContaining('Claude unified terminal host is not alive'),
     }));
-    expect(session.client.flush).toHaveBeenCalledTimes(1);
+    expect(session.client.flush).toHaveBeenCalled();
     expect(readFirstInvocationOrder(vi.mocked(session.client.flush), 'flush')).toBeGreaterThan(
       readFirstInvocationOrder(getFailTurnSpy(session), 'failTurn'),
     );
@@ -1169,7 +1197,34 @@ describe('claudeUnifiedTerminalLauncher', () => {
     expect(session.onThinkingChange).toHaveBeenCalledWith(false);
   });
 
-  it('surfaces terminal injection failures through the primary turn runtime issue path', async () => {
+  it('parks for the next message and relaunches the unified host after terminal host death', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const hostDeadError = Object.assign(new Error('Claude unified terminal host is not alive'), {
+      code: 'claude_unified_terminal_host_dead',
+    });
+    vi.mocked(session.queue.waitForMessagesAndGetAsString)
+      .mockResolvedValueOnce({ message: 'try again', mode: { permissionMode: 'default' }, hash: 'h1' } as never)
+      .mockResolvedValue(null as never);
+    mocks.runClaudeUnifiedTerminalSession
+      .mockRejectedValueOnce(hostDeadError)
+      .mockImplementationOnce(async (runOpts: {
+        nextMessage: () => Promise<{ message: string; mode: unknown } | null>;
+      }) => {
+        await expect(runOpts.nextMessage()).resolves.toEqual(expect.objectContaining({ message: 'try again' }));
+      });
+
+    await expect(claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    })).resolves.toEqual({ type: 'exit', code: 0 });
+
+    expect(mocks.runClaudeUnifiedTerminalSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces terminal injection failures through the primary turn runtime issue path and exits gracefully instead of escaping as a fatal command error (incident cmq7pyqkj)', async () => {
     setProcessTty(false);
     const session = createSession();
     const injectionError = Object.assign(new Error('Claude unified terminal injection failed: timeout'), {
@@ -1177,12 +1232,15 @@ describe('claudeUnifiedTerminalLauncher', () => {
     });
     mocks.runClaudeUnifiedTerminalSession.mockRejectedValueOnce(injectionError);
 
+    // The runner must NEVER exit fatally on a classified injection failure: it surfaces the
+    // structured runtime issue and (with no queued message and a closed/aborted queue) exits
+    // gracefully — never rethrows into `[claude] Fatal command error` (incident cmq7pyqkj).
     await expect(claudeUnifiedTerminalLauncher(session, {
       initialMode: {
         permissionMode: 'default',
         claudeUnifiedTerminalHost: 'zellij',
       },
-    })).rejects.toBe(injectionError);
+    })).resolves.toEqual({ type: 'exit', code: 1 });
 
     expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
       provider: 'claude',
@@ -1191,8 +1249,96 @@ describe('claudeUnifiedTerminalLauncher', () => {
         source: 'provider_session_error',
         provider: 'claude',
       }),
+      allocateWhenIdle: true,
     });
     expect(session.onThinkingChange).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps the session alive after a fatal mid-turn injection failure: surfaces the issue, waits for the next message, and relaunches (incident cmq7pyqkj)', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const injectionError = Object.assign(new Error('Claude unified terminal prompt injection failed'), {
+      code: 'claude_unified_terminal_injection_failed',
+      failureState: 'failed_terminal',
+    });
+    vi.mocked(session.queue.waitForMessagesAndGetAsString)
+      .mockResolvedValueOnce({ message: 'resume after failure', mode: { permissionMode: 'default' }, hash: 'h1' } as never)
+      .mockResolvedValue(null as never);
+    const secondRunFirstBatch: Array<{ message: string } | null> = [];
+    mocks.runClaudeUnifiedTerminalSession
+      .mockRejectedValueOnce(injectionError)
+      .mockImplementationOnce(async (runOpts: {
+        nextMessage: () => Promise<{ message: string; mode: unknown } | null>;
+      }) => {
+        secondRunFirstBatch.push(await runOpts.nextMessage());
+      });
+
+    await expect(claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    })).resolves.toEqual({ type: 'exit', code: 0 });
+
+    expect(mocks.runClaudeUnifiedTerminalSession).toHaveBeenCalledTimes(2);
+    expect(secondRunFirstBatch).toEqual([expect.objectContaining({ message: 'resume after failure' })]);
+    // The failed turn was surfaced as a structured runtime issue before parking.
+    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+      provider: 'claude',
+      issue: expect.objectContaining({
+        code: 'provider_session_error',
+        provider: 'claude',
+      }),
+      allocateWhenIdle: true,
+    });
+  });
+
+  it('surfaces a startup readiness timeout as a structured runtime issue and exits without a generic fatal command error (D18 standalone class)', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const readinessError = new ClaudeUnifiedTerminalReadinessTimeoutError({
+      timeoutMs: 15_000,
+      handle: {
+        kind: 'zellij',
+        sessionName: 'happier-claude-session-test',
+        paneId: '1',
+        attachMetadata: {
+          attachStrategy: 'terminal_host',
+          topology: 'shared',
+          locality: 'same_machine',
+          liveProbe: 'required',
+        },
+      },
+      diagnostics: {
+        elapsedMs: 16_000,
+        hostAlive: true,
+        sessionStartObserved: true,
+        lastLivenessPaneAlive: true,
+        lastScreenTail: 'Initializing Claude Code…',
+      },
+    });
+    mocks.runClaudeUnifiedTerminalSession.mockRejectedValueOnce(readinessError);
+
+    // Resolves (no re-throw) so the readiness timeout never becomes a `[claude] Fatal command error`
+    // / silent dead session, while still surfacing the structured runtime issue to the UI.
+    await expect(claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    })).resolves.toEqual({ type: 'exit', code: 1 });
+
+    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+      provider: 'claude',
+      issue: expect.objectContaining({
+        code: 'provider_session_error',
+        source: 'provider_session_error',
+        provider: 'claude',
+      }),
+      allocateWhenIdle: true,
+    });
+    expect(session.onThinkingChange).toHaveBeenCalledWith(false);
+    expect(session.client.flush).toHaveBeenCalled();
   });
 
   it('surfaces non-fatal terminal injection failures without failing the launcher', async () => {
@@ -1222,6 +1368,7 @@ describe('claudeUnifiedTerminalLauncher', () => {
         source: 'provider_session_error',
         provider: 'claude',
       }),
+      allocateWhenIdle: true,
     });
     expect(session.onThinkingChange).toHaveBeenCalledWith(false);
   });
@@ -1340,5 +1487,63 @@ describe('claudeUnifiedTerminalLauncher', () => {
     expect(session.noteUserAbortRequested).toHaveBeenCalledTimes(1);
     expect(session.abortCurrentTaskTurn).toHaveBeenCalledTimes(1);
     expect(runnerSignal?.aborted).toBe(false);
+  });
+
+  it('wires blocked-apply starvation honesty (F2): escalation surfaces ONE user-visible session message', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      tuiRuntimeControl?: {
+        onBlockedApplyStarvation?: (info: { consecutiveBlockedApplies: number }) => void;
+      };
+    }) => {
+      opts.tuiRuntimeControl?.onBlockedApplyStarvation?.({ consecutiveBlockedApplies: 6 });
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    });
+
+    const messageEvents = vi.mocked(session.client.sendSessionEvent).mock.calls
+      .map(([event]) => event as { type?: string })
+      .filter((event) => event.type === 'message');
+    expect(messageEvents).toHaveLength(1);
+  });
+
+  // QA-B B6 (live 2026-06-12, session cmqawdqzj): gate OFF dropped a permission-mode change
+  // between turns SILENTLY (no requires_restart notice, prompt ran under the stale mode). The
+  // standalone launcher must surface the same legacy notices as the daemon launcher.
+  it('gate OFF: surfaces the legacy requires_restart notice when a batch mode changes (B6)', async () => {
+    setProcessTty(false);
+    const previousGateEnv = process.env.HAPPIER_FEATURE_CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL__ENABLED;
+    process.env.HAPPIER_FEATURE_CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL__ENABLED = '0';
+    try {
+      const session = createSession();
+      mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+        nextMessage: () => Promise<{ message: string; mode: Record<string, unknown> } | null>;
+        tuiRuntimeControl?: { featureEnabled: boolean };
+      }) => {
+        expect(opts.tuiRuntimeControl?.featureEnabled).toBe(false);
+        await opts.nextMessage();
+        await opts.nextMessage();
+      });
+      vi.mocked(session.queue.waitForMessagesAndGetAsString)
+        .mockResolvedValueOnce({ message: 'first', mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true }, isolate: false, hash: 'h1' })
+        .mockResolvedValueOnce({ message: 'second', mode: { permissionMode: 'plan', claudeUnifiedTerminalEnabled: true }, isolate: false, hash: 'h2' });
+
+      await claudeUnifiedTerminalLauncher(session, {});
+
+      const events = vi.mocked(session.client.sendSessionEvent).mock.calls.map(([event]) => event as Record<string, unknown>);
+      const messageEvents = events.filter((event) => event.type === 'message');
+      expect(messageEvents.some((event) => String(event.message).includes('apply when Claude restarts'))).toBe(true);
+      const outcomeEvents = events.filter((event) => event.type !== 'message');
+      expect(JSON.stringify(outcomeEvents)).toContain('requires_restart');
+    } finally {
+      if (previousGateEnv === undefined) delete process.env.HAPPIER_FEATURE_CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL__ENABLED;
+      else process.env.HAPPIER_FEATURE_CLAUDE_UNIFIED_TUI_RUNTIME_CONTROL__ENABLED = previousGateEnv;
+    }
   });
 });

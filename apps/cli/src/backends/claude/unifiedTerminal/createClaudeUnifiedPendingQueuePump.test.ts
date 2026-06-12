@@ -85,6 +85,57 @@ describe('createClaudeUnifiedPendingQueuePump', () => {
     await expect(startResult).rejects.toBe(error);
   });
 
+  it('hands an already-consumed batch back instead of dropping it when aborted during the input wait (silent queue-swallow fix)', async () => {
+    const abortController = new AbortController();
+    let resolveInput!: (value: { message: string; mode: undefined; isolate: boolean; hash: string }) => void;
+    const enqueueUiMessage = vi.fn();
+    const onUndeliverableBatch = vi.fn();
+    const pump = createClaudeUnifiedPendingQueuePump({
+      inputConsumer: {
+        waitForNextInput: vi.fn(() => new Promise<{ message: string; mode: undefined; isolate: boolean; hash: string }>((resolve) => {
+          resolveInput = resolve;
+        })),
+      },
+      arbiter: { enqueueUiMessage, drainWhenSafe: vi.fn() },
+      onUndeliverableBatch,
+    });
+
+    const pumping = pump.pumpOnce({ abortSignal: abortController.signal });
+    abortController.abort();
+    resolveInput({ message: 'arrived during unwind', mode: undefined, isolate: false, hash: 'h1' });
+
+    await expect(pumping).resolves.toBe(false);
+    expect(enqueueUiMessage).not.toHaveBeenCalled();
+    expect(onUndeliverableBatch).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'arrived during unwind',
+    }));
+  });
+
+  it('hands an already-consumed batch back when disposed during the input wait', async () => {
+    let resolveInput!: (value: { message: string; mode: undefined; isolate: boolean; hash: string }) => void;
+    const enqueueUiMessage = vi.fn();
+    const onUndeliverableBatch = vi.fn();
+    const pump = createClaudeUnifiedPendingQueuePump({
+      inputConsumer: {
+        waitForNextInput: vi.fn(() => new Promise<{ message: string; mode: undefined; isolate: boolean; hash: string }>((resolve) => {
+          resolveInput = resolve;
+        })),
+      },
+      arbiter: { enqueueUiMessage, drainWhenSafe: vi.fn() },
+      onUndeliverableBatch,
+    });
+
+    const pumping = pump.pumpOnce({ abortSignal: new AbortController().signal });
+    pump.dispose();
+    resolveInput({ message: 'stolen by stale waiter', mode: undefined, isolate: false, hash: 'h2' });
+
+    await expect(pumping).resolves.toBe(false);
+    expect(enqueueUiMessage).not.toHaveBeenCalled();
+    expect(onUndeliverableBatch).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'stolen by stale waiter',
+    }));
+  });
+
   it('resolves the running promise after disposal when the consumer stops', async () => {
     let resolveInput!: (value: null) => void;
     const pump = createClaudeUnifiedPendingQueuePump({

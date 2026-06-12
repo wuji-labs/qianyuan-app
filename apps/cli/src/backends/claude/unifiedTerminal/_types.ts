@@ -45,9 +45,34 @@ export type ClaudeUnifiedPromptInjectionFailureHandler<Mode = unknown> = (
   failure: ClaudeUnifiedPromptInjectionFailure<Mode>,
 ) => void;
 
-export type ClaudeUnifiedPromptInjector<Mode = unknown> = Readonly<{
-  injectPrompt(batch: ClaudeUnifiedPromptBatch<Mode>): Promise<TerminalInputInjectionResult>;
+export type ClaudeUnifiedPromptInjectionOptions = Readonly<{
+  /**
+   * The prompt is being steered into a RUNNING turn (Claude's TUI queues it natively and submits it
+   * at turn end). The injector must skip quiet-screen deferral: a generating screen is never quiet,
+   * and the screen-state evaluation that authorized the steer already vetoed visible user drafts.
+   */
+  inFlightSteer?: boolean | undefined;
 }>;
+
+export type ClaudeUnifiedPromptInjector<Mode = unknown> = Readonly<{
+  injectPrompt(
+    batch: ClaudeUnifiedPromptBatch<Mode>,
+    options?: ClaudeUnifiedPromptInjectionOptions | undefined,
+  ): Promise<TerminalInputInjectionResult>;
+}>;
+
+/**
+ * Screen-evidence decision for steering a pending prompt into a running turn (D19).
+ * `turnLikelyEnded` marks a decision whose screen evidence shows an idle interactive composer — used as
+ * fallback turn-end evidence when lifecycle hooks are lost.
+ */
+export type ClaudeUnifiedInFlightSteerDecision =
+  | Readonly<{ steer: true; turnLikelyEnded?: boolean | undefined }>
+  | Readonly<{ steer: false; reason: string; turnLikelyEnded?: boolean | undefined }>;
+
+export type ClaudeUnifiedInFlightSteerEvaluator<Mode = unknown> = (
+  batch: ClaudeUnifiedPromptBatch<Mode>,
+) => Promise<ClaudeUnifiedInFlightSteerDecision>;
 
 export type ClaudeUnifiedInputArbiter<Mode = unknown> = Readonly<{
   enqueueUiMessage(batch: ClaudeUnifiedPromptBatch<Mode>): Promise<void>;

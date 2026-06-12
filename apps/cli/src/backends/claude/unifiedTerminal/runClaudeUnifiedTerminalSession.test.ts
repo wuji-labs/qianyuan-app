@@ -12,6 +12,34 @@ import type { EnhancedMode } from '../loop';
 import type { RawJSONLines } from '../types';
 import { getProjectPath } from '../utils/path';
 import { runClaudeUnifiedTerminalSession } from './runClaudeUnifiedTerminalSession';
+import { createClaudeOwnComposerTextLog } from './ownComposerTextLog';
+import {
+  ClaudeUnifiedTerminalReadinessTimeoutError,
+  isClaudeUnifiedTerminalReadinessTimeoutError,
+} from './createClaudeUnifiedTerminalReadinessBridge';
+import { reloadConfiguration } from '@/configuration';
+
+type ReadinessEnvSnapshot = Readonly<{
+  timeout: string | undefined;
+  extended: string | undefined;
+  grace: string | undefined;
+  poll: string | undefined;
+}>;
+
+function restoreReadinessEnv(previous: ReadinessEnvSnapshot): void {
+  const restore = (key: string, value: string | undefined): void => {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restore('HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS', previous.timeout);
+  restore('HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_EXTENDED_TIMEOUT_MS', previous.extended);
+  restore('HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_PROGRESS_GRACE_MS', previous.grace);
+  restore('HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_POLL_MS', previous.poll);
+  reloadConfiguration();
+}
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -20,6 +48,13 @@ const loggerMock = vi.hoisted(() => ({
 vi.mock('@/ui/logger', () => ({
   logger: loggerMock,
 }));
+
+const interactiveClaudeScreen = [
+  'Some previous Claude output',
+  '',
+  'What would you like to work on?',
+  '> ',
+].join('\n');
 
 function createAbortableSignal(): AbortController {
   return new AbortController();
@@ -103,7 +138,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: 1, bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -175,7 +210,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -256,7 +291,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -365,7 +400,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -461,7 +496,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: 1 } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -520,7 +555,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: 1, bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -585,7 +620,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: 1, bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -651,7 +686,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: 1, bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -711,7 +746,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -764,7 +799,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -816,7 +851,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -867,7 +902,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => hostCreated.promise),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -921,7 +956,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => hostCreated.promise),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -994,7 +1029,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1053,7 +1088,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async (_handle, input) => ({ status: 'injected', at: Date.now(), bytesWritten: input.text.length }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1112,7 +1147,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async (_handle, input) => ({ status: 'injected', at: Date.now(), bytesWritten: input.text.length }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {
         throw disposalError;
@@ -1180,7 +1215,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: Date.now(), bytesWritten: 0 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1245,7 +1280,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
       captureInputState: vi.fn(async () => ({
         stable: terminalReady,
-        currentInput: terminalReady ? '' : 'Claude is restoring the previous session',
+        currentInput: terminalReady ? interactiveClaudeScreen : 'Claude is restoring the previous session',
         observedAt: Date.now(),
       })),
       interruptTurn: vi.fn(async () => {}),
@@ -1290,6 +1325,121 @@ describe('runClaudeUnifiedTerminalSession', () => {
     }
   });
 
+  // Lane N3 (incident cmq8y3nlx/pid-58372): SessionStart proves the host is alive, NOT that the
+  // interactive composer is ready. Controls + prompt writes must be held behind the SAME
+  // startup-readiness owner (the readiness bridge); typing /effort into a still-initializing TUI
+  // orphans the slash picker and cascades into unsafe_overlay loops.
+  it('holds runtime controls and prompt injection until the startup readiness owner reports ready', async () => {
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    const applyBeforePromptCalls: number[] = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let screenReady = false;
+    const notReadyScreen = 'Initializing Claude Code…\nLoading workspace configuration';
+    const handle: TerminalHostHandle = {
+      kind: 'tmux',
+      sessionName: 'happier-claude-session-test',
+      paneId: '%1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'tmux',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        abortController.abort();
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({
+        stable: true,
+        currentInput: screenReady ? interactiveClaudeScreen : notReadyScreen,
+        observedAt: Date.now(),
+      })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'wait for startup readiness',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'tmux',
+          },
+        };
+      },
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      tuiRuntimeControl: {
+        featureEnabled: true,
+        emitRuntimeConfigOutcome: vi.fn(),
+        createBridge: () => ({
+          applyBeforePrompt: vi.fn(async () => {
+            applyBeforePromptCalls.push(Date.now());
+            return { promptMayProceed: true } as const;
+          }),
+          reconcileFromPromptSubmitMetadata: vi.fn(),
+          dispose: vi.fn(async () => {}),
+        }) as unknown as ReturnType<NonNullable<NonNullable<Parameters<typeof runClaudeUnifiedTerminalSession>[0]['tuiRuntimeControl']>['createBridge']>>,
+      },
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 5_000);
+      const hook = subscribedHook;
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+      hook({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+
+      // Lifecycle observations (e.g. compaction/idle markers from a resume) can mark the
+      // arbiter's heuristic readiness while the TUI is still initializing — the incident's
+      // premature-typing path. The startup-readiness owner must still hold the gate.
+      hook({
+        hook_event_name: 'PostCompact',
+        session_id: 'claude-session-id',
+      });
+
+      // SessionStart observed but the composer is NOT ready: neither controls nor the prompt
+      // may be typed into the TUI.
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(applyBeforePromptCalls).toEqual([]);
+      expect(injected).toEqual([]);
+
+      screenReady = true;
+      await waitUntil(() => injected.length === 1, 5_000);
+      expect(applyBeforePromptCalls.length).toBeGreaterThan(0);
+      expect(injected).toEqual(['wait for startup readiness']);
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
   it('waits for Claude SessionStart before first injection when lifecycle hooks are available', async () => {
     const abortController = createAbortableSignal();
     const injected: string[] = [];
@@ -1314,7 +1464,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1369,6 +1519,548 @@ describe('runClaudeUnifiedTerminalSession', () => {
     }
   });
 
+  it('steers a pending web prompt into a running turn when the screen is actively generating (incident cmq8171vw)', async () => {
+    const abortController = createAbortableSignal();
+    const injectedInputs: Array<{ text: string; scheduling: { deferredUntilQuietMs?: number | undefined } }> = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let currentScreen = interactiveClaudeScreen;
+    const telemetry = { emit: vi.fn() };
+    const handle: TerminalHostHandle = {
+      kind: 'tmux',
+      sessionName: 'happier-claude-session-test',
+      paneId: '%1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'tmux',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injectedInputs.push({ text: input.text, scheduling: { ...input.scheduling } });
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: currentScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let releaseSteerMessage!: (value: { message: string; mode: EnhancedMode }) => void;
+    let messageIndex = 0;
+    const nextMessage = vi.fn((): Promise<{ message: string; mode: EnhancedMode } | null> => {
+      messageIndex += 1;
+      if (messageIndex === 1) {
+        return Promise.resolve({
+          message: 'start the long task',
+          mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' } satisfies EnhancedMode,
+        });
+      }
+      if (messageIndex === 2) {
+        return new Promise<{ message: string; mode: EnhancedMode }>((resolve) => {
+          releaseSteerMessage = resolve;
+        });
+      }
+      return new Promise<{ message: string; mode: EnhancedMode } | null>(() => {});
+    });
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
+      createSessionName: () => 'happier-claude-session-test',
+      lifecycleCompletionQuiescenceMs: 25,
+      telemetry,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 5_000);
+      subscribedHook?.({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await waitUntil(() => injectedInputs.length === 1, 5_000);
+      expect(injectedInputs[0]).toMatchObject({ text: 'start the long task' });
+
+      // Claude accepts the first prompt and a long autonomous turn starts.
+      subscribedHook?.({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      currentScreen = [
+        '● Working through the task…',
+        '  reading files, running tests',
+        '',
+        '✶ Forging… (42s · esc to interrupt)',
+      ].join('\n');
+
+      // A web steering message arrives mid-turn. It must reach the TUI now —
+      // not be held invisibly until the turn ends.
+      await waitUntil(() => nextMessage.mock.calls.length >= 2, 5_000);
+      releaseSteerMessage({
+        message: 'steer me mid-turn',
+        mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' },
+      });
+      await waitUntil(() => injectedInputs.length === 2, 5_000);
+      expect(injectedInputs[1]).toMatchObject({ text: 'steer me mid-turn' });
+      // Steer injections skip the quiet-screen deferral (a generating screen is never quiet).
+      expect(injectedInputs[1]?.scheduling.deferredUntilQuietMs).toBeUndefined();
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.steer.decision',
+        properties: expect.objectContaining({ decision: 'safe', originKind: 'ui_pending' }),
+      });
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
+  it('keeps deferring a pending web prompt mid-turn when the screen shows a user draft', async () => {
+    const abortController = createAbortableSignal();
+    const injectedInputs: Array<{ text: string; scheduling: { deferredUntilQuietMs?: number | undefined } }> = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let currentScreen = interactiveClaudeScreen;
+    const telemetry = { emit: vi.fn() };
+    const handle: TerminalHostHandle = {
+      kind: 'tmux',
+      sessionName: 'happier-claude-session-test',
+      paneId: '%1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'tmux',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injectedInputs.push({ text: input.text, scheduling: { ...input.scheduling } });
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: currentScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let releaseSteerMessage!: (value: { message: string; mode: EnhancedMode }) => void;
+    let messageIndex = 0;
+    const nextMessage = vi.fn((): Promise<{ message: string; mode: EnhancedMode } | null> => {
+      messageIndex += 1;
+      if (messageIndex === 1) {
+        return Promise.resolve({
+          message: 'start the long task',
+          mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' } satisfies EnhancedMode,
+        });
+      }
+      if (messageIndex === 2) {
+        return new Promise<{ message: string; mode: EnhancedMode }>((resolve) => {
+          releaseSteerMessage = resolve;
+        });
+      }
+      return new Promise<{ message: string; mode: EnhancedMode } | null>(() => {});
+    });
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
+      createSessionName: () => 'happier-claude-session-test',
+      lifecycleCompletionQuiescenceMs: 25,
+      telemetry,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 5_000);
+      subscribedHook?.({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await waitUntil(() => injectedInputs.length === 1, 5_000);
+      subscribedHook?.({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      // Mid-generation screen with a visible terminal-user draft: steering must veto.
+      currentScreen = [
+        '✶ Forging… (42s · esc to interrupt)',
+        '╭───────────────────────────────────────────────╮',
+        '│ > half-typed user thought                       │',
+        '╰───────────────────────────────────────────────╯',
+      ].join('\n');
+
+      await waitUntil(() => nextMessage.mock.calls.length >= 2, 5_000);
+      releaseSteerMessage({
+        message: 'do not merge with the draft',
+        mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      expect(injectedInputs).toHaveLength(1);
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.steer.decision',
+        properties: expect.objectContaining({ decision: 'vetoed', reason: 'user_draft' }),
+      });
+
+      // Turn ends → the deferred prompt drains through the normal new-turn path.
+      currentScreen = interactiveClaudeScreen;
+      subscribedHook?.({
+        hook_event_name: 'Stop',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await waitUntil(() => injectedInputs.length === 2, 5_000);
+      expect(injectedInputs[1]).toMatchObject({ text: 'do not merge with the draft' });
+      expect(injectedInputs[1]?.scheduling.deferredUntilQuietMs).toBe(TERMINAL_INPUT_QUIET_PERIOD_MS);
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
+  it('clears a respawn-seeded predecessor leftover draft and lets the pending prompt proceed (C11, incident cmq8y3nlx)', async () => {
+    const abortController = createAbortableSignal();
+    const injectedInputs: Array<{ text: string }> = [];
+    const specialKeysSent: string[] = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let currentScreen = interactiveClaudeScreen;
+    const leftoverText = 'please continue and keep waiting for the agents until full completion';
+    const leftoverDraftScreen = [
+      'Some previous Claude output',
+      '╭───────────────────────────────────────────────────────────────────────────╮',
+      `│ > ${leftoverText} │`,
+      '╰───────────────────────────────────────────────────────────────────────────╯',
+    ].join('\n');
+    const telemetry = { emit: vi.fn() };
+    const handle: TerminalHostHandle = {
+      kind: 'tmux',
+      sessionName: 'happier-claude-session-test',
+      paneId: '%1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'tmux',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injectedInputs.push({ text: input.text });
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: currentScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      createControlPort: vi.fn(() => ({
+        hostKind: 'tmux' as const,
+        sendLiteralText: vi.fn(async () => ({ status: 'sent', at: Date.now() } as const)),
+        sendRawSequence: vi.fn(async () => ({ status: 'sent', at: Date.now() } as const)),
+        sendSpecialKey: vi.fn(async (key: string) => {
+          specialKeysSent.push(key);
+          if (key === 'Escape') {
+            // The leftover draft is cleared; the turn keeps generating draft-free.
+            currentScreen = '✶ Forging… (42s · esc to interrupt)';
+          }
+          return { status: 'sent', at: Date.now() } as const;
+        }),
+        captureScreen: vi.fn(async () => ({
+          status: 'captured',
+          capture: { text: currentScreen, capturedAtMs: Date.now(), hostKind: 'tmux' as const },
+        } as const)),
+      })),
+      dispose: vi.fn(async () => {}),
+    };
+    let releaseSteerMessage!: (value: { message: string; mode: EnhancedMode }) => void;
+    let messageIndex = 0;
+    const nextMessage = vi.fn((): Promise<{ message: string; mode: EnhancedMode } | null> => {
+      messageIndex += 1;
+      if (messageIndex === 1) {
+        return Promise.resolve({
+          message: 'start the long task',
+          mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' } satisfies EnhancedMode,
+        });
+      }
+      if (messageIndex === 2) {
+        return new Promise<{ message: string; mode: EnhancedMode }>((resolve) => {
+          releaseSteerMessage = resolve;
+        });
+      }
+      return new Promise<{ message: string; mode: EnhancedMode } | null>(() => {});
+    });
+
+    // C11: the registry is seeded (e.g. from the persisted prompt store after a respawn) with a
+    // text THIS run never injected — the predecessor runner's leftover composer injection.
+    const ownComposerTexts = createClaudeOwnComposerTextLog();
+    ownComposerTexts.record(leftoverText);
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage,
+      ownComposerTexts,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
+      createSessionName: () => 'happier-claude-session-test',
+      lifecycleCompletionQuiescenceMs: 25,
+      telemetry,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 5_000);
+      subscribedHook?.({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await waitUntil(() => injectedInputs.length === 1, 5_000);
+      subscribedHook?.({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      // Mid-turn, NON-generating screen showing the predecessor's leftover draft.
+      currentScreen = leftoverDraftScreen;
+
+      await waitUntil(() => nextMessage.mock.calls.length >= 2, 5_000);
+      releaseSteerMessage({
+        message: 'steer past the predecessor leftover',
+        mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' },
+      });
+
+      // The seeded registry classifies the draft as OUR OWN residue → bounded Escape clear →
+      // re-evaluation steers the pending prompt instead of starving it.
+      await waitUntil(() => injectedInputs.length === 2, 10_000);
+      expect(specialKeysSent).toContain('Escape');
+      expect(injectedInputs[1]).toMatchObject({ text: 'steer past the predecessor leftover' });
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.steer.decision',
+        properties: expect.objectContaining({ decision: 'own_draft_clear_attempted' }),
+      });
+      expect(telemetry.emit).not.toHaveBeenCalledWith({
+        name: 'unified.steer.decision',
+        properties: expect.objectContaining({ decision: 'starvation_escalated' }),
+      });
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
+  it('does not steer a pending prompt that changes the permission mode mid-turn', async () => {
+    const abortController = createAbortableSignal();
+    const injectedTexts: string[] = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let currentScreen = interactiveClaudeScreen;
+    const telemetry = { emit: vi.fn() };
+    const handle: TerminalHostHandle = {
+      kind: 'tmux',
+      sessionName: 'happier-claude-session-test',
+      paneId: '%1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'tmux',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injectedTexts.push(input.text);
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: currentScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let releaseSteerMessage!: (value: { message: string; mode: EnhancedMode }) => void;
+    let messageIndex = 0;
+    const nextMessage = vi.fn((): Promise<{ message: string; mode: EnhancedMode } | null> => {
+      messageIndex += 1;
+      if (messageIndex === 1) {
+        return Promise.resolve({
+          message: 'start the long task',
+          mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'tmux' } satisfies EnhancedMode,
+        });
+      }
+      if (messageIndex === 2) {
+        return new Promise<{ message: string; mode: EnhancedMode }>((resolve) => {
+          releaseSteerMessage = resolve;
+        });
+      }
+      return new Promise<{ message: string; mode: EnhancedMode } | null>(() => {});
+    });
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
+      createSessionName: () => 'happier-claude-session-test',
+      lifecycleCompletionQuiescenceMs: 25,
+      telemetry,
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 5_000);
+      subscribedHook?.({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await waitUntil(() => injectedTexts.length === 1, 5_000);
+      subscribedHook?.({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      currentScreen = '✶ Forging… (42s · esc to interrupt)';
+
+      // The message changes permission mode: in-flight steering must refuse it
+      // (mode changes are handled by the main loop / next-prompt semantics).
+      await waitUntil(() => nextMessage.mock.calls.length >= 2, 5_000);
+      releaseSteerMessage({
+        message: 'switch to accept edits and continue',
+        mode: { permissionMode: 'acceptEdits', claudeUnifiedTerminalHost: 'tmux' },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      expect(injectedTexts).toHaveLength(1);
+      expect(telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.steer.decision',
+        properties: expect.objectContaining({ decision: 'vetoed', reason: 'permission_mode_change' }),
+      });
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
+  it('does not inject after SessionStart until zellij input readiness is actually interactive', async () => {
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let currentScreen = 'Resuming previous conversation...\nRendering transcript messages and tools...';
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: '1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        abortController.abort();
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({
+        stable: true,
+        currentInput: currentScreen,
+        observedAt: Date.now(),
+      })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'wait for interactive zellij prompt',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'zellij',
+          },
+        };
+      },
+      allowFirstInputBeforeSessionStart: true,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+    });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 1_000);
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await new Promise((resolve) => setTimeout(resolve, TERMINAL_INPUT_QUIET_PERIOD_MS + 150));
+      expect(injected).toEqual([]);
+
+      currentScreen = interactiveClaudeScreen;
+      await waitUntil(() => injected.length === 1, 2_000);
+      expect(injected).toEqual(['wait for interactive zellij prompt']);
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
   it('injects an allowed CLI startup prompt before SessionStart when terminal input is ready', async () => {
     const abortController = createAbortableSignal();
     const injected: string[] = [];
@@ -1392,7 +2084,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1454,7 +2146,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1482,7 +2174,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       }),
       createSessionName: () => 'happier-claude-session-test',
       onMessage: vi.fn(),
-      loadCommittedClaudeJsonlMessageKeys: () => committedKeys.promise,
+      loadCommittedClaudeJsonlMessageBaseline: async () => ({ keys: await committedKeys.promise, complete: true, oldestCoveredAtMs: null }),
     });
 
     try {
@@ -1541,7 +2233,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1675,6 +2367,289 @@ describe('runClaudeUnifiedTerminalSession', () => {
     } finally {
       abortController.abort();
       await sessionPromise;
+    }
+  });
+
+  it('does not abort when the first prompt is accepted before startup readiness sees an idle prompt', async () => {
+    const previousStartupReadinessTimeout = process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS;
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS = '250';
+    reloadConfiguration();
+
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    let currentScreen = interactiveClaudeScreen;
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: '1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({
+        stable: true,
+        currentInput: currentScreen,
+        observedAt: Date.now(),
+      })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+    let settled: { status: 'fulfilled' } | { status: 'rejected'; error: unknown } | undefined;
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'accepted before idle readiness',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'zellij',
+          },
+        };
+      },
+      allowFirstInputBeforeSessionStart: true,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      lifecycleCompletionQuiescenceMs: 0,
+    });
+    const observedSession = sessionPromise
+      .then(() => {
+        settled = { status: 'fulfilled' };
+      })
+      .catch((error: unknown) => {
+        settled = { status: 'rejected', error };
+      });
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 1_000);
+      const hook = subscribedHook;
+      expect(hook).toBeTypeOf('function');
+      if (typeof hook !== 'function') throw new Error('Claude session hook subscription was not registered');
+
+      hook({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+      await waitUntil(() => injected.length === 1, 1_000);
+      currentScreen = 'Claude is working on your request';
+      hook({
+        hook_event_name: 'UserPromptSubmit',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(settled).toBeUndefined();
+    } finally {
+      abortController.abort();
+      await observedSession;
+      if (previousStartupReadinessTimeout === undefined) {
+        delete process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS;
+      } else {
+        process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS = previousStartupReadinessTimeout;
+      }
+      reloadConfiguration();
+    }
+  });
+
+  it('surfaces a structured readiness-timeout error with diagnostics for a live host that never reaches an interactive prompt (D18 remote/daemon class)', async () => {
+    const previousEnv = {
+      timeout: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS,
+      extended: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_EXTENDED_TIMEOUT_MS,
+      grace: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_PROGRESS_GRACE_MS,
+      poll: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_POLL_MS,
+    };
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS = '250';
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_EXTENDED_TIMEOUT_MS = '700';
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_PROGRESS_GRACE_MS = '250';
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_POLL_MS = '25';
+    reloadConfiguration();
+
+    const abortController = createAbortableSignal();
+    let subscribedHook: ((data: SessionHookData) => void) | undefined;
+    const stableUnknownScreen = 'Initializing Claude Code…\nLoading workspace configuration';
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: '1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({
+        stable: true,
+        currentInput: stableUnknownScreen,
+        observedAt: Date.now(),
+      })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      allowFirstInputBeforeSessionStart: true,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'first turn never delivered',
+          mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'zellij' },
+        };
+      },
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
+      createSessionName: () => 'happier-claude-session-test',
+      subscribeClaudeSessionHooks: (callback) => {
+        subscribedHook = callback;
+        return () => {
+          subscribedHook = undefined;
+        };
+      },
+      lifecycleCompletionQuiescenceMs: 0,
+    });
+    const observed = sessionPromise.then(() => null, (error: unknown) => error);
+
+    try {
+      await waitUntil(() => typeof subscribedHook === 'function', 1_000);
+      // SessionStart proves the host is alive but does NOT make the composer interactive.
+      subscribedHook?.({
+        hook_event_name: 'SessionStart',
+        session_id: 'claude-session-id',
+        transcript_path: '/tmp/claude-session.jsonl',
+      });
+
+      const error = await observed;
+      expect(isClaudeUnifiedTerminalReadinessTimeoutError(error)).toBe(true);
+      const diagnostics = (error as ClaudeUnifiedTerminalReadinessTimeoutError).diagnostics;
+      expect(diagnostics?.hostAlive).toBe(true);
+      expect(diagnostics?.sessionStartObserved).toBe(true);
+      expect(diagnostics?.lastLivenessPaneAlive).toBe(true);
+      expect(diagnostics?.lastScreenTail).toContain('Initializing Claude Code');
+      expect(adapter.injectUserPrompt).not.toHaveBeenCalled();
+    } finally {
+      abortController.abort();
+      await observed;
+      restoreReadinessEnv(previousEnv);
+    }
+  });
+
+  it('extends the startup window for a slow-but-progressing live host and injects once the interactive prompt renders (D18 adaptive window)', async () => {
+    const previousEnv = {
+      timeout: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS,
+      extended: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_EXTENDED_TIMEOUT_MS,
+      grace: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_PROGRESS_GRACE_MS,
+      poll: process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_POLL_MS,
+    };
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_TIMEOUT_MS = '250';
+    // Generous extended/grace budgets: the behavior under test is "base window exceeded while
+    // progressing → still injects" (capture #16 cannot arrive before 16×25ms > 250ms base), and a
+    // tight extended budget made the test flaky on slow runners (16 polls + overhead vs 1500ms).
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_EXTENDED_TIMEOUT_MS = '30000';
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_PROGRESS_GRACE_MS = '5000';
+    process.env.HAPPIER_CLAUDE_UNIFIED_TERMINAL_STARTUP_READINESS_POLL_MS = '25';
+    reloadConfiguration();
+
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    let captures = 0;
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: '1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        abortController.abort();
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => {
+        captures += 1;
+        // Progressing (each render differs) past the base window, then the interactive composer renders.
+        if (captures < 16) {
+          return { stable: true, currentInput: `Rendering transcript chunk ${captures} of many…`, observedAt: Date.now() };
+        }
+        return { stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() };
+      }),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      allowFirstInputBeforeSessionStart: true,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'delivered after slow render',
+          mode: { permissionMode: 'default', claudeUnifiedTerminalHost: 'zellij' },
+        };
+      },
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({ spawnArgv: ['/bin/claude'], spawnEnv: {} }),
+      createSessionName: () => 'happier-claude-session-test',
+      lifecycleCompletionQuiescenceMs: 0,
+    });
+
+    try {
+      await waitUntil(() => injected.length === 1, 30_000);
+      expect(injected).toEqual(['delivered after slow render']);
+      expect(captures).toBeGreaterThanOrEqual(16);
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+      restoreReadinessEnv(previousEnv);
     }
   });
 
@@ -1850,7 +2825,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: 1, bytesWritten: 1 }) as const),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: 1 })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -1907,7 +2882,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
             paneExitStatus: 0,
             observedAt: Date.now(),
           })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -2000,7 +2975,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         if (!paneAlive) deadLivenessCalls += 1;
         return { paneAlive, observedAt: Date.now() };
       }),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -2064,6 +3039,85 @@ describe('runClaudeUnifiedTerminalSession', () => {
     }
   });
 
+  it('hands a message consumed during the host-death unwind back to the owner instead of dropping it (silent queue-swallow fix)', async () => {
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    const telemetry = { emit: vi.fn() };
+    let paneAlive = true;
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: 'terminal_1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    const mode = {
+      permissionMode: 'default',
+      claudeUnifiedTerminalHost: 'zellij',
+    } as const;
+    let consumed = false;
+    let resolveSecondMessage!: (value: { message: string; mode: typeof mode }) => void;
+    const secondMessage = new Promise<{ message: string; mode: typeof mode }>((resolve) => {
+      resolveSecondMessage = resolve;
+    });
+    const returnUnconsumedMessage = vi.fn();
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (!consumed) {
+          consumed = true;
+          return { message: 'hello', mode };
+        }
+        return await secondMessage;
+      },
+      returnUnconsumedMessage,
+      resolveHostAdapter: async () => ({ status: 'resolved', adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      telemetry,
+    });
+
+    try {
+      await waitUntil(() => injected.length === 1);
+      paneAlive = false;
+      await expect(sessionPromise).rejects.toMatchObject({
+        code: 'claude_unified_terminal_host_dead',
+      });
+
+      // A message that races into the dead session's stale input wait must be
+      // handed back to the owner, never silently consumed.
+      resolveSecondMessage({ message: 'arrived during unwind', mode });
+      await waitUntil(() => returnUnconsumedMessage.mock.calls.length === 1);
+      expect(returnUnconsumedMessage).toHaveBeenCalledWith({
+        message: 'arrived during unwind',
+        mode,
+      });
+    } finally {
+      abortController.abort();
+      await sessionPromise.catch(() => undefined);
+    }
+  });
+
   it('fails instead of waiting forever when terminal liveness becomes unreachable after prompt injection', async () => {
     const abortController = createAbortableSignal();
     const injected: string[] = [];
@@ -2091,11 +3145,13 @@ describe('runClaudeUnifiedTerminalSession', () => {
       evaluateLiveness: vi.fn(async () => {
         livenessCalls += 1;
         if (throwOnLiveness) {
-          throw new Error('zellij list-panes failed: There is no active session!');
+          // Thrown probes are INCONCLUSIVE by adapter contract (the real zellij adapter converts
+          // conclusive "no active session" results into paneDead observations instead of throwing).
+          throw new Error('zellij list-panes timed out');
         }
         return { paneAlive: true, observedAt: Date.now() };
       }),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -2120,6 +3176,9 @@ describe('runClaudeUnifiedTerminalSession', () => {
         spawnEnv: {},
       }),
       createSessionName: () => 'happier-claude-session-test',
+      // Sustained probe-failure streaks (not isolated timeouts) must still fail the session
+      // instead of waiting forever; shrink the streak window so the test observes it quickly.
+      hostLivenessProbeFailureConfirmDeadMs: 1_200,
       telemetry,
     });
 
@@ -2132,7 +3191,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
           .then(() => ({ kind: 'resolved' as const }))
           .catch((error: unknown) => ({ kind: 'error' as const, error })),
         new Promise<{ kind: 'timeout' }>((resolve) => {
-          setTimeout(() => resolve({ kind: 'timeout' }), 3_000);
+          setTimeout(() => resolve({ kind: 'timeout' }), 4_000);
         }),
       ]);
 
@@ -2188,7 +3247,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         }
         return { paneAlive: true, observedAt: Date.now() };
       }),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -2261,7 +3320,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
       }),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       interruptTurn: vi.fn(async () => {}),
       dispose: vi.fn(async () => {}),
     };
@@ -2315,6 +3374,96 @@ describe('runClaudeUnifiedTerminalSession', () => {
       }));
       expect(settlement).toBeNull();
       expect(adapter.dispose).not.toHaveBeenCalled();
+    } finally {
+      abortController.abort();
+      await sessionPromise;
+    }
+  });
+
+  it('rejects with the classified injection-failure error when provider acceptance never arrives and the ambiguous retry is exhausted (failed_terminal exit contract, incident pid-82626)', async () => {
+    // The runner-killing escape route: an injected ui_pending prompt whose provider acceptance
+    // times out, retries once (failed_ambiguous), and times out again escalates to
+    // `failed_terminal`. The session MUST exit by rejecting with the CLASSIFIED
+    // ClaudeUnifiedTerminalInjectionFailureError so launchers can surface a structured runtime
+    // issue and park for the next message — never an unclassified error that becomes a
+    // process-killing `[claude] Fatal command error`.
+    const abortController = createAbortableSignal();
+    const injected: string[] = [];
+    const onTerminalInjectionFailure = vi.fn();
+    const handle: TerminalHostHandle = {
+      kind: 'zellij',
+      sessionName: 'happier-claude-session-test',
+      paneId: 'terminal_1',
+      attachMetadata: {
+        attachStrategy: 'terminal_host',
+        topology: 'shared',
+        locality: 'same_machine',
+        liveProbe: 'required',
+      },
+    };
+    const adapter: TerminalHostAdapter = {
+      kind: 'zellij',
+      createOrAttachHost: vi.fn(async () => handle),
+      injectUserPrompt: vi.fn(async (_handle, input) => {
+        injected.push(input.text);
+        return { status: 'injected', at: Date.now(), bytesWritten: input.text.length } as const;
+      }),
+      evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
+      interruptTurn: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    let consumed = false;
+    let settlement: { kind: 'resolved' } | { kind: 'rejected'; error: unknown } | null = null;
+    const sessionPromise = runClaudeUnifiedTerminalSession({
+      path: '/workspace/project',
+      signal: abortController.signal,
+      nextMessage: async () => {
+        if (consumed) return null;
+        consumed = true;
+        return {
+          message: 'steered prompt never accepted',
+          mode: {
+            permissionMode: 'default',
+            claudeUnifiedTerminalHost: 'zellij',
+          },
+        };
+      },
+      resolveHostAdapter: async () => ({ status: 'resolved' as const, adapter, reason: 'test' }),
+      buildSpawn: async () => ({
+        spawnArgv: ['/bin/claude'],
+        spawnEnv: {},
+      }),
+      createSessionName: () => 'happier-claude-session-test',
+      providerAcceptanceTimeoutMs: 20,
+      onTerminalInjectionFailure,
+    })
+      .then(() => {
+        settlement = { kind: 'resolved' };
+      })
+      .catch((error: unknown) => {
+        settlement = { kind: 'rejected', error };
+      });
+
+    try {
+      await waitUntil(() => injected.length >= 1);
+      await waitUntil(() => settlement !== null, 6_000);
+
+      expect(settlement).toMatchObject({
+        kind: 'rejected',
+        error: expect.objectContaining({
+          code: 'claude_unified_terminal_injection_failed',
+          failureState: 'failed_terminal',
+          reason: 'timeout',
+        }),
+      });
+      // The first acceptance timeout stays ambiguous + recoverable (one retry), the second
+      // escalates to the terminal exit above instead of notifying again.
+      expect(injected.length).toBe(2);
+      expect(onTerminalInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'claude_unified_terminal_injection_failed',
+        failureState: 'failed_ambiguous',
+      }));
     } finally {
       abortController.abort();
       await sessionPromise;
@@ -2617,7 +3766,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       injectUserPrompt: vi.fn(async () => ({ status: 'injected', at: Date.now(), bytesWritten: 0 }) as const),
       interruptTurn: vi.fn(async () => {}),
       evaluateLiveness: vi.fn(async () => ({ paneAlive: true, observedAt: Date.now() })),
-      captureInputState: vi.fn(async () => ({ stable: true, currentInput: '', observedAt: Date.now() })),
+      captureInputState: vi.fn(async () => ({ stable: true, currentInput: interactiveClaudeScreen, observedAt: Date.now() })),
       dispose: vi.fn(async () => {}),
     };
 

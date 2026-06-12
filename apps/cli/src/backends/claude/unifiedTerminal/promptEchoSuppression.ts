@@ -26,6 +26,14 @@ type AcceptedPromptEcho = Readonly<{
   expiresAtMs: number;
 }>;
 
+/**
+ * Upper bound on distinct persisted prompt texts retained for echo suppression. Entries are only
+ * deleted on a successful suppression match, so without a bound the registry grows for the whole
+ * session lifetime (each resume/rescan seeding can add up to 500 rows). 2048 comfortably covers
+ * several reseeds while keeping memory flat; eviction is oldest-first (Map insertion order).
+ */
+const MAX_PERSISTED_PROMPT_TEXTS = 2_048;
+
 function readMessageTimestampMs(message: RawJSONLines): number | null {
   const raw = (message as Record<string, unknown>).timestamp;
   if (typeof raw !== 'string' || raw.trim().length === 0) return null;
@@ -73,7 +81,14 @@ export function createClaudeUnifiedPromptEchoSuppressor(
         if (input.text.length === 0 || !Number.isFinite(input.suppressBeforeMs)) continue;
         const existing = persistedPromptTexts.get(input.text) ?? [];
         existing.push(input.suppressBeforeMs);
+        // Re-set to refresh insertion order so eviction drops the least-recently-recorded text.
+        persistedPromptTexts.delete(input.text);
         persistedPromptTexts.set(input.text, existing);
+        while (persistedPromptTexts.size > MAX_PERSISTED_PROMPT_TEXTS) {
+          const oldestKey = persistedPromptTexts.keys().next().value;
+          if (oldestKey === undefined) break;
+          persistedPromptTexts.delete(oldestKey);
+        }
       }
     },
 

@@ -1,6 +1,6 @@
-import type { AgentState, PermissionMode } from '@/api/types';
+import type { AgentState, Metadata, PermissionMode } from '@/api/types';
 import { logger } from '@/ui/logger';
-import { updateAgentStateBestEffort } from '@/api/session/sessionWritesBestEffort';
+import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import { randomUUID } from 'node:crypto';
 import { open as openFile } from 'node:fs/promises';
 import { basename } from 'node:path';
@@ -12,8 +12,11 @@ import type { PermissionRequestCoordinatorStore } from '@/agent/permissions/perm
 
 import type { Session } from '../session';
 import type { PermissionHookData, PermissionHookResponse, SessionHookData } from '../utils/startHookServer';
+import type { PermissionRpcConsumerOutcome } from '../utils/permissionRpcRouter';
+import { mapToClaudeMode } from '../utils/permissionMode';
 import { deepEqual } from '@/utils/deterministicJson';
 import type { PermissionRpcPayload } from '../utils/permissionRpc';
+import { computeNextMetadataStringOverrideV1, SESSION_MODE_OVERRIDE_KEY } from '@happier-dev/agents';
 import { isToolAllowedForSession } from '@/agent/permissions/permissionToolIdentifier';
 import { applyAllowedToolsToAllowlist, applyUpdatedPermissionsToAllowlist, seedAllowlistFromCompletedRequests } from '@/agent/permissions/applyPermissionAllowlistUpdates';
 import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/permission/permissionModeFromMetadata';
@@ -33,6 +36,12 @@ type PendingPermissionRequest = {
     toolInput: unknown;
     hookEventName: ClaudePermissionHookEventName;
     createdAt: number;
+    /**
+     * Wall-clock time after which the provider hook forwarder is assumed dead (Claude killed it once its
+     * command `timeout` elapsed). A late UI answer past this point cannot reach Claude, so it is reported
+     * as a typed expired result rather than a false success. `null` when no finite bridge timeout is set.
+     */
+    expiresAt: number | null;
 };
 
 type ResolvedPendingPermissionRequest = {
@@ -57,7 +66,42 @@ type ClaudeToolHookData = Readonly<{
 }>;
 
 const DEFAULT_RESPONSE_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Default provider-side permission hook ceiling: 7 days, in milliseconds.
+ *
+ * Claude kills the permission hook forwarder once its installed command `timeout` elapses, after which
+ * the forwarder is dead and a late UI answer can no longer reach Claude. This ceiling MUST stay aligned
+ * with the installed hook `timeout` (`generateHookSettings` `DEFAULT_PERMISSION_HOOK_TIMEOUT_SECONDS`,
+ * also 7 days) so the bridge's answer-time expiry only ever fires when the forwarder is genuinely dead,
+ * never on an artificially short timeout.
+ *
+ * It is INDEPENDENT of the bridge's own `responseTimeoutMs`: even in wait-indefinitely mode (no Happier
+ * waiter) the provider still enforces the hook timeout, so the bridge must expire past-ceiling answers
+ * rather than approving them into a dead socket. Effectively unlimited so an operator can launch a
+ * session before sleeping and answer the permission on waking, while staying finite so a genuinely-dead
+ * forwarder is still honestly expired.
+ */
+export const DEFAULT_PROVIDER_HOOK_CEILING_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Optional environment override (seconds) for the default provider hook ceiling. Mirrors the
+ * `HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS` override read by `generateHookSettings`, so overriding
+ * the installed hook `timeout` keeps the bridge ceiling aligned without threading an account setting
+ * through `runClaude`. An explicit `providerHookCeilingMs` / finite `responseTimeoutMs` still wins.
+ */
+const PROVIDER_HOOK_CEILING_ENV_VAR = 'HAPPIER_CLAUDE_PERMISSION_HOOK_TIMEOUT_SECONDS';
+
+function readProviderHookCeilingEnvMs(): number | null {
+    const raw = process.env[PROVIDER_HOOK_CEILING_ENV_VAR];
+    if (typeof raw !== 'string') return null;
+    const seconds = Number(raw.trim());
+    if (Number.isFinite(seconds) && seconds > 0) {
+        return Math.floor(seconds) * 1000;
+    }
+    return null;
+}
 const PERMISSION_TIMED_OUT_REASON = 'Timed out waiting for permission response';
+const PERMISSION_EXPIRED_REASON = 'Provider hook timeout elapsed before a response was delivered';
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
 const GENERATED_PERMISSION_REQUEST_ID_PREFIX = 'perm_';
 
@@ -77,6 +121,7 @@ function readPermissionHookEventName(data: PermissionHookData): ClaudePermission
 export class ClaudeLocalPermissionBridge {
     private readonly session: Session;
     private readonly responseTimeoutMs: number | null;
+    private readonly providerHookCeilingMs: number;
     private readonly requestStore: AgentStateRequestStore;
     private readonly permissionCoordinator: ReturnType<typeof createPermissionRequestCoordinator<PermissionHookResponse>>;
     private readonly pendingRequests = new Map<string, PendingPermissionRequest>();
@@ -88,7 +133,7 @@ export class ClaudeLocalPermissionBridge {
     private metadataWatcherAbort: AbortController | null = null;
     private localWaiterSequence = 0;
 
-    constructor(session: Session, opts?: { responseTimeoutMs?: number | null }) {
+    constructor(session: Session, opts?: { responseTimeoutMs?: number | null; providerHookCeilingMs?: number }) {
         this.session = session;
         if (opts?.responseTimeoutMs === null) {
             this.responseTimeoutMs = null;
@@ -96,6 +141,20 @@ export class ClaudeLocalPermissionBridge {
             this.responseTimeoutMs = opts.responseTimeoutMs;
         } else {
             this.responseTimeoutMs = DEFAULT_RESPONSE_TIMEOUT_MS;
+        }
+        // The provider hook ceiling is the wall-clock point past which Claude has killed the hook forwarder,
+        // so a late answer can no longer be delivered. It is decoupled from `responseTimeoutMs`: when an
+        // explicit ceiling is provided it wins, otherwise it tracks any finite response timeout (they are
+        // aligned by runtime config), and finally falls back to the provider default. This guarantees an
+        // expiry safety-net even in wait-indefinitely mode where `responseTimeoutMs` is null.
+        if (typeof opts?.providerHookCeilingMs === 'number' && Number.isFinite(opts.providerHookCeilingMs) && opts.providerHookCeilingMs > 0) {
+            this.providerHookCeilingMs = opts.providerHookCeilingMs;
+        } else if (typeof this.responseTimeoutMs === 'number') {
+            this.providerHookCeilingMs = this.responseTimeoutMs;
+        } else {
+            // Wait-indefinitely mode (no finite response timeout): use the env-overridable default, kept
+            // aligned with the installed hook `timeout` so expiry only fires on a genuinely-dead forwarder.
+            this.providerHookCeilingMs = readProviderHookCeilingEnvMs() ?? DEFAULT_PROVIDER_HOOK_CEILING_MS;
         }
         this.requestStore = new AgentStateRequestStore({
             session: this.session.client,
@@ -235,6 +294,7 @@ export class ClaudeLocalPermissionBridge {
                 toolInput,
                 hookEventName,
                 createdAt,
+                expiresAt: this.computeProviderHookExpiry(createdAt),
             });
         }
 
@@ -719,10 +779,29 @@ export class ClaudeLocalPermissionBridge {
         return null;
     }
 
-    private tryHandlePermissionRpc(payload: PermissionRpcPayload): boolean {
+    private tryHandlePermissionRpc(payload: PermissionRpcPayload): PermissionRpcConsumerOutcome {
         const requestId = typeof payload?.id === 'string' ? payload.id : '';
         if (!requestId) {
             return false;
+        }
+
+        const pending = this.pendingRequests.get(requestId);
+        if (pending && this.isProviderHookExpired(pending)) {
+            this.expirePendingRequest(pending);
+            return { status: 'expired' };
+        }
+
+        // The bridge's own `pendingRequests` entry can be gone while the request still lives in the
+        // coordinator (detached) or only in agent_state — e.g. wait-indefinitely mode (no Happier waiter
+        // ever deletes it) or after the hook forwarder died externally. In that case `pending` is absent,
+        // so the check above cannot fire. Enforce the provider hook ceiling from the request's recorded
+        // `createdAt` so a past-ceiling answer is never approved into a dead socket.
+        if (!pending) {
+            const context = this.permissionCoordinator.getResponseContext(requestId);
+            if (context && this.isProviderHookCeilingExceeded(context.createdAt)) {
+                this.expireRequestByContext(context);
+                return { status: 'expired' };
+            }
         }
 
         const allowedTools = Array.isArray(payload.allowedTools ?? payload.allowTools)
@@ -733,10 +812,16 @@ export class ClaudeLocalPermissionBridge {
             : undefined;
 
         let shouldApplySideEffects = false;
+        let resolvedToolName: string | null = null;
         const handled = this.permissionCoordinator.handleResponse({
             requestId,
             buildCompletion: (context) => {
-                const updatedPermissions = payload.updatedPermissions;
+                resolvedToolName = context.toolName;
+                const updatedPermissions = this.resolveResponseUpdatedPermissions({
+                    payload,
+                    toolName: context.toolName,
+                    resolvedMode,
+                });
                 const hookResponse = this.buildHookResponse({
                     payload,
                     toolName: context.toolName,
@@ -763,9 +848,110 @@ export class ClaudeLocalPermissionBridge {
 
         this.pendingRequests.delete(requestId);
         if (shouldApplySideEffects) {
-            this.applyPermissionRpcState(payload, { allowedTools, resolvedMode, excludeRequestId: requestId });
+            this.applyPermissionRpcState(payload, {
+                allowedTools,
+                resolvedMode,
+                excludeRequestId: requestId,
+                toolName: resolvedToolName,
+            });
         }
         return true;
+    }
+
+    /**
+     * Resolve the `updatedPermissions` to send back to Claude for a response.
+     *
+     * For an approved ExitPlanMode answer with no caller-provided `updatedPermissions`, synthesize a
+     * `setMode` update so Claude applies the follow-up permission mode through the hook channel instead of
+     * TUI keystrokes. A caller-provided `updatedPermissions` is always respected as-is.
+     */
+    private resolveResponseUpdatedPermissions(params: {
+        payload: PermissionRpcPayload;
+        toolName: string;
+        resolvedMode: PermissionMode | string | undefined;
+    }): unknown {
+        if (typeof params.payload.updatedPermissions !== 'undefined') {
+            return params.payload.updatedPermissions;
+        }
+        if (params.payload.approved && this.isExitPlanModeTool(params.toolName)) {
+            const followupMode = mapToClaudeMode(this.resolveFollowupPermissionMode(params.resolvedMode));
+            return [{ type: 'setMode', mode: followupMode }];
+        }
+        return undefined;
+    }
+
+    private resolveFollowupPermissionMode(resolvedMode: PermissionMode | string | undefined): PermissionMode {
+        const canonical = typeof resolvedMode === 'string'
+            ? normalizePermissionModeToIntent(resolvedMode)
+            : null;
+        return canonical ?? 'default';
+    }
+
+    private isExitPlanModeTool(toolName: string): boolean {
+        return toolName === 'ExitPlanMode' || toolName === 'exit_plan_mode';
+    }
+
+    private computeProviderHookExpiry(createdAt: number): number {
+        // Always finite: the provider hook ceiling applies even when there is no Happier waiter
+        // (wait-indefinitely mode). Claude kills the forwarder at its installed hook timeout regardless.
+        return createdAt + this.providerHookCeilingMs;
+    }
+
+    private isProviderHookExpired(pending: PendingPermissionRequest): boolean {
+        return typeof pending.expiresAt === 'number' && Date.now() > pending.expiresAt;
+    }
+
+    private isProviderHookCeilingExceeded(createdAt: number): boolean {
+        return Date.now() > this.computeProviderHookExpiry(createdAt);
+    }
+
+    private expirePendingRequest(pending: PendingPermissionRequest): void {
+        this.completeRequest({
+            requestId: pending.id,
+            toolName: pending.toolName,
+            toolInput: pending.toolInput,
+            createdAt: pending.createdAt,
+            status: 'canceled',
+            reason: PERMISSION_EXPIRED_REASON,
+            hookResponse: this.buildDefaultHookResponse(pending.hookEventName),
+        });
+        this.permissionCoordinator.cancelRequest(pending.id, PERMISSION_EXPIRED_REASON);
+    }
+
+    /**
+     * Expire a request whose bridge-local `pendingRequests` entry is already gone but which is still
+     * outstanding in the coordinator/agent_state. Finalizes it `canceled` (provider hook timeout) so a
+     * late answer is never approved into a dead socket. Mirrors `expirePendingRequest` but resolves the
+     * tool facts and hook-event shape from the coordinator response context.
+     */
+    private expireRequestByContext(context: { requestId: string; toolName: string; toolInput: unknown; createdAt: number }): void {
+        const hookEventName = this.pendingRequests.get(context.requestId)?.hookEventName ?? 'PermissionRequest';
+        this.completeRequest({
+            requestId: context.requestId,
+            toolName: context.toolName,
+            toolInput: context.toolInput,
+            createdAt: context.createdAt,
+            status: 'canceled',
+            reason: PERMISSION_EXPIRED_REASON,
+            hookResponse: this.buildDefaultHookResponse(hookEventName),
+        });
+        this.permissionCoordinator.cancelRequest(context.requestId, PERMISSION_EXPIRED_REASON);
+    }
+
+    private clearPlanModeMetadataBestEffort(): void {
+        updateMetadataBestEffort(
+            this.session.client,
+            (metadata): Metadata =>
+                computeNextMetadataStringOverrideV1({
+                    metadata: cloneStringKeyedRecordToNullProto(metadata),
+                    overrideKey: SESSION_MODE_OVERRIDE_KEY,
+                    valueKey: 'modeId',
+                    value: '',
+                    updatedAt: Date.now(),
+                }) as unknown as Metadata,
+            '[claude-local-permissions]',
+            'exit_plan_mode_clear_session_mode_override',
+        );
     }
 
     private buildHookResponse(params: {
@@ -843,7 +1029,7 @@ export class ClaudeLocalPermissionBridge {
 
     private applyPermissionRpcState(
         payload: PermissionRpcPayload,
-        params: { allowedTools?: string[]; resolvedMode?: PermissionMode; excludeRequestId?: string }
+        params: { allowedTools?: string[]; resolvedMode?: PermissionMode; excludeRequestId?: string; toolName?: string | null }
     ): void {
         if (payload.approved) {
             applyUpdatedPermissionsToAllowlist(this.allowedToolIdentifiers, payload.updatedPermissions);
@@ -852,6 +1038,12 @@ export class ClaudeLocalPermissionBridge {
 
         if (payload.approved && params.resolvedMode) {
             this.applyPermissionModeFromRpc(params.resolvedMode, params.excludeRequestId);
+        }
+
+        if (payload.approved && typeof params.toolName === 'string' && this.isExitPlanModeTool(params.toolName)) {
+            // Exiting plan mode clears Happier's plan-mode metadata; the follow-up permission mode is applied
+            // through the hook response's `updatedPermissions` setMode, not TUI keystrokes.
+            this.clearPlanModeMetadataBestEffort();
         }
 
         if (payload.approved) {

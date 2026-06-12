@@ -441,7 +441,7 @@ describe('createClaudeUnifiedInputArbiter', () => {
     await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(false);
   });
 
-  it('marks host-level injected prompts ambiguous when provider confirmation never arrives', async () => {
+  it('retries a host-level injected prompt once after provider confirmation never arrives', async () => {
     vi.useFakeTimers();
     let nowMs = 10_000;
     const accepted: string[] = [];
@@ -487,8 +487,89 @@ describe('createClaudeUnifiedInputArbiter', () => {
         duplicateRisk: 'likely',
       }),
     }));
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    await arbiter.drainWhenSafe();
+    expect(injectPrompt).toHaveBeenCalledTimes(2);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: null,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+  });
+
+  it('self-drives a retry after provider confirmation timeout without waiting for another lifecycle event', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const injectPrompt = vi.fn(async (batch) => ({ status: 'injected' as const, at: nowMs, bytesWritten: batch.message.length }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'prompt retries itself', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
     await arbiter.drainWhenSafe();
     expect(injectPrompt).toHaveBeenCalledTimes(1);
+
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+    await vi.waitFor(() => {
+      expect(injectPrompt).toHaveBeenCalledTimes(2);
+    });
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: null,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+  });
+
+  it('terminalizes a host-level injected prompt when provider confirmation never arrives after retry', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const onInjectionFailure = vi.fn();
+    const injectPrompt = vi.fn(async (batch) => ({ status: 'injected' as const, at: nowMs, bytesWritten: batch.message.length }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+      onInjectionFailure,
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'prompt never accepted', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    await arbiter.drainWhenSafe();
+    expect(injectPrompt).toHaveBeenCalledTimes(2);
+
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+    await arbiter.drainWhenSafe();
+
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastFailureReason: 'timeout',
+      headInputState: 'failed_terminal',
+    });
+    expect(onInjectionFailure).toHaveBeenLastCalledWith(expect.objectContaining({
+      failureState: 'failed_terminal',
+      batch: expect.objectContaining({ message: 'prompt never accepted' }),
+      result: expect.objectContaining({
+        reason: 'timeout',
+        phase: 'after_enter_unknown',
+        duplicateRisk: 'likely',
+      }),
+    }));
   });
 
   it('keeps a terminal-injected UI prompt retryable when compaction starts before provider acceptance', async () => {
@@ -637,6 +718,707 @@ describe('createClaudeUnifiedInputArbiter', () => {
       queuedCount: 1,
       lastFailureReason: null,
       headInputState: 'awaiting_provider_acceptance',
+    });
+  });
+
+  it('does not re-inject a pending /compact prompt when compaction completes before the transcript boundary', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const accepted: string[] = [];
+    const onInjectionFailure = vi.fn();
+    const injectPrompt = vi.fn(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+      onPromptAccepted: async (batch) => {
+        accepted.push(batch.message);
+      },
+      onInjectionFailure,
+    });
+
+    await arbiter.enqueueUiMessage({ message: '/compact', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      headInputState: 'awaiting_provider_acceptance',
+    });
+
+    // PostCompact hook completes compaction before the compact_boundary transcript
+    // row confirms acceptance. The /compact prompt must be consumed, not re-injected.
+    observeCompaction(arbiter, { type: 'compaction', phase: 'completed', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(accepted).toEqual(['/compact']);
+    expect(onInjectionFailure).not.toHaveBeenCalled();
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 0,
+      lastFailureReason: null,
+      headInputState: 'submitted',
+    });
+  });
+
+  it('notifies a successful injection at most once when an ambiguous prompt is retried', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const injectedNotifications: string[] = [];
+    const injectPrompt = vi.fn(async (batch) => ({
+      status: 'injected' as const,
+      at: nowMs,
+      bytesWritten: batch.message.length,
+    }));
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      providerAcceptanceTimeoutMs: 40,
+      injectPrompt,
+      onPromptInjected: (batch) => {
+        injectedNotifications.push(batch.message);
+      },
+    });
+
+    await arbiter.enqueueUiMessage({ message: 'retry me', origin: { kind: 'ui_pending' } });
+    arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+    expect(injectedNotifications).toEqual(['retry me']);
+
+    // Provider acceptance never arrives → failed_ambiguous → self-driven retry.
+    nowMs += 40;
+    await vi.advanceTimersByTimeAsync(40);
+    await vi.advanceTimersByTimeAsync(0);
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).toHaveBeenCalledTimes(2);
+    // The retry re-injects the same batch but must not re-fire the injection
+    // notification, which would suppress a later identical terminal-typed prompt.
+    expect(injectedNotifications).toEqual(['retry me']);
+
+    arbiter.dispose();
+  });
+
+  it('wakes a pending prompt deferred during a running turn via a bounded fallback timer', async () => {
+    vi.useFakeTimers();
+    let nowMs = 10_000;
+    const injectPrompt = vi.fn().mockResolvedValue({ status: 'injected', at: 1, bytesWritten: 5 });
+    const arbiter = createClaudeUnifiedInputArbiter({
+      nowMs: () => nowMs,
+      quietPeriodMs: 0,
+      injectPrompt,
+      busyTurnFallbackWakeMs: 50,
+    });
+
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+    await arbiter.enqueueUiMessage({ message: 'hello', origin: { kind: 'ui_pending' } });
+    nowMs += 1_000;
+    await arbiter.drainWhenSafe();
+
+    expect(injectPrompt).not.toHaveBeenCalled();
+    expect(arbiter.snapshot()).toMatchObject({ lastDeferredReason: 'terminal_busy' });
+
+    // Fallback wake fires while still running → re-defers (no mid-turn injection).
+    await vi.advanceTimersByTimeAsync(50);
+    expect(injectPrompt).not.toHaveBeenCalled();
+
+    // The turn ends but no hook-driven redrain is delivered; the bounded fallback
+    // wake must re-evaluate and inject so the prompt cannot starve.
+    arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(injectPrompt).toHaveBeenCalledTimes(1);
+
+    arbiter.dispose();
+  });
+
+  it('defers an explicit immediate prompt while the terminal user is typing a draft', async () => {
+    let nowMs = 10_000;
+    const injectPrompt = vi.fn().mockResolvedValue({ status: 'injected', at: 1, bytesWritten: 5 });
+    const arbiter = createClaudeUnifiedInputArbiter({ nowMs: () => nowMs, injectPrompt });
+
+    arbiter.observeUserTypingState({ userTyping: true, observedAtMs: nowMs });
+    await arbiter.enqueueUiMessage({ message: 'do not merge with my draft', origin: { kind: 'ui_immediate' } });
+    await arbiter.drainWhenSafe();
+
+    // A visible user draft must veto injection across origins so injected text is
+    // never merged into the composer.
+    expect(injectPrompt).not.toHaveBeenCalled();
+    expect(arbiter.snapshot()).toMatchObject({
+      queuedCount: 1,
+      lastDeferredReason: 'user_typing',
+      headInputState: 'waiting_for_readiness',
+    });
+
+    arbiter.dispose();
+  });
+
+  describe('in-flight steering (incident cmq8171vw, D19/D20)', () => {
+    it('injects a pending UI prompt mid-turn as an in-flight steer when the screen evaluation is safe', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const accepted: Array<readonly [string, string]> = [];
+      const armed: string[] = [];
+      const injectPrompt = vi.fn(async (batch: { message: string }) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const evaluateInFlightSteer = vi.fn(async () => ({ steer: true as const }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        providerAcceptanceTimeoutMs: 40,
+        injectPrompt,
+        evaluateInFlightSteer,
+        onSteerAcceptanceArmed: (batch) => {
+          armed.push(batch.message);
+        },
+        onPromptAccepted: async (batch, acceptance) => {
+          accepted.push([batch.message, acceptance.acceptedAs]);
+        },
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'steer me', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+
+      // The incident regression: the prompt reaches the TUI mid-turn instead of
+      // being deferred (terminal_busy) until turn end.
+      expect(evaluateInFlightSteer).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'steer me' }),
+        { inFlightSteer: true },
+      );
+      expect(arbiter.snapshot()).toMatchObject({
+        lastDeferredReason: null,
+        headInputState: 'awaiting_provider_acceptance',
+      });
+
+      // Provider acceptance arrives only at turn end: the short acceptance
+      // timeout must NOT fire while the steered turn is still running.
+      nowMs += 10_000;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(arbiter.snapshot()).toMatchObject({
+        lastFailureReason: null,
+        headInputState: 'awaiting_provider_acceptance',
+      });
+      expect(armed).toEqual([]);
+
+      // Turn-end evidence arms the acceptance expectation; UserPromptSubmit then
+      // confirms the queued prompt as an in-flight steer.
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+      expect(armed).toEqual(['steer me']);
+      await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
+      expect(accepted).toEqual([['steer me', 'in_flight_steer']]);
+      expect(arbiter.snapshot()).toMatchObject({ queuedCount: 0, headInputState: 'submitted' });
+
+      arbiter.dispose();
+    });
+
+    it('keeps the bounded deferred path when the steer evaluation vetoes the screen', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async (batch: { message: string }) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const evaluateInFlightSteer = vi.fn(async () => ({
+        steer: false as const,
+        reason: 'permission_prompt',
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        injectPrompt,
+        evaluateInFlightSteer,
+        busyTurnFallbackWakeMs: 50,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'hold me', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+
+      expect(injectPrompt).not.toHaveBeenCalled();
+      expect(arbiter.snapshot()).toMatchObject({
+        queuedCount: 1,
+        lastDeferredReason: 'terminal_busy',
+        headInputState: 'waiting_for_readiness',
+      });
+
+      // Fallback wake re-evaluates while still vetoed → re-defers.
+      nowMs += 50;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(injectPrompt).not.toHaveBeenCalled();
+
+      // Turn end → normal new-turn injection (fallback wake unchanged for vetoed states).
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+      nowMs += 50;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(expect.objectContaining({ message: 'hold me' }), undefined);
+
+      arbiter.dispose();
+    });
+
+    it('never steers slash-command prompts mid-turn', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async (batch: { message: string }) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const evaluateInFlightSteer = vi.fn(async () => ({ steer: true as const }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        injectPrompt,
+        evaluateInFlightSteer,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: '/clear', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+
+      // Special commands keep the current defer-until-idle behavior.
+      expect(evaluateInFlightSteer).not.toHaveBeenCalled();
+      expect(injectPrompt).not.toHaveBeenCalled();
+      expect(arbiter.snapshot()).toMatchObject({
+        queuedCount: 1,
+        lastDeferredReason: 'terminal_busy',
+        headInputState: 'waiting_for_readiness',
+      });
+
+      arbiter.dispose();
+    });
+
+    it('recovers through failed_ambiguous when an armed steer acceptance never arrives', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const injectedNotifications: string[] = [];
+      const onInjectionFailure = vi.fn();
+      const injectPrompt = vi.fn(async (
+        batch: { message: string },
+        _options?: { inFlightSteer?: boolean | undefined } | undefined,
+      ) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        providerAcceptanceTimeoutMs: 40,
+        injectPrompt,
+        evaluateInFlightSteer: async () => ({ steer: true as const }),
+        onPromptInjected: (batch) => {
+          injectedNotifications.push(batch.message);
+        },
+        onInjectionFailure,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'lost steer', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+
+      // Turn ends, acceptance armed, but never confirmed → failed_ambiguous.
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+      nowMs += 40;
+      await vi.advanceTimersByTimeAsync(40);
+      expect(onInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+        failureState: 'failed_ambiguous',
+        batch: expect.objectContaining({ message: 'lost steer' }),
+      }));
+
+      // The existing single retry recovers it without re-firing onPromptInjected
+      // (single-fire echo bookkeeping preserved — no F-10 regression).
+      await vi.advanceTimersByTimeAsync(0);
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).toHaveBeenCalledTimes(2);
+      expect(injectPrompt.mock.calls[1]?.[1]).toBeUndefined();
+      expect(injectedNotifications).toEqual(['lost steer']);
+      expect(arbiter.snapshot()).toMatchObject({ headInputState: 'awaiting_provider_acceptance' });
+
+      arbiter.dispose();
+    });
+
+    it('holds subsequent pending prompts until the first steer resolves and preserves order', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const accepted: Array<readonly [string, string]> = [];
+      const injectPrompt = vi.fn(async (batch: { message: string }) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        providerAcceptanceTimeoutMs: 40,
+        injectPrompt,
+        evaluateInFlightSteer: async () => ({ steer: true as const }),
+        onPromptAccepted: async (batch, acceptance) => {
+          accepted.push([batch.message, acceptance.acceptedAs]);
+        },
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'first steer', origin: { kind: 'ui_pending' } });
+      await arbiter.enqueueUiMessage({ message: 'second prompt', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+
+      // Only the head prompt steers; the second waits for the first to resolve.
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt.mock.calls[0]?.[0]).toMatchObject({ message: 'first steer' });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+      await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+      arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+
+      expect(injectPrompt).toHaveBeenCalledTimes(2);
+      expect(injectPrompt.mock.calls.map(([batch]) => (batch as { message: string }).message)).toEqual([
+        'first steer',
+        'second prompt',
+      ]);
+      await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
+      expect(accepted).toEqual([
+        ['first steer', 'in_flight_steer'],
+        ['second prompt', 'new_turn'],
+      ]);
+
+      arbiter.dispose();
+    });
+
+    it('arms steer acceptance from screen evidence when turn-end lifecycle signals are lost', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const armed: string[] = [];
+      let evaluations = 0;
+      const onInjectionFailure = vi.fn();
+      const injectPrompt = vi.fn(async (
+        batch: { message: string },
+        _options?: { inFlightSteer?: boolean | undefined } | undefined,
+      ) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        providerAcceptanceTimeoutMs: 40,
+        busyTurnFallbackWakeMs: 50,
+        injectPrompt,
+        evaluateInFlightSteer: async () => {
+          evaluations += 1;
+          return evaluations === 1
+            ? { steer: true as const }
+            : { steer: false as const, reason: 'not_generating', turnLikelyEnded: true };
+        },
+        onSteerAcceptanceArmed: (batch) => {
+          armed.push(batch.message);
+        },
+        onInjectionFailure,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'steer without stop hook', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(armed).toEqual([]);
+
+      // No turn_state idle ever arrives, but the bounded fallback re-checks the
+      // screen and arms acceptance when the screen says the turn ended.
+      nowMs += 50;
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => {
+        expect(armed).toEqual(['steer without stop hook']);
+      });
+
+      // The armed acceptance timeout then recovers through failed_ambiguous as
+      // usual (no wedged awaiting_provider_acceptance forever).
+      nowMs += 40;
+      await vi.advanceTimersByTimeAsync(40);
+      expect(onInjectionFailure).toHaveBeenCalledWith(expect.objectContaining({
+        failureState: 'failed_ambiguous',
+        batch: expect.objectContaining({ message: 'steer without stop hook' }),
+      }));
+      expect(arbiter.snapshot()).toMatchObject({ queuedCount: 1 });
+
+      arbiter.dispose();
+    });
+
+    it('defers in-flight steer acceptance arming for explicit immediate prompts injected mid-turn', async () => {
+      vi.useFakeTimers();
+      let nowMs = 10_000;
+      const armed: string[] = [];
+      const onInjectionFailure = vi.fn();
+      const injectPrompt = vi.fn(async (
+        batch: { message: string },
+        _options?: { inFlightSteer?: boolean | undefined } | undefined,
+      ) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        providerAcceptanceTimeoutMs: 40,
+        injectPrompt,
+        onSteerAcceptanceArmed: (batch) => {
+          armed.push(batch.message);
+        },
+        onInjectionFailure,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'immediate steer', origin: { kind: 'ui_immediate' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+
+      // The queued prompt submits only at turn end: the short acceptance timeout
+      // must not mark it ambiguous (and risk a double-queued retry) mid-turn.
+      nowMs += 10_000;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(onInjectionFailure).not.toHaveBeenCalled();
+      expect(arbiter.snapshot()).toMatchObject({ headInputState: 'awaiting_provider_acceptance' });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'idle', observedAtMs: nowMs });
+      expect(armed).toEqual(['immediate steer']);
+
+      arbiter.dispose();
+    });
+  });
+
+  describe('stale-turn recovery (incident cmq7pyqkj, L1)', () => {
+    it('drains a steer-vetoed ui_pending prompt as a new turn when the running turn is stale with idle-composer evidence', async () => {
+      let nowMs = 10_000;
+      const accepted: Array<readonly [string, string]> = [];
+      const injectPrompt = vi.fn(async (
+        batch: { message: string },
+        _options?: { inFlightSteer?: boolean | undefined } | undefined,
+      ) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      // Incident shape: the prompt carries a permission-mode change, so steering is
+      // refused by design — but the screen proves an idle interactive composer.
+      const evaluateInFlightSteer = vi.fn(async () => ({
+        steer: false as const,
+        reason: 'permission_mode_change',
+        turnLikelyEnded: true,
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+        onPromptAccepted: async (batch, acceptance) => {
+          accepted.push([batch.message, acceptance.acceptedAs]);
+        },
+      });
+
+      // Stale 'running' turn: lifecycle marked running (e.g. from replayed transcript
+      // rows after a respawn) and no provider activity ever follows.
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'continuation prompt', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).not.toHaveBeenCalled();
+      expect(arbiter.snapshot()).toMatchObject({
+        queuedCount: 1,
+        lastDeferredReason: 'terminal_busy',
+      });
+
+      // Bounded staleness window elapses with NO provider output: the turn must be
+      // treated as not-running and the prompt drained normally (not steered).
+      nowMs += 31_000;
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'continuation prompt' }),
+        undefined,
+      );
+      await expect(arbiter.confirmPromptAcceptedByProvider()).resolves.toBe(true);
+      expect(accepted).toEqual([['continuation prompt', 'new_turn']]);
+
+      arbiter.dispose();
+    });
+
+    it('keeps deferring while the running turn shows live provider activity', async () => {
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async () => ({ status: 'injected' as const, at: nowMs, bytesWritten: 4 }));
+      const evaluateInFlightSteer = vi.fn(async () => ({
+        steer: false as const,
+        reason: 'permission_mode_change',
+        turnLikelyEnded: true,
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'hold', origin: { kind: 'ui_pending' } });
+
+      // Live turn: provider output keeps arriving, so the window never elapses.
+      for (let i = 0; i < 4; i += 1) {
+        nowMs += 10_000;
+        arbiter.observeLifecycle({ type: 'output', observedAtMs: nowMs });
+        await arbiter.drainWhenSafe();
+        expect(injectPrompt).not.toHaveBeenCalled();
+      }
+      expect(arbiter.snapshot()).toMatchObject({ queuedCount: 1, lastDeferredReason: 'terminal_busy' });
+
+      arbiter.dispose();
+    });
+
+    it('keeps deferring a stale-looking turn when screen evidence is unavailable (fail-closed)', async () => {
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async () => ({ status: 'injected' as const, at: nowMs, bytesWritten: 4 }));
+      // Veto without turnLikelyEnded: the screen could not prove the turn ended.
+      const evaluateInFlightSteer = vi.fn(async () => ({
+        steer: false as const,
+        reason: 'screen_capture_failed',
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'hold', origin: { kind: 'ui_pending' } });
+      nowMs += 31_000;
+      await arbiter.drainWhenSafe();
+
+      expect(injectPrompt).not.toHaveBeenCalled();
+      expect(arbiter.snapshot()).toMatchObject({ queuedCount: 1, lastDeferredReason: 'terminal_busy' });
+
+      arbiter.dispose();
+    });
+
+    // Lane N2: the canonical session turn lifecycle is a stronger truth source than a one-frame
+    // screen parse. When it reports NO active turn (and provider evidence is stale), the arbiter
+    // must not stay 'running' even without turn-end screen evidence.
+    it('recovers a stale running turn without screen evidence when the canonical lifecycle has no active turn', async () => {
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async () => ({ status: 'injected' as const, at: nowMs, bytesWritten: 4 }));
+      const evaluateInFlightSteer = vi.fn(async () => ({
+        steer: false as const,
+        reason: 'screen_capture_failed',
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+        isCanonicalTurnActive: () => false,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'drain me', origin: { kind: 'ui_pending' } });
+      nowMs += 31_000;
+      await arbiter.drainWhenSafe();
+
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(expect.objectContaining({ message: 'drain me' }), undefined);
+
+      arbiter.dispose();
+    });
+
+    it('keeps deferring without screen evidence while the canonical lifecycle still has an active turn', async () => {
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async () => ({ status: 'injected' as const, at: nowMs, bytesWritten: 4 }));
+      const evaluateInFlightSteer = vi.fn(async () => ({
+        steer: false as const,
+        reason: 'screen_capture_failed',
+      }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+        isCanonicalTurnActive: () => true,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: 'hold', origin: { kind: 'ui_pending' } });
+      nowMs += 31_000;
+      await arbiter.drainWhenSafe();
+
+      expect(injectPrompt).not.toHaveBeenCalled();
+      expect(arbiter.snapshot()).toMatchObject({ queuedCount: 1, lastDeferredReason: 'terminal_busy' });
+
+      arbiter.dispose();
+    });
+
+    it('recovers a stale running turn for slash-command prompts on lifecycle staleness alone', async () => {
+      let nowMs = 10_000;
+      const injectPrompt = vi.fn(async (batch: { message: string }) => ({
+        status: 'injected' as const,
+        at: nowMs,
+        bytesWritten: batch.message.length,
+      }));
+      const evaluateInFlightSteer = vi.fn(async () => ({ steer: true as const }));
+      const arbiter = createClaudeUnifiedInputArbiter({
+        nowMs: () => nowMs,
+        quietPeriodMs: 0,
+        staleTurnRecoveryMs: 30_000,
+        injectPrompt,
+        evaluateInFlightSteer,
+      });
+
+      arbiter.observeLifecycle({ type: 'turn_state', state: 'running', observedAtMs: nowMs });
+      await arbiter.enqueueUiMessage({ message: '/compact', origin: { kind: 'ui_pending' } });
+      nowMs += 1_000;
+      await arbiter.drainWhenSafe();
+      expect(injectPrompt).not.toHaveBeenCalled();
+
+      nowMs += 31_000;
+      await arbiter.drainWhenSafe();
+      // Slash prompts are never steered; staleness recovery drains them as a new turn.
+      expect(evaluateInFlightSteer).not.toHaveBeenCalled();
+      expect(injectPrompt).toHaveBeenCalledTimes(1);
+      expect(injectPrompt).toHaveBeenCalledWith(expect.objectContaining({ message: '/compact' }), undefined);
+
+      arbiter.dispose();
     });
   });
 
