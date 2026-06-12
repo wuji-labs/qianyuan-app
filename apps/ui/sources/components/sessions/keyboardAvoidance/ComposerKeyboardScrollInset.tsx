@@ -10,15 +10,19 @@ function normalizeInsetHeight(height: number): number {
         : 0;
 }
 
+function resolveNativeCurrentInsetHeight(layout: ComposerKeyboardLayout): number {
+    return normalizeInsetHeight(
+        layout.composerHeight.value
+        + Math.max(layout.keyboardHeightForInset.value, layout.bottomInset.value),
+    );
+}
+
 function resolveCurrentInsetHeight(layout: ComposerKeyboardLayout | null): number {
     if (!layout) return 0;
     if (Platform.OS === 'web') {
         return normalizeInsetHeight(layout.listBottomInset.value);
     }
-    return normalizeInsetHeight(Math.max(
-        layout.listBottomInset.value,
-        layout.composerHeight.value + layout.bottomInset.value,
-    ));
+    return resolveNativeCurrentInsetHeight(layout);
 }
 
 export function ComposerKeyboardScrollInset(props: Readonly<{
@@ -50,10 +54,7 @@ export function ComposerKeyboardScrollInset(props: Readonly<{
                     applyHeight(nextHeight);
                     return;
                 }
-                applyHeight(Math.max(
-                    normalizeInsetHeight(nextHeight),
-                    normalizeInsetHeight(layout.composerHeight.value + layout.bottomInset.value),
-                ));
+                applyHeight(resolveNativeCurrentInsetHeight(layout));
             });
         }
         return undefined;

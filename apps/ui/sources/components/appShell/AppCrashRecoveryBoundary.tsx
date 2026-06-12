@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Appearance, Image, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Appearance, Image, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -282,7 +282,7 @@ export class AppCrashRecoveryBoundary extends React.PureComponent<
       variant: 'secondary',
     };
 
-    return (
+    const fallback = (
       <AppBlockingScreen
         title={t('appCrash.title')}
         subtitle={t('appCrash.subtitle')}
@@ -290,6 +290,31 @@ export class AppCrashRecoveryBoundary extends React.PureComponent<
         details={formatErrorDetails(error)}
         actions={[primaryAction, reportBugAction, secondaryAction]}
       />
+    );
+
+    if (Platform.OS === 'web') {
+      return fallback;
+    }
+
+    // On native, a crash can leave a natively-presented screen container (react-native-screens
+    // stack/modal) frozen on top of the root view. Rendering the fallback inline then paints
+    // BENEATH that dead frame: the recovery UI mounts (it is present in the accessibility tree)
+    // but the user keeps seeing the old frozen screen with dead touches (issue-2, 2026-06-12).
+    // Hosting the fallback in a full-screen RN Modal presents it above any stuck native view
+    // controllers, so the recovery UI is always visible and tappable.
+    return (
+      <Modal
+        testID="app-crash-recovery-modal-host"
+        visible
+        transparent={false}
+        animationType="none"
+        presentationStyle="fullScreen"
+        hardwareAccelerated
+        statusBarTranslucent
+        onRequestClose={() => {}}
+      >
+        {fallback}
+      </Modal>
     );
   }
 }

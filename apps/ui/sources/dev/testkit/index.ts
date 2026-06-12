@@ -39,3 +39,4 @@ export * from './mocks/unistyles';
 export * from './render/renderScreen';
 export * from './render/collectRenderedTestIds';
 export * from './render/renderWithAppProviders';
+export * from './transcript/viewportTelemetryAssertions';

@@ -17,6 +17,7 @@ export const RefreshControl = 'RefreshControl' as any;
 export const TextInput = 'TextInput' as any;
 export const ActivityIndicator = 'ActivityIndicator' as any;
 export const Switch = 'Switch' as any;
+export const Modal = 'Modal' as any;
 export const Touchable = {
     Mixin: {
         touchableHandleStartShouldSetResponder: () => true,

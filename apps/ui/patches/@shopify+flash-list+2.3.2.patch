@@ -1,0 +1,121 @@
+diff --git a/node_modules/@shopify/flash-list/dist/recyclerview/RecyclerView.js b/node_modules/@shopify/flash-list/dist/recyclerview/RecyclerView.js
+index 6799c8a..b78c730 100644
+--- a/node_modules/@shopify/flash-list/dist/recyclerview/RecyclerView.js
++++ b/node_modules/@shopify/flash-list/dist/recyclerview/RecyclerView.js
+@@ -62,6 +62,11 @@ const RecyclerViewComponent = (props, ref) => {
+     const { applyOffsetCorrection, computeFirstVisibleIndexForOffsetCorrection, applyInitialScrollIndex, handlerMethods, } = useRecyclerViewController(recyclerViewManager, ref, scrollViewRef, scrollAnchorRef);
+     // Initialize view holder collection ref
+     const viewHolderCollectionRef = useRef(null);
++    // HAPPIER PATCH(flash-list-commit-layout-guard): track whether a layout commit is actually
++    // pending, and whether the list has revealed itself at least once. Used below to stop the
++    // layout effect from calling commitLayout() (an unconditional setState) on every pass.
++    const hasPendingCommitRef = useRef(true);
++    const hasCommittedOnceRef = useRef(false);
+     // Hook to handle list loading
+     useOnListLoad(recyclerViewManager, onLoad);
+     // Hook to detect when scrolling reaches list bounds
+@@ -125,13 +130,38 @@ const RecyclerViewComponent = (props, ref) => {
+         if (hasExceededMaxRendersWithoutCommit) {
+             console.warn(WarningMessages.exceededMaxRendersWithoutCommit);
+         }
+-        if (recyclerViewManager.modifyChildrenLayout(layoutInfo, (_a = data === null || data === void 0 ? void 0 : data.length) !== null && _a !== void 0 ? _a : 0) &&
+-            !hasExceededMaxRendersWithoutCommit) {
++        const didModifyChildrenLayout = recyclerViewManager.modifyChildrenLayout(layoutInfo, (_a = data === null || data === void 0 ? void 0 : data.length) !== null && _a !== void 0 ? _a : 0);
++        if (didModifyChildrenLayout && !hasExceededMaxRendersWithoutCommit) {
+             // Trigger re-render if layout modifications were made
++            hasPendingCommitRef.current = true;
+             setRenderId((prev) => prev + 1);
+         }
+         else {
+-            (_b = viewHolderCollectionRef.current) === null || _b === void 0 ? void 0 : _b.commitLayout();
++            // HAPPIER PATCH(flash-list-commit-layout-guard): upstream calls commitLayout() here on
++            // EVERY layout pass. commitLayout() always calls setState, so when item measurements
++            // never settle (estimated-vs-measured height flip-flop after prepends) this ping-pongs
++            // with ViewHolderCollection re-renders inside one synchronous layout-effect cascade and
++            // exceeds React's nested update limit ("Maximum update depth exceeded").
++            // Guarded behavior:
++            // - only commit when a layout modification is actually pending (or the very first
++            //   commit, which reveals the container via renderId > 0);
++            // - when the renders-without-commit budget is exceeded AND we already revealed once,
++            //   skip the commit and settle the tracker so the cascade dies and the pending commit
++            //   lands on the next natural render instead.
++            if (didModifyChildrenLayout) {
++                hasPendingCommitRef.current = true;
++            }
++            const shouldBlockCommitToBreakUpdateLoop = hasExceededMaxRendersWithoutCommit && hasCommittedOnceRef.current;
++            if (hasPendingCommitRef.current && !shouldBlockCommitToBreakUpdateLoop) {
++                hasPendingCommitRef.current = false;
++                hasCommittedOnceRef.current = true;
++                (_b = viewHolderCollectionRef.current) === null || _b === void 0 ? void 0 : _b.commitLayout();
++            }
++            else {
++                // No commit this pass: count the pass as settled so rendersWithoutCommit does not
++                // accumulate across stable renders (commits are rarer with this guard in place).
++                renderTimeTracker.markRenderComplete();
++            }
+             applyOffsetCorrection();
+         }
+         if (horizontal &&
+diff --git a/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx b/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx
+index 3c25e7e..bc718ae 100644
+--- a/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx
++++ b/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx
+@@ -151,6 +151,12 @@ const RecyclerViewComponent = <T,>(
+   // Initialize view holder collection ref
+   const viewHolderCollectionRef = useRef<ViewHolderCollectionRef>(null);
+ 
++  // HAPPIER PATCH(flash-list-commit-layout-guard): track whether a layout commit is actually
++  // pending, and whether the list has revealed itself at least once. Used below to stop the
++  // layout effect from calling commitLayout() (an unconditional setState) on every pass.
++  const hasPendingCommitRef = useRef(true);
++  const hasCommittedOnceRef = useRef(false);
++
+   // Hook to handle list loading
+   useOnListLoad(recyclerViewManager, onLoad);
+ 
+@@ -234,14 +240,40 @@ const RecyclerViewComponent = <T,>(
+       console.warn(WarningMessages.exceededMaxRendersWithoutCommit);
+     }
+ 
+-    if (
+-      recyclerViewManager.modifyChildrenLayout(layoutInfo, data?.length ?? 0) &&
+-      !hasExceededMaxRendersWithoutCommit
+-    ) {
++    const didModifyChildrenLayout = recyclerViewManager.modifyChildrenLayout(
++      layoutInfo,
++      data?.length ?? 0
++    );
++    if (didModifyChildrenLayout && !hasExceededMaxRendersWithoutCommit) {
+       // Trigger re-render if layout modifications were made
++      hasPendingCommitRef.current = true;
+       setRenderId((prev) => prev + 1);
+     } else {
+-      viewHolderCollectionRef.current?.commitLayout();
++      // HAPPIER PATCH(flash-list-commit-layout-guard): upstream calls commitLayout() here on
++      // EVERY layout pass. commitLayout() always calls setState, so when item measurements
++      // never settle (estimated-vs-measured height flip-flop after prepends) this ping-pongs
++      // with ViewHolderCollection re-renders inside one synchronous layout-effect cascade and
++      // exceeds React's nested update limit ("Maximum update depth exceeded").
++      // Guarded behavior:
++      // - only commit when a layout modification is actually pending (or the very first
++      //   commit, which reveals the container via renderId > 0);
++      // - when the renders-without-commit budget is exceeded AND we already revealed once,
++      //   skip the commit and settle the tracker so the cascade dies and the pending commit
++      //   lands on the next natural render instead.
++      if (didModifyChildrenLayout) {
++        hasPendingCommitRef.current = true;
++      }
++      const shouldBlockCommitToBreakUpdateLoop =
++        hasExceededMaxRendersWithoutCommit && hasCommittedOnceRef.current;
++      if (hasPendingCommitRef.current && !shouldBlockCommitToBreakUpdateLoop) {
++        hasPendingCommitRef.current = false;
++        hasCommittedOnceRef.current = true;
++        viewHolderCollectionRef.current?.commitLayout();
++      } else {
++        // No commit this pass: count the pass as settled so rendersWithoutCommit does not
++        // accumulate across stable renders (commits are rarer with this guard in place).
++        renderTimeTracker.markRenderComplete();
++      }
+       applyOffsetCorrection();
+     }
+ 

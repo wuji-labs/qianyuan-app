@@ -167,6 +167,13 @@ describe('findActiveWord', () => {
         },
     ])('$name', assertFindCase);
 
+    it('does not scan unbounded minified tokens before the cursor', () => {
+        const content = `/${'a'.repeat(20_000)}`;
+        const selection = { start: content.length, end: content.length };
+
+        expect(findActiveWord(content, selection)).toBeUndefined();
+    });
+
     it.each<ActiveWordCase>([
         {
             name: 'returns full and active word with cursor in middle',
