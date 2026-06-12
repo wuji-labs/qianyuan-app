@@ -205,6 +205,40 @@ describe('createClaudeUnifiedPromptInjector', () => {
       }
     });
 
+    it('backs off sustained guard deferrals instead of polling the terminal every two seconds indefinitely', async () => {
+      let nowMs = 0;
+      const injectUserPrompt = vi.fn();
+      const injector = createClaudeUnifiedPromptInjector({
+        inputInjection: { hostKind: 'zellij', injectUserPrompt },
+        composerDraftGuard: async () => ({ status: 'foreign_draft', draftLength: 12 }),
+        createNonce: () => 'nonce-1',
+        nowMs: () => nowMs,
+      });
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await injector.injectPrompt({
+          message: 'next prompt',
+          origin: { kind: 'ui_pending', clientId: 'c1' },
+        });
+        expect(result).toMatchObject({
+          status: 'deferred',
+          reason: 'user_typing',
+          retryAfterMs: 2_000,
+        });
+      }
+
+      nowMs = 15_000;
+
+      await expect(
+        injector.injectPrompt({ message: 'next prompt', origin: { kind: 'ui_pending', clientId: 'c1' } }),
+      ).resolves.toMatchObject({
+        status: 'deferred',
+        reason: 'user_typing',
+        retryAfterMs: 30_000,
+      });
+      expect(injectUserPrompt).not.toHaveBeenCalled();
+    });
+
     it('defers without writing when the own leftover could not be cleared (never concatenates)', async () => {
       const injectUserPrompt = vi.fn();
       const injector = createClaudeUnifiedPromptInjector({

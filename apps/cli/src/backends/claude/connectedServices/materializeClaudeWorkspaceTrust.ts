@@ -101,8 +101,18 @@ async function resolveWorkspaceTrustProjection(params: Readonly<{
     if (result.hasExplicitTrustState && index === 0 && resolveClaudeConfigDirOverride(params.sourceEnv)) {
       return null;
     }
+    if (result.hasExplicitTrustState) {
+      // The user explicitly declined trust for this directory in their own config — respect it.
+      return null;
+    }
   }
-  return null;
+  // QAC-1: no source config carries any trust state for this directory (typical for new
+  // directories, worktrees, and scratch workspaces never opened with native claude). Creating a
+  // Happier session in a directory IS the user's trust decision, and Claude Code's interactive
+  // TUI silently skips EXECUTING all hooks (SessionStart/Stop/PreToolUse/...) in untrusted
+  // workspaces — which kills session-id persistence, lifecycle detection, and permission hooks.
+  // Default to trusting the session directory in the Happier-managed materialized home.
+  return { hasTrustDialogAccepted: true };
 }
 
 async function resolveClaudeOauthAccountProjection(params: Readonly<{
@@ -168,6 +178,9 @@ export async function materializeClaudeWorkspaceTrust(params: Readonly<{
         targetDir: params.targetDir,
       });
   const existingProjects = readObject(existingRoot.projects) ?? {};
+  // Merge the trust projection into any claude-written project entry instead of replacing it, so
+  // rematerialization does not clobber per-project state (allowedTools, history, ...).
+  const existingProjectEntry = readObject(existingProjects[sessionDirectory]) ?? {};
   await writeClaudeRootConfig({
     targetDir: params.targetDir,
     rootConfig: {
@@ -175,7 +188,10 @@ export async function materializeClaudeWorkspaceTrust(params: Readonly<{
       ...(oauthAccount ? { oauthAccount } : {}),
       projects: {
         ...existingProjects,
-        [sessionDirectory]: projection,
+        [sessionDirectory]: {
+          ...existingProjectEntry,
+          ...projection,
+        },
       },
     },
   });

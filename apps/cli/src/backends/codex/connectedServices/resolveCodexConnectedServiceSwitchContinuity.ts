@@ -37,28 +37,11 @@ export async function resolveCodexConnectedServiceSwitchContinuity(
     return { mode: 'unsupported', reason: 'codex_api_key_switch_continuity_unsupported' };
   }
 
-  // QAG-TEMP begin
-  {
-    const { logger } = await import('@/ui/logger');
-    logger.debug('[QAG-TEMP codex continuity] gate', {
-      sessionId: params.sessionId,
-      previousSource: params.previousBinding?.source ?? null,
-      hasRuntimeAuthSelection: Boolean(params.runtimeAuthSelection),
-    });
-  }
-  // QAG-TEMP end
   if (params.previousBinding?.source === 'connected' && params.runtimeAuthSelection) {
     const hotApply = createCodexConnectedServiceRuntimeAuthAdapter().canHotApply({
       target: { agentId: params.agentId },
       selection: params.runtimeAuthSelection,
     });
-    // QAG-TEMP begin
-    const { logger } = await import('@/ui/logger');
-    logger.debug('[QAG-TEMP codex continuity] canHotApply', {
-      sessionId: params.sessionId,
-      canHotApply: hotApply,
-    });
-    // QAG-TEMP end
     if (
       hotApply
       && typeof hotApply === 'object'

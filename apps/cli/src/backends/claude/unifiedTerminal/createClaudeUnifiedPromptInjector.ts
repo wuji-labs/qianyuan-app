@@ -18,6 +18,9 @@ import { emitClaudeUnifiedInjectionDraftGuard, emitClaudeUnifiedInjectionOutcome
 // Guard-deferral retry delay: an idle session has no turn-end/readiness wake, so deferrals must
 // arm their own retry timer (live-proven starvation, runner pid 20327).
 const DRAFT_GUARD_RETRY_MS = 2_000;
+const DRAFT_GUARD_BACKOFF_RETRY_MS = 30_000;
+const DRAFT_GUARD_BACKOFF_THRESHOLD = 4;
+const DRAFT_GUARD_BACKOFF_MIN_EPISODE_MS = 15_000;
 
 /**
  * Outcome of the pre-injection composer guard (C11): screen-lite projection of
@@ -41,9 +44,31 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
    * guard — the steer evaluator already owns that screen's draft policy.
    */
   composerDraftGuard?: (() => Promise<ClaudeUnifiedComposerDraftGuardOutcome>) | undefined;
+  nowMs?: (() => number) | undefined;
   onInjected?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => void | Promise<void>) | undefined;
 }>): ClaudeUnifiedPromptInjector<Mode> {
   const createNonce = opts.createNonce ?? randomUUID;
+  const nowMs = opts.nowMs ?? Date.now;
+  let draftGuardDeferralCount = 0;
+  let draftGuardDeferralStartedAtMs: number | null = null;
+
+  function resetDraftGuardDeferralEpisode(): void {
+    draftGuardDeferralCount = 0;
+    draftGuardDeferralStartedAtMs = null;
+  }
+
+  function nextDraftGuardRetryAfterMs(): number {
+    const now = nowMs();
+    draftGuardDeferralStartedAtMs ??= now;
+    draftGuardDeferralCount += 1;
+    if (
+      draftGuardDeferralCount >= DRAFT_GUARD_BACKOFF_THRESHOLD &&
+      now - draftGuardDeferralStartedAtMs >= DRAFT_GUARD_BACKOFF_MIN_EPISODE_MS
+    ) {
+      return DRAFT_GUARD_BACKOFF_RETRY_MS;
+    }
+    return DRAFT_GUARD_RETRY_MS;
+  }
 
   return {
     async injectPrompt(
@@ -67,9 +92,11 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
         if (guard.status === 'foreign_draft' || guard.status === 'clear_failed') {
           // Never write next to a draft we may not own: defer WITH a retry delay — an idle
           // session has no turn-end/readiness wake, so a bare deferral would starve the head
-          // prompt forever (live-proven, runner pid 20327).
-          return { status: 'deferred', reason: 'user_typing', retryAfterMs: DRAFT_GUARD_RETRY_MS };
+          // prompt forever (live-proven, runner pid 20327). After a sustained draft episode,
+          // slow the recheck cadence so a genuine user draft cannot drive endless zellij probes.
+          return { status: 'deferred', reason: 'user_typing', retryAfterMs: nextDraftGuardRetryAfterMs() };
         }
+        resetDraftGuardDeferralEpisode();
       }
 
       const input = {
@@ -99,6 +126,7 @@ export function createClaudeUnifiedPromptInjector<Mode = unknown>(opts: Readonly
         });
       }
       if (result.status === 'injected') {
+        resetDraftGuardDeferralEpisode();
         await opts.onInjected?.(batch);
       }
       return result;

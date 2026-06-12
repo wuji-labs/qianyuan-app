@@ -134,7 +134,7 @@ import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecyc
 import { observeAcpLifecycleMarker } from '@/agent/runtime/session/turn/lifecycleMarkerAdapter';
 import type { SessionTurnLifecycleController } from '@/agent/runtime/session/turn/types';
 import { createSessionTurnMutationWriter } from '@/agent/runtime/session/turn/writer';
-import { notifyDaemonConnectedServiceTurnLifecycle } from '@/daemon/controlClient';
+import { notifyDaemonConnectedServiceTurnLifecycle, notifyDaemonConnectedServiceUsageLimitWaitResumeCancel } from '@/daemon/controlClient';
 import {
     applyKnownPendingQueueState,
     derivePendingQueueStateAfterMaterializeResult,
@@ -449,6 +449,11 @@ export class ApiSessionClient extends EventEmitter {
             updateSessionMetadata: (handler) => this.updateMetadata(handler),
             enqueueSessionUserMessage: (request) => this.enqueueSessionUserMessage(request),
             sessionRuntimeControls: this.sessionRuntimeControls,
+            // QAE-1: a user "Stop waiting" handled session-side (provider runtime
+            // control or metadata fallback) must also cancel the daemon's durable
+            // recovery wait state, or it resumes the session involuntarily later.
+            notifyUsageLimitWaitResumeCancelled: async (request) =>
+                await notifyDaemonConnectedServiceUsageLimitWaitResumeCancel(request),
         });
 
         const transcriptWriter = {
