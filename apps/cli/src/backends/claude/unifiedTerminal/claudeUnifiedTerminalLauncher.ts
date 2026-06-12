@@ -1,4 +1,6 @@
 import { createClaudeReadyHandler } from '../ready/createClaudeReadyHandler';
+import { createClaudePendingAwareInputConsumer } from '../createClaudePendingAwareInputConsumer';
+import { PendingQueueMaterializationAuthError } from '@/agent/runtime/sessionInput/SessionProviderInputConsumer';
 import type { EnhancedMode } from '../loop';
 import type { Session } from '../session';
 import type { LauncherResult } from '../claudeLocalLauncher';
@@ -254,6 +256,25 @@ export async function claudeUnifiedTerminalLauncher(
     isCanonicalTurnActive: () => session.client.hasActiveCanonicalTurn?.() ?? true,
   });
 
+  // Daemon-owned pending drain (QA C-F2/A-F3, live repro cmqb329qm044z): all idle input waits go
+  // through the pending-aware consumer so server-side queued rows materialize on turn-end/idle
+  // wakes. A raw `session.queue` wait only ever sees UI-RPC-delivered messages and strands queued
+  // pending rows until a manual "Send now".
+  const sessionInputConsumer = createClaudePendingAwareInputConsumer(session);
+  const waitForNextSessionInputBatch = async (): Promise<{ message: string; mode: EnhancedMode } | null> => {
+    try {
+      return await sessionInputConsumer.waitForNextInput({ abortSignal: abortController.signal });
+    } catch (error) {
+      if (error instanceof PendingQueueMaterializationAuthError) {
+        // Classified terminal-auth stop: end the wait gracefully instead of escaping
+        // into the generic fatal-command-error path (incident cmq7pyqkj family).
+        logger.debug('[unified]: pending-queue materialization stopped after supervisor auth failure');
+        return null;
+      }
+      throw error;
+    }
+  };
+
   // A classified unified runtime failure (injection failure, host death) must NEVER escape as a
   // process-killing `[claude] Fatal command error` (incident cmq7pyqkj: a mid-turn steer injection
   // hit its provider-acceptance timeout, the failed_terminal error was surfaced and then RETHROWN
@@ -267,7 +288,7 @@ export async function claudeUnifiedTerminalLauncher(
       message: 'Claude unified terminal exited unexpectedly. Waiting for the next message to retry...',
     });
     await flushUnifiedStartupFailureSurface(session, reason);
-    const batch = await session.queue.waitForMessagesAndGetAsString(abortController.signal);
+    const batch = await waitForNextSessionInputBatch();
     if (!batch) return false;
     parkedMessage = { message: batch.message, mode: batch.mode };
     return true;
@@ -325,7 +346,7 @@ export async function claudeUnifiedTerminalLauncher(
           };
         }
         initialPromptPending = false;
-        const batch = await session.queue.waitForMessagesAndGetAsString(abortController.signal);
+        const batch = await waitForNextSessionInputBatch();
         if (!batch) return null;
         binding.noteNextInjectedPromptShouldSuppressEcho();
         observeOutgoingBatchMode(batch.mode);

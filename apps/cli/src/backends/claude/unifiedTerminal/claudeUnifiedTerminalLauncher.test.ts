@@ -84,6 +84,12 @@ function createSession(): Session {
         registerHandler: vi.fn(),
       },
       flush: vi.fn(async () => undefined),
+      // Pending-queue drain surface consumed by the launcher's session input consumer.
+      // Defaults keep legacy tests inert: nothing pending, metadata wait never fires.
+      shouldAttemptPendingMaterialization: vi.fn(() => false),
+      popPendingMessage: vi.fn(async () => false),
+      reconcilePendingQueueState: vi.fn(async () => false),
+      waitForMetadataUpdate: vi.fn(() => new Promise<boolean>(() => undefined)),
     },
     pushSender: null,
     accountSettings: null,
@@ -94,6 +100,7 @@ function createSession(): Session {
     hookPluginDir: null,
     queue: {
       size: vi.fn(() => 0),
+      waitForMessagesSignal: vi.fn(async () => true),
       waitForMessagesAndGetAsString: vi.fn(),
       unshift: vi.fn(),
     },
@@ -687,6 +694,72 @@ describe('claudeUnifiedTerminalLauncher', () => {
     await claudeUnifiedTerminalLauncher(session, {
       initialMode: undefined,
     });
+  });
+
+  it('materializes server-side pending messages while waiting for input instead of waiting only on the local queue (daemon-owned drain, QA C-F2/A-F3)', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    // Server holds one queued pending row; the local queue is empty until materialization
+    // commits it (the transcript update path then delivers it into the queue).
+    let queueSize = 0;
+    vi.mocked(session.queue.size).mockImplementation(() => queueSize);
+    const materializeNextPendingMessageSafely = vi.fn(async () => {
+      queueSize = 1;
+      return { type: 'materialized' as const };
+    });
+    (session.client as unknown as Record<string, unknown>).materializeNextPendingMessageSafely =
+      materializeNextPendingMessageSafely;
+    vi.mocked(session.queue.waitForMessagesAndGetAsString).mockImplementation(async () => {
+      queueSize = 0;
+      return { message: 'queued on server', mode: { permissionMode: 'default' }, hash: 'h1' } as never;
+    });
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (runOpts: {
+      nextMessage: () => Promise<{ message: string; mode: unknown } | null>;
+    }) => {
+      await expect(runOpts.nextMessage()).resolves.toEqual(expect.objectContaining({
+        message: 'queued on server',
+      }));
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    });
+
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalled();
+  });
+
+  it('attempts pending materialization while parked after host death (queued messages must not require a manual Send now)', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const hostDeadError = Object.assign(new Error('Claude unified terminal host is not alive'), {
+      code: 'claude_unified_terminal_host_dead',
+    });
+    const materializeNextPendingMessageSafely = vi.fn(async () => ({ type: 'no_pending' as const }));
+    (session.client as unknown as Record<string, unknown>).materializeNextPendingMessageSafely =
+      materializeNextPendingMessageSafely;
+    vi.mocked(session.queue.waitForMessagesAndGetAsString)
+      .mockResolvedValueOnce({ message: 'try again', mode: { permissionMode: 'default' }, hash: 'h1' } as never)
+      .mockResolvedValue(null as never);
+    mocks.runClaudeUnifiedTerminalSession
+      .mockRejectedValueOnce(hostDeadError)
+      .mockImplementationOnce(async (runOpts: {
+        nextMessage: () => Promise<{ message: string; mode: unknown } | null>;
+      }) => {
+        await expect(runOpts.nextMessage()).resolves.toEqual(expect.objectContaining({ message: 'try again' }));
+      });
+
+    await expect(claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    })).resolves.toEqual({ type: 'exit', code: 0 });
+
+    // The parked wait must include the daemon-owned pending drain, not just the local queue.
+    expect(materializeNextPendingMessageSafely).toHaveBeenCalled();
   });
 
   it('forwards the resolved default coding prompt into unified terminal spawn options', async () => {
