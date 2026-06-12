@@ -318,9 +318,10 @@ describe('Theme profile settings screen', () => {
         const builtInDropdown = await findBuiltInThemesDropdown(screen);
         const premiumDarkItem = builtInDropdown!.props.items.find((item: { id: string }) => item.id === 'premiumDark');
         const duplicateAction = findRowActionsInNode(premiumDarkItem.rightElement).find((action) => action.id === 'duplicate-premiumDark');
+        expect(duplicateAction?.onPress).toBeTypeOf('function');
 
         await act(async () => {
-            duplicateAction!.onPress();
+            duplicateAction?.onPress?.();
         });
 
         const [clone] = getThemeProfiles().profiles;

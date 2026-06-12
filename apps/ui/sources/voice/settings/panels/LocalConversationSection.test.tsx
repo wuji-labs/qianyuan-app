@@ -69,6 +69,8 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
 });
 
 vi.mock('@/sync/domains/models/modelOptions', () => ({
+    findModelOptionForEffectiveModelId: (options: readonly any[], id: string) =>
+        (options ?? []).find((o: any) => o.value === id) ?? (options ?? []).find((o: any) => o.extendedContextModelId === id) ?? null,
   getModelOptionsForAgentType: () => [
     { value: 'default', label: 'Default', description: '' },
     { value: 'm1', label: 'Model 1', description: 'Fast' },
@@ -116,6 +118,7 @@ vi.mock('@/voice/settings/panels/localTts/LocalVoiceTtsGroup', () => ({
 }));
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
   canAgentResume: () => true,
+  canContinueSessionWithFreshSpawn: () => false,
 }));
 vi.mock('@/voice/agent/resetGlobalVoiceAgentPersistence', () => ({
   resetGlobalVoiceAgentPersistence: vi.fn(),

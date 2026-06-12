@@ -322,6 +322,7 @@ vi.mock('@/agents/catalog/catalog', async () => {
 });
 vi.mock('@/agents/runtime/resumeCapabilities', () => ({
     canResumeSessionWithOptions: () => false,
+    canContinueSessionWithFreshSpawn: () => false,
 }));
 vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
     useResumeCapabilityOptions: () => [],
@@ -445,6 +446,8 @@ vi.mock('@/sync/domains/session/subagents/deriveSessionSubagentCounts', () => ({
     deriveSessionSubagentCounts: () => ({ total: 0, active: 0 }),
 }));
 vi.mock('@/sync/domains/models/modelOptions', () => ({
+    findModelOptionForEffectiveModelId: (options: readonly any[], id: string) =>
+        (options ?? []).find((o: any) => o.value === id) ?? (options ?? []).find((o: any) => o.extendedContextModelId === id) ?? null,
     isModelSelectableForSession: () => true,
 }));
 vi.mock('@/sync/domains/session/control/localControlSwitch', () => ({
