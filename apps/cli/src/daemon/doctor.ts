@@ -330,7 +330,7 @@ export function classifyHappyProcess(proc: RawProcessInfo): HappyProcessInfo | n
   };
 }
 
-export async function findAllHappyProcesses(): Promise<HappyProcessInfo[]> {
+async function findAllHappyProcessesSnapshot(): Promise<HappyProcessInfo[]> {
   try {
     const processes = await psList().catch((error: unknown) => {
       if (process.platform !== 'win32') throw error;
@@ -367,6 +367,23 @@ export async function findAllHappyProcesses(): Promise<HappyProcessInfo[]> {
     return allProcesses;
   } catch (error) {
     return [];
+  }
+}
+
+let findAllHappyProcessesInFlight: Promise<HappyProcessInfo[]> | null = null;
+
+export async function findAllHappyProcesses(): Promise<HappyProcessInfo[]> {
+  if (findAllHappyProcessesInFlight) {
+    return await findAllHappyProcessesInFlight;
+  }
+  const snapshot = findAllHappyProcessesSnapshot();
+  findAllHappyProcessesInFlight = snapshot;
+  try {
+    return await snapshot;
+  } finally {
+    if (findAllHappyProcessesInFlight === snapshot) {
+      findAllHappyProcessesInFlight = null;
+    }
   }
 }
 

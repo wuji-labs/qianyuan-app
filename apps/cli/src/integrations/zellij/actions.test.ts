@@ -46,6 +46,7 @@ async function expectTimedOutAndKilled(
   expectedError: new (...args: never[]) => Error,
 ) {
   let rejection: unknown;
+  const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
   const handled = result.catch((error: unknown) => {
     rejection = error;
   });
@@ -53,12 +54,14 @@ async function expectTimedOutAndKilled(
     await vi.advanceTimersByTimeAsync(advanceMs);
     await Promise.resolve();
     expect(rejection).toBeUndefined();
+    expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
     expect(child.kill).toHaveBeenCalledTimes(1);
     child.emit('close', 0);
     await handled;
     expect(rejection).toBeInstanceOf(expectedError);
   } finally {
     await result.catch(() => undefined);
+    killProcessGroup.mockRestore();
   }
 }
 
@@ -200,6 +203,29 @@ describe('zellij actions', () => {
     await expectTimedOutAndKilled(result, child, 25, ZellijActionTimeoutError);
   });
 
+  it('signals the zellij action process group when a timeout elapses', async () => {
+    vi.useFakeTimers();
+    const child = mockHangingChild();
+    const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    spawnMock.mockImplementationOnce(() => child);
+    const { listPanes, ZellijActionTimeoutError } = await import('./actions');
+    const result = listPanes({ zellijBinary: '/tools/zellij', env: {}, timeoutMs: 25 });
+
+    try {
+      await vi.advanceTimersByTimeAsync(25);
+      await Promise.resolve();
+      const options = spawnMock.mock.calls[0]?.[2] as SpawnOptions | undefined;
+      expect(options).toEqual(expect.objectContaining({ detached: true, shell: false }));
+      expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+      child.emit('close', 0);
+      await expect(result).rejects.toBeInstanceOf(ZellijActionTimeoutError);
+    } finally {
+      child.emit('close', 0);
+      await result.catch(() => undefined);
+      killProcessGroup.mockRestore();
+    }
+  });
+
   it('kills a hung background attach action when its timeout elapses', async () => {
     vi.useFakeTimers();
     const child = mockHangingChild();
@@ -249,6 +275,7 @@ describe('zellij actions', () => {
   it('rejects after a bounded kill grace when a timed-out action does not close', async () => {
     vi.useFakeTimers();
     const child = mockHangingChild();
+    const killProcessGroup = vi.spyOn(process, 'kill').mockImplementation(() => true);
     spawnMock.mockImplementationOnce(() => child);
     const { listPanes, ZellijActionTimeoutError } = await import('./actions');
 
@@ -258,19 +285,24 @@ describe('zellij actions', () => {
       rejection = error;
     });
 
-    await vi.advanceTimersByTimeAsync(25);
-    await Promise.resolve();
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(rejection).toBeUndefined();
+    try {
+      await vi.advanceTimersByTimeAsync(25);
+      await Promise.resolve();
+      expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(rejection).toBeUndefined();
 
-    await vi.advanceTimersByTimeAsync(249);
-    await Promise.resolve();
-    expect(rejection).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(249);
+      await Promise.resolve();
+      expect(rejection).toBeUndefined();
 
-    await vi.advanceTimersByTimeAsync(1);
-    await Promise.resolve();
-    expect(rejection).toBeInstanceOf(ZellijActionTimeoutError);
-    await result.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      expect(rejection).toBeInstanceOf(ZellijActionTimeoutError);
+      await result.catch(() => undefined);
+    } finally {
+      killProcessGroup.mockRestore();
+    }
   });
 
   it('creates background sessions with explicit cwd and default shell options', async () => {

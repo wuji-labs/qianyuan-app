@@ -103,9 +103,11 @@ function runZellij(
 ): Promise<ZellijCommandResult> {
   return new Promise((resolve, reject) => {
     const stdio = options?.stdio ?? ['ignore', 'pipe', 'pipe'];
+    const detached = process.platform !== 'win32';
     const child = spawn(params.zellijBinary, [...args], {
       cwd: options?.cwd,
       env: buildZellijProcessEnv(params.env),
+      detached,
       shell: false,
       stdio,
       windowsHide: options?.windowsHide ?? true,
@@ -128,7 +130,7 @@ function runZellij(
     timeout = options?.timeoutMs !== undefined && options.timeoutMs > 0
       ? setTimeout(() => {
           timedOut = true;
-          child.kill();
+          terminateZellijChild(child);
           timeoutKillGrace = setTimeout(() => {
             finish(() => reject(timeoutError()));
           }, ZELLIJ_TIMEOUT_KILL_GRACE_MS);
@@ -153,6 +155,18 @@ function runZellij(
       });
     });
   });
+}
+
+function terminateZellijChild(child: ReturnType<typeof spawn>): void {
+  if (process.platform !== 'win32' && child.pid) {
+    try {
+      process.kill(-child.pid, 'SIGTERM');
+    } catch {
+      // Fall through to direct child signaling. The process may already have exited or may not
+      // have a process group on older/embedded runtimes.
+    }
+  }
+  child.kill();
 }
 
 function runZellijForeground(
