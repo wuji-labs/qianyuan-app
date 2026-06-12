@@ -8,11 +8,16 @@ import { startServerLight, type StartedServer } from '../../src/testkit/process/
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/daemon';
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
-import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import {
+  gotoDomContentLoadedWithPathFallback,
+  gotoDomContentLoadedWithRetries,
+  normalizeLoopbackBaseUrl,
+} from '../../src/testkit/uiE2e/pageNavigation';
 import { openNewSessionMachineSelection } from '../../src/testkit/uiE2e/createSessionFromNewSessionComposer';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
 import { selectNewSessionAgent } from '../../src/testkit/uiE2e/selectNewSessionAgent';
 import { enableEnhancedSessionWizard } from '../../src/testkit/uiE2e/enableEnhancedSessionWizard';
+import { approveTerminalConnect } from '../../src/testkit/uiE2e/approveTerminalConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -157,9 +162,8 @@ test.describe('ui e2e: /new resume id browse fills from direct sessions', () => 
       },
     });
 
-    await gotoDomContentLoadedWithRetries(page, cliLogin.connectUrl, 90_000);
-    await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-    await page.getByTestId('terminal-connect-approve').click();
+    await gotoDomContentLoadedWithPathFallback(page, cliLogin.connectUrl, '/terminal/connect', 90_000);
+    await approveTerminalConnect({ page });
     await cliLogin.waitForSuccess();
 
     daemon = await startTestDaemon({
@@ -189,8 +193,11 @@ test.describe('ui e2e: /new resume id browse fills from direct sessions', () => 
     // so select the machine before choosing Codex.
     await expect(page.getByTestId('agent-input-machine-chip')).toHaveCount(1, { timeout: 60_000 });
     await openNewSessionMachineSelection({ page, uiBaseUrl });
-    await expect(page.getByTestId(`new-session-machine:${machineId}`)).not.toHaveCount(0, { timeout: 120_000 });
-    await page.getByTestId(`new-session-machine:${machineId}`).first().click();
+    const machineOption = page.locator(
+      `[data-testid="new-session-machine:${machineId}"], [data-testid="new-session-machine-option:${machineId}"]`,
+    );
+    await expect(machineOption).not.toHaveCount(0, { timeout: 120_000 });
+    await machineOption.first().click();
     await page.waitForURL((url: URL) => url.pathname.endsWith('/new'), { timeout: 60_000 });
 
     // Select the Codex engine so the resume browse can find seeded Codex sessions.

@@ -12,6 +12,7 @@ import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/ui
 import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
 import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
 import { startForwardedHeaderProxy } from '../../src/testkit/uiE2e/forwardedHeaderProxy';
+import { withTimeoutMs } from '../../src/testkit/timing/withTimeout';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -27,6 +28,15 @@ test.describe('ui e2e: mTLS login + terminal connect', () => {
   let proxyBaseUrl: string | null = null;
   let proxyStop: (() => Promise<void>) | null = null;
   let daemon: StartedDaemon | null = null;
+
+  async function stopBestEffort(label: string, stop: (() => Promise<void>) | null | undefined): Promise<void> {
+    if (!stop) return;
+    await withTimeoutMs({
+      promise: stop(),
+      timeoutMs: 90_000,
+      label,
+    }).catch(() => {});
+  }
 
   async function waitForWelcomeAuthenticated(page: Page, baseUrl: string, authResponse: Promise<unknown>): Promise<void> {
     await gotoDomContentLoadedWithRetries(page, baseUrl);
@@ -107,11 +117,13 @@ test.describe('ui e2e: mTLS login + terminal connect', () => {
   });
 
   test.afterAll(async () => {
-    test.setTimeout(120_000);
-    await daemon?.stop().catch(() => {});
-    await ui?.stop().catch(() => {});
-    await proxyStop?.().catch(() => {});
-    await server?.stop().catch(() => {});
+    test.setTimeout(180_000);
+    await Promise.allSettled([
+      stopBestEffort('mTLS terminal connect daemon stop', daemon?.stop),
+      stopBestEffort('mTLS terminal connect UI web stop', ui?.stop),
+      stopBestEffort('mTLS terminal connect forwarded proxy stop', proxyStop),
+      stopBestEffort('mTLS terminal connect server stop', server?.stop),
+    ]);
   });
 
   test('logs in via mTLS, approves terminal connect, and daemon becomes online', async ({ page }) => {

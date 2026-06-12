@@ -7,11 +7,16 @@ import { startTestDaemon, type StartedDaemon } from '../../src/testkit/daemon/da
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { resolveUiWebBeforeAllTimeoutMs, startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { startCliAuthLoginForTerminalConnect, type StartedCliTerminalConnect } from '../../src/testkit/uiE2e/cliTerminalConnect';
-import { gotoDomContentLoadedWithRetries, normalizeLoopbackBaseUrl } from '../../src/testkit/uiE2e/pageNavigation';
+import {
+  gotoDomContentLoadedWithPathFallback,
+  gotoDomContentLoadedWithRetries,
+  normalizeLoopbackBaseUrl,
+} from '../../src/testkit/uiE2e/pageNavigation';
 import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi';
 import { acknowledgeTerminalConnectSuccessIfPresent } from '../../src/testkit/uiE2e/acknowledgeTerminalConnectSuccessIfPresent';
 import { runCliJson } from '../../src/testkit/uiE2e/cliJson';
 import { ensureAccountReadyForConnect } from '../../src/testkit/uiE2e/ensureAccountReadyForConnect';
+import { approveTerminalConnect } from '../../src/testkit/uiE2e/approveTerminalConnect';
 
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
@@ -144,9 +149,8 @@ test.describe('ui e2e: encryption opt-out mode switching', () => {
         },
       });
 
-      await gotoDomContentLoadedWithRetries(page, cliLogin.connectUrl, 90_000);
-      await expect(page.getByTestId('terminal-connect-approve')).toHaveCount(1, { timeout: 60_000 });
-      await page.getByTestId('terminal-connect-approve').click();
+      await gotoDomContentLoadedWithPathFallback(page, cliLogin.connectUrl, '/terminal/connect', 90_000);
+      await approveTerminalConnect({ page });
       await cliLogin.waitForSuccess();
       await acknowledgeTerminalConnectSuccessIfPresent(page);
 
