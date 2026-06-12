@@ -161,6 +161,34 @@ describe('SessionProviderInputConsumer waitForNextInput', () => {
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 
+  it('idle wakes reconcile a stale-empty pending count (throttled) so lost nudges self-heal', async () => {
+    const abortController = new AbortController();
+    const materializeNextPendingMessageSafely = vi
+      .fn<(opts?: { reconcileWhenEmpty?: string }) => Promise<MaterializeNextPendingResult>>()
+      .mockResolvedValue({ type: 'no_pending' });
+
+    const consumer = createSessionProviderInputConsumer({
+      messageQueue: new MessageQueue2<TestMode>(() => 'hash'),
+      session: {
+        popPendingMessage: vi.fn(async () => false),
+        materializeNextPendingMessageSafely,
+        shouldAttemptPendingMaterialization: () => false,
+        waitForMetadataUpdate: () => new Promise<boolean>(() => {}),
+      },
+      reconcileWhenEmpty: 'skip',
+      idleWakePollIntervalMs: 1,
+    });
+
+    const waitPromise = consumer.waitForNextInput({ abortSignal: abortController.signal });
+    setTimeout(() => abortController.abort(), 25).unref?.();
+    await expect(waitPromise).resolves.toBeNull();
+
+    const policies = materializeNextPendingMessageSafely.mock.calls.map((call) => call[0]?.reconcileWhenEmpty);
+    // First (pre-wait) attempt stays passive; idle-timer wakes must reconcile (throttled).
+    expect(policies[0]).toBe('skip');
+    expect(policies).toContain('throttled');
+  });
+
   it('does not call metadata refresh when only the idle timer wakes', async () => {
     const abortController = new AbortController();
     const onMetadataUpdate = vi.fn();

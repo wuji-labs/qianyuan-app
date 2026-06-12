@@ -10,6 +10,7 @@ import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 import { fetchEncryptedTranscriptPageAfterSeq } from '@/api/session/fetchEncryptedTranscriptWindow';
+import { materializeNextPendingQueueV2MessageViaHttp } from '@/api/session/pendingQueueV2Transport';
 import { waitForTranscriptEncryptedMessageByLocalId } from '@/api/session/transcriptMessageLookup';
 import type { Credentials } from '@/persistence';
 import { detectSessionTurnActivity } from '@/session/query/detectSessionTurnInFlight';
@@ -34,6 +35,11 @@ export type SendSessionMessageResult =
       candidates?: string[];
       message?: string;
     }>;
+
+export type SendSessionMessageSocketCommit = Readonly<{
+  sessionId: string;
+  localId: string;
+}>;
 
 function parsePermissionIntentOrThrow(raw: string): PermissionIntent {
   const parsed = parsePermissionIntentAlias(raw);
@@ -60,6 +66,22 @@ function isFallbackSafeRuntimeRpcError(error: unknown): boolean {
   }
 
   return errorMessage.toLowerCase().includes('connect_error');
+}
+
+async function nudgePendingQueueBestEffort(params: Readonly<{
+  token: string;
+  sessionId: string;
+}>): Promise<void> {
+  try {
+    await materializeNextPendingQueueV2MessageViaHttp({
+      token: params.token,
+      sessionId: params.sessionId,
+    });
+  } catch {
+    // Best-effort only. Callers may layer stronger retry loops when materialization
+    // is safety-critical, but ordinary socket-fallback sends should still attempt
+    // one canonical nudge here.
+  }
 }
 
 function resolvePermissionIntent(params: Readonly<{
@@ -151,6 +173,7 @@ export async function sendSessionMessage(params: Readonly<{
   localId?: string;
   permissionModeOverride?: string;
   modelOverride?: string | null;
+  onCommittedViaSocket?: (input: SendSessionMessageSocketCommit) => Promise<void> | void;
 }>): Promise<SendSessionMessageResult> {
   const sessionTarget = await resolveSessionTransportContext({
     credentials: params.credentials,
@@ -162,6 +185,10 @@ export async function sendSessionMessage(params: Readonly<{
       code: sessionTarget.code,
       ...(sessionTarget.candidates ? { candidates: sessionTarget.candidates } : {}),
     };
+  }
+  const sessionId = sessionTarget.sessionId;
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    throw new Error('Resolved session transport context is missing session id');
   }
 
   const localId = typeof params.localId === 'string' && params.localId.trim().length > 0
@@ -201,14 +228,33 @@ export async function sendSessionMessage(params: Readonly<{
       : ({ t: 'encrypted', c: encryptSessionPayload({ ctx: sessionTarget.ctx, payload: record }) } as const);
 
   const shouldUseRuntimeRpc = sessionTarget.rawSession.active === true;
+  async function commitViaSocket(): Promise<void> {
+    await sendSessionMessageViaSocketCommitted({
+      token: params.credentials.token,
+      sessionId: sessionId,
+      content,
+      localId,
+      messageRole: 'user',
+      sentFrom: 'cli',
+      permissionMode: permissionIntent,
+    });
+    await nudgePendingQueueBestEffort({
+      token: params.credentials.token,
+      sessionId,
+    });
+    await params.onCommittedViaSocket?.({
+      sessionId: sessionId,
+      localId,
+    });
+  }
   if (shouldUseRuntimeRpc) {
     try {
       await callSessionRpc({
         token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
+        sessionId: sessionId,
         mode: sessionTarget.mode,
         ctx: sessionTarget.ctx,
-        method: `${sessionTarget.sessionId}:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`,
+        method: `${sessionId}:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`,
         request: {
           text: params.message,
           localId,
@@ -228,32 +274,16 @@ export async function sendSessionMessage(params: Readonly<{
         throw error;
       }
 
-      await sendSessionMessageViaSocketCommitted({
-        token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
-        content,
-        localId,
-        messageRole: 'user',
-        sentFrom: 'cli',
-        permissionMode: permissionIntent,
-      });
+      await commitViaSocket();
     }
   } else {
-    await sendSessionMessageViaSocketCommitted({
-      token: params.credentials.token,
-      sessionId: sessionTarget.sessionId,
-      content,
-      localId,
-      messageRole: 'user',
-      sentFrom: 'cli',
-      permissionMode: permissionIntent,
-    });
+    await commitViaSocket();
   }
 
   if (!params.wait) {
     return {
       ok: true,
-      sessionId: sessionTarget.sessionId,
+      sessionId: sessionId,
       localId,
       waited: false,
     };
@@ -267,7 +297,7 @@ export async function sendSessionMessage(params: Readonly<{
     if (!shouldUseRuntimeRpc) {
       const materialized = await waitForTranscriptEncryptedMessageByLocalId({
         token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
+        sessionId: sessionId,
         localId,
         maxWaitMs: Math.max(1, deadlineMs - Date.now()),
       });
@@ -279,7 +309,7 @@ export async function sendSessionMessage(params: Readonly<{
       }
       return {
         ok: true,
-        sessionId: sessionTarget.sessionId,
+        sessionId: sessionId,
         localId,
         waited: true,
       };
@@ -288,7 +318,7 @@ export async function sendSessionMessage(params: Readonly<{
     if (shouldUseRuntimeRpc) {
       const materialized = await waitForTranscriptEncryptedMessageByLocalId({
         token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
+        sessionId: sessionId,
         localId,
         maxWaitMs: Math.max(1, deadlineMs - Date.now()),
       });
@@ -301,7 +331,7 @@ export async function sendSessionMessage(params: Readonly<{
 
       const refreshedSession = await fetchSessionById({
         token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
+        sessionId: sessionId,
       });
       if (!refreshedSession) {
         throw new Error('Session not found after send');
@@ -309,7 +339,7 @@ export async function sendSessionMessage(params: Readonly<{
       waitSessionSnapshot = refreshedSession;
       currentTurnAfterSeqExclusive = await resolveCurrentTurnAfterSeqExclusive({
         token: params.credentials.token,
-        sessionId: sessionTarget.sessionId,
+        sessionId: sessionId,
         localId,
         materializedSeq: materialized.seq,
         ctx: sessionTarget.ctx,
@@ -318,7 +348,7 @@ export async function sendSessionMessage(params: Readonly<{
 
     const initialTurnActivity = await detectSessionTurnActivity({
       token: params.credentials.token,
-      sessionId: sessionTarget.sessionId,
+      sessionId: sessionId,
       encryptionMode: sessionTarget.mode,
       encryptionKey: sessionTarget.ctx.encryptionKey,
       encryptionVariant: sessionTarget.ctx.encryptionVariant,
@@ -330,7 +360,7 @@ export async function sendSessionMessage(params: Readonly<{
 
     await waitForIdleViaSocket({
       token: params.credentials.token,
-      sessionId: sessionTarget.sessionId,
+      sessionId: sessionId,
       ctx: sessionTarget.ctx,
       sessionEncryptionMode: sessionTarget.mode,
       timeoutMs: Math.max(1, deadlineMs - Date.now()),
@@ -338,7 +368,7 @@ export async function sendSessionMessage(params: Readonly<{
       recheckTurnActivity: async () =>
         detectSessionTurnActivity({
           token: params.credentials.token,
-          sessionId: sessionTarget.sessionId,
+          sessionId: sessionId,
           encryptionMode: sessionTarget.mode,
           encryptionKey: sessionTarget.ctx.encryptionKey,
           encryptionVariant: sessionTarget.ctx.encryptionVariant,
@@ -349,7 +379,7 @@ export async function sendSessionMessage(params: Readonly<{
     });
     return {
       ok: true,
-      sessionId: sessionTarget.sessionId,
+      sessionId: sessionId,
       localId,
       waited: true,
     };

@@ -41,7 +41,12 @@ type CreateSessionTurnLifecycleParams = Readonly<{
     enqueueSessionTurn: (mutation: SessionTurnMutationV1) => Promise<void>;
     createId?: () => string;
     now?: () => number;
-    onTurnLifecycleEvent?: (event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled') => void;
+    onTurnLifecycleEvent?: (
+        event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled',
+        // REV-1: failTurn / turn_failed markers emit `assistant_message_end` too; the
+        // terminal status lets daemon consumers distinguish completion from failure.
+        terminalStatus?: 'completed' | 'failed',
+    ) => void;
 }>;
 
 function normalizeOptionalString(value: string | null | undefined): string | undefined {
@@ -123,9 +128,12 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
     let lastTerminalTurn: MutableTurn | null = null;
     const terminalWrites = new Set<string>();
 
-    function emitTurnLifecycleEvent(event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled'): void {
+    function emitTurnLifecycleEvent(
+        event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled',
+        terminalStatus?: 'completed' | 'failed',
+    ): void {
         try {
-            params.onTurnLifecycleEvent?.(event);
+            params.onTurnLifecycleEvent?.(event, terminalStatus);
         } catch {
             // Turn lifecycle observer callbacks are best-effort only.
         }
@@ -328,13 +336,26 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
 
     async function completeTurn(input: CompleteTurnInput = {}): Promise<void> {
         const result = terminalTurnSync({ ...input, status: 'completed' });
-        if (result.turn) emitTurnLifecycleEvent('assistant_message_end');
+        if (result.turn) emitTurnLifecycleEvent('assistant_message_end', 'completed');
         await result.pendingWrite;
     }
 
     async function failTurn(input: FailTurnInput): Promise<void> {
+        let allocatedWrite: Promise<void> | null = null;
+        if (!activeTurn && input.allocateWhenIdle) {
+            // Session-scoped failure with no active turn (e.g. host death between
+            // turns): allocate a session-owned turn so the failure surfaces, but do
+            // NOT emit a misleading 'prompt_or_steer' observer event.
+            const begun = beginTurnSync({
+                provider: input.provider,
+                providerTurnId: input.providerTurnId,
+                observedAt: input.observedAt,
+            });
+            allocatedWrite = begun.pendingWrite;
+        }
         const result = terminalTurnSync({ ...input, status: 'failed' });
-        if (result.turn) emitTurnLifecycleEvent('assistant_message_end');
+        if (result.turn) emitTurnLifecycleEvent('assistant_message_end', 'failed');
+        await allocatedWrite;
         await result.pendingWrite;
     }
 
@@ -414,9 +435,14 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
                 pendingWrite: null,
             };
         }
-        emitTurnLifecycleEvent(terminalResult.turn.terminalStatus === 'cancelled'
-            ? 'turn_cancelled'
-            : 'assistant_message_end');
+        if (terminalResult.turn.terminalStatus === 'cancelled') {
+            emitTurnLifecycleEvent('turn_cancelled');
+        } else {
+            emitTurnLifecycleEvent(
+                'assistant_message_end',
+                terminalResult.turn.terminalStatus === 'failed' ? 'failed' : 'completed',
+            );
+        }
         return {
             body: withLifecycleMarkerId(input.body, terminalResult.turn.turnId),
             pendingWrite: terminalResult.pendingWrite,

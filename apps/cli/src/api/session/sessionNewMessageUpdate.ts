@@ -26,6 +26,13 @@ export function handleSessionNewMessageUpdate(params: {
     encryptionKey: Uint8Array;
     encryptionVariant: 'legacy' | 'dataKey';
     receivedMessageIds: Set<string>;
+    /**
+     * Owed-delivery replay authorization: an explicit catch-up may re-process a message id that
+     * was already observed (its live broadcast was received but the row was never handed to the
+     * agent queue, e.g. mid-turn). Downstream echo suppression / pending dedup still prevent
+     * double delivery; without this flag an observed-but-undelivered row can never be recovered.
+     */
+    allowReprocessReceivedMessageIds?: boolean;
     lastObservedMessageSeq: number;
     lastObservedUserMessageSeq: number;
     hasSelfEchoSuppressedLocalId: (localId: string) => boolean;
@@ -36,6 +43,12 @@ export function handleSessionNewMessageUpdate(params: {
     pendingMessageCallback: ((message: UserMessage) => void) | null;
     pendingMessages: UserMessage[];
     shouldDeliverUserMessageToAgentQueue?: (message: UserMessage, update: Update) => boolean;
+    /**
+     * Owed-delivery watermark hook (A-F2/D15b): fired with the message seq whenever a user message
+     * is actually handed to the runner's agent loop, so the watermark can be persisted and resume
+     * catch-up cursors clamped to it.
+     */
+    onUserMessageDeliveredToAgentQueue?: (seq: number) => void;
     onObservedMessage?: (message: {
         body: unknown;
         seq: number | null;
@@ -87,7 +100,7 @@ export function handleSessionNewMessageUpdate(params: {
 
     const messageId = params.update.body.message.id;
     if (typeof messageId === 'string' && messageId.length > 0) {
-        if (params.receivedMessageIds.has(messageId)) {
+        if (params.receivedMessageIds.has(messageId) && params.allowReprocessReceivedMessageIds !== true) {
             return {
                 handled: true,
                 lastObservedMessageSeq: params.lastObservedMessageSeq,
@@ -192,7 +205,17 @@ export function handleSessionNewMessageUpdate(params: {
             if (agentQueueLocalId) {
                 params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
             }
+            if (typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
+                params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+            }
         } else {
+            // An agent-queue echo of a prompt we already handed to the loop locally (daemon initial
+            // prompt, RPC send, pending materialization) proves delivery and carries its seq.
+            const isDeliveredLocalPromptEcho =
+                isEffectivelyAgentQueueEchoSuppressedLocalId || isAlreadyPendingAgentQueueMessage;
+            if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
+                params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+            }
             params.debug('[SOCKET] [UPDATE] Skipped user-message delivery to agent queue', {
                 source: source ?? null,
                 sentFrom: sentFrom ?? null,
@@ -247,7 +270,15 @@ export function handleSessionNewMessageUpdate(params: {
                     if (agentQueueLocalId) {
                         params.markAgentQueueEchoSuppressedLocalId(agentQueueLocalId);
                     }
+                    if (typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
+                        params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+                    }
                 } else {
+                    const isDeliveredLocalPromptEcho =
+                        isAgentQueueEchoSuppressedForDelivery || isAlreadyPendingAgentQueueMessage;
+                    if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
+                        params.onUserMessageDeliveredToAgentQueue?.(msgSeq);
+                    }
                     params.debug('[SOCKET] [UPDATE] Skipped coerced user-message delivery to agent queue', {
                         localId,
                         agentQueueLocalId,

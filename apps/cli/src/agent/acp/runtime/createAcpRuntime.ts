@@ -452,6 +452,13 @@ export function createAcpRuntime(params: {
       updateAgentState?: (updater: (state: AgentState) => AgentState) => Promise<void> | void;
     };
     if (typeof sessionWithAgentState.updateAgentState !== 'function') return;
+    // Lane P (O-design Seam A): publish WHY steering is unavailable. ACP availability tracks the
+    // turn window, so enabled-but-unavailable is an unsafe window; disabled is backend-unsupported.
+    const unavailableReason = !inFlightSteerEnabled
+      ? 'backend_unsupported'
+      : !available
+        ? 'unsafe_window'
+        : null;
     updateAgentStateBestEffort(
       { updateAgentState: sessionWithAgentState.updateAgentState.bind(sessionWithAgentState) },
       (state) => ({
@@ -461,6 +468,8 @@ export function createAcpRuntime(params: {
           inFlightSteer: inFlightSteerEnabled,
           inFlightSteerSupported: inFlightSteerEnabled,
           inFlightSteerAvailable: inFlightSteerEnabled && available,
+          inFlightSteerUnavailableReason: unavailableReason,
+          inFlightSteerStateAt: Date.now(),
         },
       }),
       `[${params.provider}]`,
@@ -1703,7 +1712,7 @@ export function createAcpRuntime(params: {
       const b = await ensureBackend();
 
       const resumeId = typeof opts.resumeId === 'string' ? opts.resumeId.trim() : '';
-      const importHistory = opts.importHistory !== false;
+      const importHistory = opts.importHistory === true;
       if (resumeId) {
         if (!b.loadSession && !b.loadSessionWithReplayCapture) {
           throw new Error(`${params.provider} ACP backend does not support loading sessions`);

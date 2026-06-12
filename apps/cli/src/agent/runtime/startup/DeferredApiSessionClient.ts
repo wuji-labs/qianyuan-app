@@ -15,7 +15,8 @@ export type DeferredApiSessionTarget = Readonly<{
   sendSessionEvent: (event: unknown, id?: string) => void;
   sendClaudeSessionMessage: (message: unknown, meta?: unknown) => void;
   recordClaudeJsonlMessageConsumed?: (message: unknown, meta?: unknown) => void;
-  fetchCommittedClaudeJsonlMessageKeys?: (opts?: { take?: number }) => Promise<ReadonlySet<string>>;
+  fetchCommittedClaudeJsonlMessageBaseline?: (opts?: { take?: number }) => Promise<import('@/backends/claude/utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline>;
+  hasActiveCanonicalTurn?: () => boolean;
   fetchRecentTranscriptTextItemsForAcpImport?: (opts?: { take?: number }) => Promise<Array<{ role: 'user' | 'agent'; text: string }>>;
   sendAgentMessage: (provider: unknown, body: unknown, opts?: unknown) => void;
   sendAgentMessageCommitted: (
@@ -117,12 +118,22 @@ export class DeferredApiSessionClient {
     this.pushBufferedCall((t) => t.sendClaudeSessionMessage(_message, _meta), { hint: 'sendClaudeSessionMessage' });
   }
 
-  async fetchCommittedClaudeJsonlMessageKeys(opts?: { take?: number }): Promise<ReadonlySet<string>> {
+  hasActiveCanonicalTurn(): boolean {
     const target = this.target;
-    if (!target?.fetchCommittedClaudeJsonlMessageKeys) {
-      return new Set();
+    // Unknown state before attach counts as ACTIVE so stale-turn recovery stays fail-closed.
+    return target?.hasActiveCanonicalTurn?.() ?? true;
+  }
+
+  async fetchCommittedClaudeJsonlMessageBaseline(
+    opts?: { take?: number },
+  ): Promise<import('@/backends/claude/utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline> {
+    const target = this.target;
+    if (!target?.fetchCommittedClaudeJsonlMessageBaseline) {
+      // Fail CLOSED (Lane N4): without an attached client the committed baseline is UNKNOWN,
+      // not empty. Callers must not replay history as new on this signal.
+      throw new Error('Session client is not ready to load the committed Claude JSONL baseline');
     }
-    return target.fetchCommittedClaudeJsonlMessageKeys(opts);
+    return target.fetchCommittedClaudeJsonlMessageBaseline(opts);
   }
 
   recordClaudeJsonlMessageConsumed(_message: unknown, _meta?: unknown): void {

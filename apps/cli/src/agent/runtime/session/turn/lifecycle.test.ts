@@ -177,38 +177,44 @@ describe('SessionTurnLifecycle', () => {
         ]);
     });
 
-    it('emits turn lifecycle callbacks for start, boundary completion, and cancellation', async () => {
-        const events: string[] = [];
+    it('emits turn lifecycle callbacks for start, boundary completion, failure, and cancellation', async () => {
+        const events: Array<readonly [string, string | undefined]> = [];
         const lifecycle = createSessionTurnLifecycle({
             sessionId: 's1',
             createId: () => 'turn-callback',
             enqueueSessionTurn: async () => {},
-            onTurnLifecycleEvent: (event) => {
-                events.push(event);
+            onTurnLifecycleEvent: (event, terminalStatus) => {
+                events.push([event, terminalStatus]);
             },
         });
 
         await lifecycle.beginTurn({ provider: 'codex' });
         await lifecycle.completeTurn({ provider: 'codex' });
         await lifecycle.beginTurn({ provider: 'codex' });
+        await lifecycle.failTurn({ provider: 'codex' });
+        await lifecycle.beginTurn({ provider: 'codex' });
         await lifecycle.cancelTurn({ provider: 'codex' });
 
         expect(events).toEqual([
-            'prompt_or_steer',
-            'assistant_message_end',
-            'prompt_or_steer',
-            'turn_cancelled',
+            ['prompt_or_steer', undefined],
+            // REV-1: completed vs failed turns share the boundary event but must be
+            // distinguishable downstream (failed turns are not supersession/activity proof).
+            ['assistant_message_end', 'completed'],
+            ['prompt_or_steer', undefined],
+            ['assistant_message_end', 'failed'],
+            ['prompt_or_steer', undefined],
+            ['turn_cancelled', undefined],
         ]);
     });
 
     it('emits turn lifecycle callbacks for ACP task markers from resumed provider work', async () => {
-        const events: string[] = [];
+        const events: Array<readonly [string, string | undefined]> = [];
         const lifecycle = createSessionTurnLifecycle({
             sessionId: 's1',
             createId: () => 'provider-marker',
             enqueueSessionTurn: async () => {},
-            onTurnLifecycleEvent: (event) => {
-                events.push(event);
+            onTurnLifecycleEvent: (event, terminalStatus) => {
+                events.push([event, terminalStatus]);
             },
         });
 
@@ -222,9 +228,74 @@ describe('SessionTurnLifecycle', () => {
         });
 
         expect(events).toEqual([
-            'task_started',
-            'assistant_message_end',
+            ['task_started', undefined],
+            ['assistant_message_end', 'failed'],
         ]);
+    });
+
+    it('allocates and fails a session-owned turn for an idle session-scoped failure when opted in (silent host-death fix, incident cmq8y3nlx)', async () => {
+        const mutations: SessionTurnMutationV1[] = [];
+        const events: Array<readonly [string, string | undefined]> = [];
+        const lifecycle = createSessionTurnLifecycle({
+            sessionId: 's1',
+            createId: () => 'idle-host-death',
+            now: () => 991,
+            enqueueSessionTurn: async (mutation) => {
+                mutations.push(mutation);
+            },
+            onTurnLifecycleEvent: (event, terminalStatus) => {
+                events.push([event, terminalStatus]);
+            },
+        });
+
+        const issue = {
+            v: 1,
+            scope: 'primary_session',
+            status: 'failed',
+            code: 'provider_process_exit',
+            source: 'provider_process_exit',
+            occurredAt: 991,
+            sanitizedPreview: 'Provider process exited',
+        } as const;
+
+        await lifecycle.failTurn({ provider: 'claude', issue, allocateWhenIdle: true });
+
+        expect(mutations).toEqual([
+            expect.objectContaining({
+                action: 'begin',
+                turnId: 'session-turn:idle-host-death',
+                provider: 'claude',
+            }),
+            expect.objectContaining({
+                action: 'fail',
+                turnId: 'session-turn:idle-host-death',
+                provider: 'claude',
+                issue,
+            }),
+        ]);
+        // No misleading turn-start signal for daemon observers; only the failed boundary.
+        expect(events).toEqual([
+            ['assistant_message_end', 'failed'],
+        ]);
+        expect(lifecycle.hasActiveTurn()).toBe(false);
+    });
+
+    it('fails the active turn normally when allocation is requested while a turn is open', async () => {
+        const mutations: SessionTurnMutationV1[] = [];
+        const lifecycle = createSessionTurnLifecycle({
+            sessionId: 's1',
+            createId: () => 'active-turn',
+            now: () => 992,
+            enqueueSessionTurn: async (mutation) => {
+                mutations.push(mutation);
+            },
+        });
+
+        const handle = await lifecycle.beginTurn({ provider: 'claude' });
+        await lifecycle.failTurn({ provider: 'claude', allocateWhenIdle: true });
+
+        expect(mutations.map((mutation) => mutation.action)).toEqual(['begin', 'fail']);
+        expect(mutations[1]).toMatchObject({ turnId: handle.turnId });
     });
 
     it('does not emit boundary callbacks when there is no active lifecycle turn', async () => {

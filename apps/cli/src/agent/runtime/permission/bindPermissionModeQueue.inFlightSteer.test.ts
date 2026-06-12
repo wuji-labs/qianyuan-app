@@ -335,3 +335,225 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     );
   });
 });
+
+describe('registerPermissionModeMessageQueueBinding (in-flight config-delta apply, lane Q)', () => {
+  it('applies the permission-mode delta in-flight then steers the text when the controller supports it', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    const calls: string[] = [];
+    const steerText = vi.fn(async () => {
+      calls.push('steerText');
+    });
+    const applyConfigDeltaInFlight = vi.fn(async (delta: { permissionMode: string }) => {
+      calls.push(`applyConfig:${delta.permissionMode}`);
+      return { status: 'applied' } as const;
+    });
+
+    registerPermissionModeMessageQueueBinding({
+      session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight,
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'mode change steer' }, meta: { permissionMode: 'read-only' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(calls).toEqual(['applyConfig:read-only', 'steerText']);
+    expect(steerText).toHaveBeenCalledWith('mode change steer');
+    expect(spyPush).not.toHaveBeenCalled();
+  });
+
+  it('steers the text when the config apply reports scheduled_in_turn', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    const steerText = vi.fn(async () => {});
+
+    registerPermissionModeMessageQueueBinding({
+      session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight: vi.fn(async () => ({ status: 'scheduled_in_turn' } as const)),
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'scheduled mode steer' }, meta: { permissionMode: 'read-only' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(steerText).toHaveBeenCalledWith('scheduled mode steer');
+    expect(spyPush).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the queue (legacy behavior) when the config apply reports unsupported', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    let agentState: any = {};
+    (session as any).updateAgentState = (updater: (current: any) => any) => {
+      agentState = updater(agentState);
+    };
+    const { queue, spyPush } = createQueue();
+
+    const steerText = vi.fn(async () => {});
+
+    registerPermissionModeMessageQueueBinding({
+      session: session as any,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight: vi.fn(async () => ({ status: 'unsupported', reason: 'no_window' } as const)),
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'mode change' }, meta: { permissionMode: 'read-only' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(steerText).not.toHaveBeenCalled();
+    expect(spyPush).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'mode change' }),
+      { permissionMode: 'read-only' },
+    );
+    // Not a bounce: the steer was never accepted, so no unsafe_window corrective publish.
+    expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBeUndefined();
+  });
+
+  it('falls back to the queue when the config apply throws', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    const steerText = vi.fn(async () => {});
+
+    registerPermissionModeMessageQueueBinding({
+      session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight: vi.fn(async () => {
+          throw new Error('apply transport failed');
+        }),
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'mode change' }, meta: { permissionMode: 'read-only' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(steerText).not.toHaveBeenCalled();
+    expect(spyPush).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'mode change' }),
+      { permissionMode: 'read-only' },
+    );
+  });
+
+  it('never routes special commands through the config-apply capability', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyIsolate } = createQueue();
+
+    const steerText = vi.fn(async () => {});
+    const applyConfigDeltaInFlight = vi.fn(async () => ({ status: 'applied' } as const));
+
+    registerPermissionModeMessageQueueBinding({
+      session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight,
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: '/clear' }, meta: { permissionMode: 'read-only' } });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(applyConfigDeltaInFlight).not.toHaveBeenCalled();
+    expect(steerText).not.toHaveBeenCalled();
+    expect(spyIsolate).toHaveBeenCalled();
+  });
+
+  it('does not call the capability for messages without a mode change', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    const { queue, spyPush } = createQueue();
+
+    const steerText = vi.fn(async () => {});
+    const applyConfigDeltaInFlight = vi.fn(async () => ({ status: 'applied' } as const));
+
+    registerPermissionModeMessageQueueBinding({
+      session,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText,
+        applyConfigDeltaInFlight,
+      },
+    } as any);
+
+    emitUserMessage({ content: { text: 'plain steer' }, meta: {} });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(applyConfigDeltaInFlight).not.toHaveBeenCalled();
+    expect(steerText).toHaveBeenCalledWith('plain steer');
+    expect(spyPush).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerPermissionModeMessageQueueBinding (steer-bounce corrective publish, lane P)', () => {
+  it('publishes unsafe_window to agentState when a steer the runner accepted bounces back to the queue', async () => {
+    const { session, emitUserMessage } = createSessionHarness();
+    let agentState: any = {};
+    (session as any).updateAgentState = (updater: (current: any) => any) => {
+      agentState = updater(agentState);
+    };
+    const { queue, spyPush } = createQueue();
+
+    registerPermissionModeMessageQueueBinding({
+      session: session as any,
+      queue,
+      getCurrentPermissionMode: () => 'default',
+      setCurrentPermissionMode: () => {},
+      inFlightSteer: {
+        isTurnInFlight: () => true,
+        supportsInFlightSteer: () => true,
+        steerText: vi.fn(async () => {
+          throw new Error('steer transport failed');
+        }),
+      },
+    });
+
+    emitUserMessage({ content: { text: 'steer me' }, meta: {} });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spyPush).toHaveBeenCalled();
+    expect(agentState.capabilities?.inFlightSteerAvailable).toBe(false);
+    expect(agentState.capabilities?.inFlightSteerUnavailableReason).toBe('unsafe_window');
+    expect(typeof agentState.capabilities?.inFlightSteerStateAt).toBe('number');
+  });
+});

@@ -125,6 +125,7 @@ export const HappierStructuredInputV1EnvelopeSchema = z.object({
   v: z.literal(1).default(1),
   vendorPluginMentions: z.array(z.record(z.string(), z.unknown())).optional(),
   skillMentions: z.array(z.record(z.string(), z.unknown())).optional(),
+  imageInputs: z.array(z.record(z.string(), z.unknown())).optional(),
   attachments: z.array(z.record(z.string(), z.unknown())).optional(),
 }).passthrough();
 export type HappierStructuredInputV1Envelope = z.infer<typeof HappierStructuredInputV1EnvelopeSchema>;
@@ -138,6 +139,7 @@ export function sanitizeHappierStructuredInputV1(
 
   const vendorPluginMentions = asRecordArray(envelope.vendorPluginMentions);
   const skillMentions = asRecordArray(envelope.skillMentions);
+  const imageInputs = sanitizeStructuredAttachments(envelope.imageInputs, options);
   const attachments = sanitizeStructuredAttachments(envelope.attachments, options);
   const sanitized: MetadataRecord = {
     ...envelope,
@@ -152,6 +154,11 @@ export function sanitizeHappierStructuredInputV1(
     sanitized.skillMentions = skillMentions;
   } else {
     delete sanitized.skillMentions;
+  }
+  if (imageInputs.length > 0) {
+    sanitized.imageInputs = imageInputs;
+  } else {
+    delete sanitized.imageInputs;
   }
   if (attachments.length > 0) {
     sanitized.attachments = attachments;

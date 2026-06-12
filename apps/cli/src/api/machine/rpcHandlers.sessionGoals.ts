@@ -260,6 +260,7 @@ async function executeUsageLimitRecoveryControl(params: Readonly<{
       sessionId: parsed.data.sessionId,
       ...(typeof parsed.data.issueFingerprint === 'string' ? { issueFingerprint: parsed.data.issueFingerprint } : {}),
       ...(remember ? { remember: true } : {}),
+      ...(parsed.data.resumePromptMode ? { resumePromptMode: parsed.data.resumePromptMode } : {}),
       deps: params.deps,
     });
   }
@@ -285,6 +286,7 @@ async function executeUsageLimitRecoveryControl(params: Readonly<{
     operation: effectiveOperation,
     sessionId: parsed.data.sessionId,
     ...(typeof parsed.data.provider === 'string' ? { provider: parsed.data.provider } : {}),
+    ...(parsed.data.resumePromptMode ? { resumePromptMode: parsed.data.resumePromptMode } : {}),
     deps: params.deps,
   });
 }
@@ -295,6 +297,7 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
   issueFingerprint?: string | null;
   remember?: boolean;
   provider?: string;
+  resumePromptMode?: 'standard' | 'off' | 'custom';
   deps?: RegisterMachineSessionGoalRpcHandlersDeps;
 }>): Promise<unknown> {
   const credentials = await (params.deps?.readCredentials ?? readCredentials)();
@@ -346,6 +349,7 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
         sessionId: transport.sessionId,
         ...(typeof params.issueFingerprint === 'string' ? { issueFingerprint: params.issueFingerprint } : {}),
         ...(params.remember === true ? { remember: true } : {}),
+        ...(params.resumePromptMode ? { resumePromptMode: params.resumePromptMode } : {}),
       })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
     return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
@@ -364,6 +368,7 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
       ? await actionDeps.sessionUsageLimitSwitchAccountNow({
         sessionId: transport.sessionId,
         ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
+        ...(params.resumePromptMode ? { resumePromptMode: params.resumePromptMode } : {}),
       })
       : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
     return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });
@@ -372,6 +377,7 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
     ? await actionDeps.sessionUsageLimitCheckNow({
       sessionId: transport.sessionId,
       ...(typeof params.provider === 'string' ? { provider: params.provider } : {}),
+      ...(params.resumePromptMode ? { resumePromptMode: params.resumePromptMode } : {}),
     })
     : { ok: false, errorCode: 'action_not_supported', error: 'action_not_supported' };
   return normalizeUsageLimitRecoveryMachineResult({ sessionId: transport.sessionId, result });

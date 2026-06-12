@@ -5,6 +5,7 @@ import {
   ConnectedServiceIdSchema,
   ConnectedServiceProfileIdSchema,
 } from '../../connect/connectedServiceSchemas.js';
+import { ConnectedServiceLimitCategoryV1Schema } from '../../connect/connectedServiceLimitCategory.js';
 
 export const TurnTerminalStatusV1Schema = z.enum(['completed', 'cancelled', 'failed']);
 export type TurnTerminalStatusV1 = z.infer<typeof TurnTerminalStatusV1Schema>;
@@ -54,17 +55,6 @@ const SessionRuntimeUsageLimitActionV1Schema = z.discriminatedUnion('kind', [
   }).strict(),
 ]);
 
-const SessionRuntimeLimitCategoryV1Schema = z.enum([
-  'quota',
-  'rate_limit',
-  'capacity',
-  'auth',
-  'plan',
-  'validation',
-  'account_disabled',
-  'unknown',
-]);
-
 const SessionRuntimeQuotaSnapshotRefV1Schema = z
   .object({
     serviceId: ConnectedServiceIdSchema,
@@ -94,7 +84,7 @@ export const SessionRuntimeUsageLimitDetailsV1Schema = z
     providerLimitId: z.string().trim().min(1).optional(),
     planType: z.string().trim().min(1).nullable().optional(),
     utilization: z.number().finite().min(0).max(100).nullable().optional(),
-    limitCategory: SessionRuntimeLimitCategoryV1Schema.optional(),
+    limitCategory: ConnectedServiceLimitCategoryV1Schema.optional(),
     quotaSnapshotRef: SessionRuntimeQuotaSnapshotRefV1Schema.optional(),
     effectiveMeterId: z.string().trim().min(1).optional(),
     effectiveRemainingPct: z.number().finite().min(0).max(100).optional(),

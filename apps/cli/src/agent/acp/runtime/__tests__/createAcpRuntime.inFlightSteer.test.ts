@@ -163,3 +163,49 @@ describe('createAcpRuntime (in-flight steer)', () => {
     await runtime.flushTurn();
   });
 });
+
+describe('createAcpRuntime (in-flight steer unavailable-reason seam, lane P)', () => {
+  function createRuntimeWithStateCapture(enabled: boolean) {
+    const backend = createFakeAcpRuntimeBackend({ sessionId: 'sess_1' }) as any;
+    backend.sendSteerPrompt = vi.fn(async () => {});
+    let state: any = {};
+    const session = createBasicSessionClientWithOverrides({
+      updateAgentState: ((updater: any) => {
+        state = updater(state);
+      }) as any,
+    } as any);
+    const runtime = createAcpRuntime({
+      provider: 'codex',
+      directory: '/tmp',
+      session,
+      messageBuffer: new MessageBuffer(),
+      mcpServers: {},
+      permissionHandler: createApprovedPermissionHandler(),
+      onThinkingChange: () => {},
+      ensureBackend: async () => backend,
+      inFlightSteer: { enabled },
+    } as any);
+    return { runtime, getState: () => state };
+  }
+
+  it('publishes backend_unsupported when in-flight steer is disabled', () => {
+    const { getState } = createRuntimeWithStateCapture(false);
+    expect(getState().capabilities?.inFlightSteerUnavailableReason).toBe('backend_unsupported');
+    expect(typeof getState().capabilities?.inFlightSteerStateAt).toBe('number');
+  });
+
+  it('publishes unsafe_window between turns and clears the reason while a turn is in flight', async () => {
+    const { runtime, getState } = createRuntimeWithStateCapture(true);
+
+    expect(getState().capabilities?.inFlightSteerAvailable).toBe(false);
+    expect(getState().capabilities?.inFlightSteerUnavailableReason).toBe('unsafe_window');
+
+    runtime.beginTurn();
+    expect(getState().capabilities?.inFlightSteerAvailable).toBe(true);
+    expect(getState().capabilities?.inFlightSteerUnavailableReason ?? null).toBeNull();
+
+    await runtime.flushTurn();
+    expect(getState().capabilities?.inFlightSteerAvailable).toBe(false);
+    expect(getState().capabilities?.inFlightSteerUnavailableReason).toBe('unsafe_window');
+  });
+});

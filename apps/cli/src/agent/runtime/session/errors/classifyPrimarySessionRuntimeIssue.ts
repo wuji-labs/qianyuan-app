@@ -4,7 +4,7 @@ import type {
   SessionRuntimeIssueSourceV1,
   SessionRuntimeIssueV1,
 } from '@happier-dev/protocol';
-import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
+import { ConnectedServiceIdSchema, readConnectedServiceLimitCategoryV1 } from '@happier-dev/protocol';
 
 import { classifyProviderLimitEvidence } from '@/daemon/connectedServices/quotas/normalization';
 
@@ -81,7 +81,7 @@ function refineStatusErrorSource(input: ClassifyPrimarySessionRuntimeIssueInput)
     return 'dependency_failure';
   }
   const providerLimitCategory = classifyProviderLimitEvidence(input.error);
-  if (providerLimitCategory === 'quota' || providerLimitCategory === 'rate_limit') {
+  if (providerLimitCategory === 'usage_limit' || providerLimitCategory === 'rate_limit') {
     return 'usage_limit';
   }
   if (providerLimitCategory !== 'unknown') {
@@ -171,21 +171,11 @@ function normalizeUrl(value: unknown): string | null {
 function readStableRetryTimeResetAtMs(text: string, nowMs: number): number | null {
   const match = /\btry\s+again\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b/iu.exec(text);
   if (!match) return null;
-  const rawHour = Number(match[1]);
-  const minute = Number(match[2] ?? '00');
-  const period = match[3]?.toUpperCase();
-  if (!Number.isInteger(rawHour) || !Number.isInteger(minute)) return null;
-  if (rawHour < 1 || rawHour > 12 || minute < 0 || minute > 59) return null;
-
-  let hour = rawHour % 12;
-  if (period === 'PM') hour += 12;
-  const candidate = new Date(nowMs);
-  candidate.setHours(hour, minute, 0, 0);
-  if (candidate.getTime() <= nowMs) {
-    candidate.setDate(candidate.getDate() + 1);
-  }
-  const parsed = candidate.getTime();
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  void nowMs;
+  // Provider wall-clock text does not include a timezone/offset. Treat it as
+  // advisory instead of assuming the daemon host timezone and arming a durable
+  // reset at the wrong instant.
+  return null;
 }
 
 function buildUsageLimitDetailsFromStableText(
@@ -303,7 +293,9 @@ function buildUsageLimitDetailsFromRuntimeAuthClassification(
   const profileId = normalizeNonEmptyString(classification.profileId);
   const rateLimits = readRecord(classification.rateLimits);
   const providerLimitId = normalizeNonEmptyString(classification.providerLimitId ?? rateLimits?.providerLimitId);
-  const limitCategory = normalizeNonEmptyString(classification.limitCategory ?? rateLimits?.limitCategory);
+  const limitCategory = readConnectedServiceLimitCategoryV1(
+    classification.limitCategory ?? rateLimits?.limitCategory,
+  );
   const quotaScope = normalizeNonEmptyString(classification.quotaScope ?? rateLimits?.quotaScope);
   const action = readRecord(classification.action) ?? readRecord(rateLimits?.action);
   const actionKind = normalizeNonEmptyString(action?.kind);
@@ -316,16 +308,7 @@ function buildUsageLimitDetailsFromRuntimeAuthClassification(
       ? quotaScope
       : 'account',
     recoverability: groupId ? 'switch_account' : 'wait',
-    ...(limitCategory === 'quota'
-      || limitCategory === 'rate_limit'
-      || limitCategory === 'capacity'
-      || limitCategory === 'auth'
-      || limitCategory === 'plan'
-      || limitCategory === 'validation'
-      || limitCategory === 'account_disabled'
-      || limitCategory === 'unknown'
-      ? { limitCategory }
-      : {}),
+    ...(limitCategory ? { limitCategory } : {}),
     ...(providerLimitId ? { providerLimitId } : {}),
     planType: normalizeNonEmptyString(classification.planType),
     ...(actionKind === 'open_url' && actionUrl ? { action: { kind: 'open_url', url: actionUrl } } : {}),

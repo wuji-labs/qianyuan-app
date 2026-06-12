@@ -55,6 +55,93 @@ describe('handleSessionNewMessageUpdate', () => {
     expect(emitted.some((e: any) => e.event === 'user-message')).toBe(false);
   });
 
+  it('explicit owed catch-up replays a user row whose id was already observed but never delivered', () => {
+    const pendingMessages: any[] = [];
+    const emitted: any[] = [];
+    const receivedMessageIds = new Set<string>(['m6']);
+    const update = {
+      id: 'catchup-m6',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm6',
+          seq: 6,
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: '/context' } } },
+          localId: 'local-6',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds,
+      allowReprocessReceivedMessageIds: true,
+      lastObservedMessageSeq: 6,
+      lastObservedUserMessageSeq: 5,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: null,
+      pendingMessages,
+      emit: (event, payload) => emitted.push({ event, payload }),
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(pendingMessages).toHaveLength(1);
+  });
+
+  it('without reprocess authorization an already-observed id stays deduped', () => {
+    const pendingMessages: any[] = [];
+    const update = {
+      id: 'u-dup',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm6',
+          seq: 6,
+          content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'dup' } } },
+          localId: 'local-6',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(['m6']),
+      lastObservedMessageSeq: 6,
+      lastObservedUserMessageSeq: 5,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: null,
+      pendingMessages,
+      emit: () => void 0,
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(pendingMessages).toHaveLength(0);
+  });
+
   it('delivers legacy string user prompts to the agent queue', () => {
     const pendingMessages: any[] = [];
     const emitted: any[] = [];
@@ -322,5 +409,127 @@ describe('handleSessionNewMessageUpdate', () => {
 
     expect(pendingMessages).toHaveLength(0);
     expect(emitted.some((e: any) => e.event === 'user-message')).toBe(true);
+  });
+
+  function buildUserMessageUpdate(content: unknown, seq: number | null = 5): Update {
+    return {
+      id: 'u-delivered',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: `m-delivered-${String(seq)}`,
+          seq,
+          content: { t: 'plain', v: content },
+          localId: null,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+  }
+
+  function runWithDeliveredHook(update: Update, overrides: Partial<Parameters<typeof handleSessionNewMessageUpdate>[0]> = {}) {
+    const delivered: number[] = [];
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(),
+      lastObservedMessageSeq: 0,
+      lastObservedUserMessageSeq: 0,
+      hasSelfEchoSuppressedLocalId: () => false,
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: () => void 0,
+      pendingMessages: [],
+      onUserMessageDeliveredToAgentQueue: (seq) => delivered.push(seq),
+      emit: () => void 0,
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+      ...overrides,
+    });
+    return delivered;
+  }
+
+  describe('onUserMessageDeliveredToAgentQueue (owed-delivery watermark, A-F2/D15b)', () => {
+    it('reports the seq when a structured user message is delivered to the agent queue', () => {
+      const delivered = runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: { type: 'text', text: 'hi' } }, 7),
+      );
+      expect(delivered).toEqual([7]);
+    });
+
+    it('reports the seq when a coerced legacy user prompt is delivered to the agent queue', () => {
+      const delivered = runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: 'hello legacy' }, 9),
+      );
+      expect(delivered).toEqual([9]);
+    });
+
+    it('does not report when delivery to the agent queue is suppressed', () => {
+      const delivered = runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: { type: 'text', text: 'hi' } }, 7),
+        { shouldDeliverUserMessageToAgentQueue: () => false },
+      );
+      expect(delivered).toEqual([]);
+    });
+
+    it('does not report when the message has no usable seq', () => {
+      const delivered = runWithDeliveredHook(
+        buildUserMessageUpdate({ role: 'user', content: { type: 'text', text: 'hi' } }, null),
+      );
+      expect(delivered).toEqual([]);
+    });
+
+    it('reports the seq for an agent-queue echo of a locally delivered prompt (daemon initial prompt / RPC send)', () => {
+      const update = {
+        id: 'u-echo',
+        createdAt: Date.now(),
+        body: {
+          t: 'new-message',
+          sid: 'sess_1',
+          message: {
+            id: 'm-echo-1',
+            seq: 11,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hi' }, localId: 'local-1' } },
+            localId: 'local-1',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        },
+      } as unknown as Update;
+      const delivered = runWithDeliveredHook(update, {
+        hasAgentQueueEchoSuppressedLocalId: () => true,
+      });
+      expect(delivered).toEqual([11]);
+    });
+
+    it('does not report for a self-echo CLI transcript write (never handed to the agent loop)', () => {
+      const update = {
+        id: 'u-cli-echo',
+        createdAt: Date.now(),
+        body: {
+          t: 'new-message',
+          sid: 'sess_1',
+          message: {
+            id: 'm-cli-1',
+            seq: 12,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'hi' }, localId: 'cli-1', meta: { source: 'cli' } } },
+            localId: 'cli-1',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        },
+      } as unknown as Update;
+      const delivered = runWithDeliveredHook(update, {
+        hasSelfEchoSuppressedLocalId: () => true,
+      });
+      expect(delivered).toEqual([]);
+    });
   });
 });

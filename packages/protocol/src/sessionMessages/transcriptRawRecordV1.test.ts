@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   TranscriptRawAgentEventV1Schema,
   TranscriptRawRecordV1Schema,
+  type RuntimeConfigOutcomeChangeKeyV1,
+  type RuntimeConfigOutcomeStatusV1,
+  type RuntimeConfigOutcomeTimingV1,
 } from './transcriptRawRecordV1.js';
 
 describe('TranscriptRawRecordV1Schema', () => {
@@ -197,6 +200,40 @@ describe('TranscriptRawRecordV1Schema', () => {
       },
     });
     expect(completed.success).toBe(true);
+  });
+
+  it('parses runtime config outcome observability events', () => {
+    const parsed = TranscriptRawRecordV1Schema.safeParse({
+      role: 'agent',
+      content: {
+        type: 'event',
+        id: 'event-runtime-config-outcome',
+        data: {
+          type: 'runtime-config-outcome',
+          provider: 'claude',
+          runtime: 'claude-unified-terminal',
+          status: 'requires_restart',
+          reason: 'unified_terminal_launch_options_changed',
+          message: 'Claude unified terminal is already running. Model changes apply when Claude restarts.',
+          changes: [
+            { key: 'model', requested: 'claude-opus-4-7', previous: 'claude-opus-4-6' },
+            { key: 'reasoningEffort', requested: 'max', previous: 'low' },
+          ],
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success && parsed.data.content.type === 'event') {
+      expect(parsed.data.content.data).toMatchObject({
+        type: 'runtime-config-outcome',
+        status: 'requires_restart',
+        changes: [
+          { key: 'model' },
+          { key: 'reasoningEffort' },
+        ],
+      });
+    }
   });
 
   it('parses paused continuation metadata for completed context compaction records', () => {
@@ -827,5 +864,138 @@ describe('TranscriptRawRecordV1Schema', () => {
 
     expect(parsed.success).toBe(true);
     expect((parsed.success ? (parsed.data as any).content.data.message.usage : null)).toBeUndefined();
+  });
+});
+
+describe('runtime-config-outcome timing and sessionMode contract', () => {
+  const baseEvent = {
+    type: 'runtime-config-outcome' as const,
+    provider: 'claude',
+    runtime: 'claude-unified-terminal',
+    status: 'applied' as const,
+    message: 'Runtime config outcome.',
+  };
+
+  it('exposes the frozen public status, timing, and change-key type members', () => {
+    const statuses: RuntimeConfigOutcomeStatusV1[] = [
+      'applied',
+      'requires_restart',
+      'requires_interactive_control',
+      'unsupported',
+      'failed',
+    ];
+    const timings: RuntimeConfigOutcomeTimingV1[] = [
+      'current_window',
+      'queued_until_safe_window',
+      'scheduled_for_next_prompt',
+      'next_idle',
+      'before_next_prompt',
+      'skipped_already_effective',
+      'not_applicable',
+    ];
+    const changeKeys: RuntimeConfigOutcomeChangeKeyV1[] = [
+      'model',
+      'fallbackModel',
+      'permissionMode',
+      'reasoningEffort',
+      'maxThinkingTokens',
+      'launchOption',
+      'sessionMode',
+    ];
+
+    expect(statuses).toHaveLength(5);
+    expect(timings).toHaveLength(7);
+    expect(changeKeys).toContain('sessionMode');
+  });
+
+  it('round-trips an optional timing field when present and accepts it when absent', () => {
+    const withTiming = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      message: 'Model scheduled for the next prompt.',
+      timing: 'scheduled_for_next_prompt',
+    });
+    expect(withTiming.success).toBe(true);
+    if (!withTiming.success) throw new Error('expected parse success');
+    expect(withTiming.data).toMatchObject({ timing: 'scheduled_for_next_prompt' });
+
+    const withoutTiming = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      message: 'Model applied in the current window.',
+    });
+    expect(withoutTiming.success).toBe(true);
+    if (!withoutTiming.success) throw new Error('expected parse success');
+    expect((withoutTiming.data as Record<string, unknown>).timing).toBeUndefined();
+  });
+
+  it('accepts every public timing value and rejects unknown timing values', () => {
+    const validTimings: RuntimeConfigOutcomeTimingV1[] = [
+      'current_window',
+      'queued_until_safe_window',
+      'scheduled_for_next_prompt',
+      'next_idle',
+      'before_next_prompt',
+      'skipped_already_effective',
+      'not_applicable',
+    ];
+
+    for (const timing of validTimings) {
+      const parsed = TranscriptRawAgentEventV1Schema.safeParse({ ...baseEvent, timing });
+      expect(parsed.success).toBe(true);
+    }
+
+    const unknownTiming = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      timing: 'eventually_maybe',
+    });
+    expect(unknownTiming.success).toBe(false);
+  });
+
+  it('passes through unknown top-level keys on runtime-config-outcome events (back-compat property)', () => {
+    // The event object is `.passthrough()`, so clients running an older schema strip
+    // unknown top-level keys instead of rejecting the event. This is exactly what makes
+    // adding the new optional top-level `timing` field forward/back-compatible.
+    const parsed = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      message: 'Forward-compatible top-level field.',
+      someFutureTopLevelField: { nested: true },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('expected parse success');
+    expect((parsed.data as Record<string, unknown>).someFutureTopLevelField).toEqual({ nested: true });
+  });
+
+  it('accepts a sessionMode change key', () => {
+    const parsed = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      message: 'Session mode updated.',
+      timing: 'current_window',
+      changes: [{ key: 'sessionMode', requested: 'plan', previous: 'default' }],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('expected parse success');
+    expect(parsed.data).toMatchObject({
+      changes: [{ key: 'sessionMode', requested: 'plan', previous: 'default' }],
+    });
+  });
+
+  it('keeps the five public statuses frozen and rejects timing-shaped status values', () => {
+    const applied = TranscriptRawAgentEventV1Schema.safeParse({ ...baseEvent, status: 'applied' });
+    expect(applied.success).toBe(true);
+
+    // A timing value must never leak into the status enum.
+    const queuedStatus = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      status: 'queued_until_safe_window',
+    });
+    expect(queuedStatus.success).toBe(false);
+  });
+
+  it('rejects unknown change keys (changes are strict)', () => {
+    const parsed = TranscriptRawAgentEventV1Schema.safeParse({
+      ...baseEvent,
+      changes: [{ key: 'sessionGoal', requested: 'x' }],
+    });
+    expect(parsed.success).toBe(false);
   });
 });

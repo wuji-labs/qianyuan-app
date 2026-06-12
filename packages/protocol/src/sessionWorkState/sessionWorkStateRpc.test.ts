@@ -12,6 +12,7 @@ import {
             SessionUsageLimitWaitResumeCancelRequestV1Schema,
     SessionUsageLimitWaitResumeEnableRequestV1Schema,
     SessionGoalSetRequestV1Schema,
+    SessionSkillCatalogListResponseV1Schema,
     SessionVendorPluginCatalogListResponseV1Schema,
     SessionWorkStateGetResponseV1Schema,
 } from './sessionWorkStateRpc.js';
@@ -75,6 +76,47 @@ describe('session work-state RPC contracts', () => {
         expect(SessionVendorPluginCatalogListResponseV1Schema.parse({
             vendorPlugins: [{ vendorPluginRef: 'plugin://gmail@openai-curated', name: 'gmail', enabled: true }],
         }).vendorPlugins[0]?.vendorPluginRef).toBe('plugin://gmail@openai-curated');
+        expect(SessionVendorPluginCatalogListResponseV1Schema.parse({
+            catalog: {
+                v: 1,
+                updatedAt: 1_717_000_000_000,
+                items: [
+                    {
+                        v: 1,
+                        vendorPluginRef: 'plugin://review@openai-curated',
+                        displayName: 'Review',
+                        enabled: true,
+                    },
+                ],
+            },
+        }).vendorPlugins[0]).toMatchObject({
+            vendorPluginRef: 'plugin://review@openai-curated',
+            name: 'Review',
+            displayName: 'Review',
+            enabled: true,
+        });
+        expect(SessionSkillCatalogListResponseV1Schema.parse({
+            catalog: {
+                v: 1,
+                updatedAt: 1_717_000_000_000,
+                items: [
+                    {
+                        v: 1,
+                        id: 'vendor:codex:debugger',
+                        origin: 'vendor',
+                        backendId: 'codex',
+                        name: 'debugger',
+                        path: '/skills/debugger/SKILL.md',
+                    },
+                    {
+                        v: 1,
+                        id: 'happier:review',
+                        origin: 'happier',
+                        name: 'review',
+                    },
+                ],
+            },
+        }).skills.map((skill) => skill.origin)).toEqual(['vendor', 'happier']);
         expect(SessionConnectedServiceAuthInvalidateTransportsRequestV1Schema.parse({})).toEqual({});
         expect(SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema.parse({
             ok: true,
@@ -97,10 +139,12 @@ describe('session work-state RPC contracts', () => {
             sessionId: 's1',
             issueFingerprint: 'usage-limit:s1:123',
             rememberPreference: true,
+            resumePromptMode: 'off',
         })).toEqual({
             sessionId: 's1',
             issueFingerprint: 'usage-limit:s1:123',
             rememberPreference: true,
+            resumePromptMode: 'off',
         });
         expect(SessionUsageLimitWaitResumeCancelRequestV1Schema.parse({
             sessionId: 's1',
@@ -120,11 +164,17 @@ describe('session work-state RPC contracts', () => {
             sessionId: 's1',
             provider: ' codex ',
             operation: 'switch_account_now',
+            resumePromptMode: 'off',
         })).toEqual({
             sessionId: 's1',
             provider: 'codex',
             operation: 'switch_account_now',
+            resumePromptMode: 'off',
         });
+        expect(() => SessionUsageLimitCheckNowRequestV1Schema.parse({
+            sessionId: 's1',
+            resumePromptMode: 'sometimes',
+        })).toThrow();
         expect(() => SessionUsageLimitCheckNowRequestV1Schema.parse({
             sessionId: 's1',
             operation: 'not-a-real-operation',

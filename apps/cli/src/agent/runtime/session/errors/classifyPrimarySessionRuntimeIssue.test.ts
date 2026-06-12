@@ -12,7 +12,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
         groupId: string | null;
         resetsAtMs: number | null;
         retryAfterMs?: number | null;
-        limitCategory?: 'quota';
+        limitCategory?: 'usage_limit';
         quotaScope?: 'account';
         providerLimitId?: string | null;
         planType: string | null;
@@ -28,7 +28,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
       groupId: 'codex-main',
       resetsAtMs: 2_000,
       retryAfterMs: 30_000,
-      limitCategory: 'quota',
+      limitCategory: 'usage_limit',
       quotaScope: 'account',
       providerLimitId: 'weekly_tokens',
       planType: 'pro',
@@ -52,7 +52,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
         retryAfterMs: 30_000,
         quotaScope: 'account',
         recoverability: 'switch_account',
-        limitCategory: 'quota',
+        limitCategory: 'usage_limit',
         providerLimitId: 'weekly_tokens',
         planType: 'pro',
         action: {
@@ -68,9 +68,8 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
     });
   });
 
-  it('extracts reset times from stable usage-limit retry wording when structured details are absent', () => {
+  it('does not turn ambiguous wall-clock usage-limit retry wording into a daemon-local reset time', () => {
     const occurredAt = new Date(2026, 4, 18, 13, 2, 41, 0).getTime();
-    const resetAt = new Date(2026, 4, 18, 13, 48, 0, 0).getTime();
 
     expect(classifyPrimarySessionRuntimeIssue({
       provider: 'codex',
@@ -81,7 +80,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
       source: 'usage_limit',
       usageLimit: {
         v: 1,
-        resetAtMs: resetAt,
+        resetAtMs: null,
         retryAfterMs: null,
         quotaScope: 'unknown',
         recoverability: 'wait',
@@ -198,10 +197,10 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
   });
 
   it('keeps auth, plan, and validation runtime auth classifications structured', () => {
-    for (const [kind, expectedSource, expectedCategory] of [
-      ['auth_expired', 'auth_error', 'auth'],
-      ['plan', 'provider_status_error', 'plan'],
-      ['validation', 'provider_status_error', 'validation'],
+    for (const [kind, expectedSource, inputCategory, expectedCategory] of [
+      ['auth_expired', 'auth_error', 'auth_invalid', 'auth_invalid'],
+      ['plan', 'provider_status_error', 'plan_invalid', 'plan_invalid'],
+      ['validation', 'provider_status_error', 'validation_failed', 'validation_failed'],
     ] as const) {
       const error = new Error(kind) as Error & {
         runtimeAuthClassification: {
@@ -210,7 +209,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
           profileId: string | null;
           groupId: string | null;
           resetsAtMs?: number | null;
-          limitCategory?: typeof expectedCategory;
+          limitCategory?: typeof inputCategory;
           source: string;
         };
       };
@@ -220,7 +219,7 @@ describe('classifyPrimarySessionRuntimeIssue', () => {
         profileId: 'primary',
         groupId: 'codex-main',
         resetsAtMs: 9_000,
-        limitCategory: expectedCategory,
+        limitCategory: inputCategory,
         source: 'structured_provider_error',
       };
 

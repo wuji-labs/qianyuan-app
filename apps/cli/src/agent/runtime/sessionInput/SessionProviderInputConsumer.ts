@@ -69,6 +69,11 @@ async function waitForNextInput<Mode, Message>(
   opts: SessionProviderInputConsumerOptions<Mode, Message> & { abortSignal: AbortSignal },
 ): Promise<MessageBatch<Mode, Message> | null> {
   const idleWakePollIntervalMs = opts.idleWakePollIntervalMs ?? configuration.pendingQueueIdleWakePollIntervalMs;
+  // Idle-timer wakes upgrade the empty-queue reconcile policy to 'throttled': server
+  // pending-changed nudges can be lost (socket churn), and a passive 'skip' loop would
+  // then never learn about queued rows again (QA A-F3/C-F2 one-behind/stuck family).
+  // The client-side reconcile throttle bounds the extra server load.
+  let wokeByIdleTimer = false;
 
   while (true) {
     if (opts.abortSignal.aborted) {
@@ -84,7 +89,12 @@ async function waitForNextInput<Mode, Message>(
       return existingBatch;
     }
 
-    await materializePendingMessage(opts);
+    await materializePendingMessage(
+      wokeByIdleTimer
+        ? { ...opts, reconcileWhenEmpty: opts.reconcileWhenEmpty === 'force' ? 'force' : 'throttled' }
+        : opts,
+    );
+    wokeByIdleTimer = false;
 
     const materializedBatch = await collectQueuedBatch(opts.messageQueue, opts.abortSignal);
     if (materializedBatch) {
@@ -147,6 +157,7 @@ async function waitForNextInput<Mode, Message>(
       }
 
       if (winner.kind === 'idle') {
+        wokeByIdleTimer = true;
         continue;
       }
 

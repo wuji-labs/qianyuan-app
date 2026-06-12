@@ -1,4 +1,4 @@
-import type { Metadata, PermissionMode, UserMessage } from '@/api/types';
+import type { AgentState, Metadata, PermissionMode, UserMessage } from '@/api/types';
 
 import { pushMessageToQueueWithSpecialCommands, type SpecialCommandQueue } from '@/agent/runtime/queueSpecialCommands';
 import { resolveAppendSystemPromptModeOverride } from '@/agent/runtime/permission/appendSystemPromptField';
@@ -7,8 +7,32 @@ import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
 import { resolvePermissionModeUpdatedAtFromMessage } from './permissionModeCanonical';
 import { resolvePermissionModeForQueueingUserMessage } from './permissionModeFromUserMessage';
-import { updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
+import { updateAgentStateBestEffort, updateMetadataBestEffort } from '@/api/session/sessionWritesBestEffort';
 import type { PermissionModeQueuedPrompt } from '@/agent/runtime/permission/permissionModeQueuedPrompt';
+
+/**
+ * Config change carried by a steered message that the backend must own BEFORE the text joins the
+ * active turn (lane Q). Today this is the permission mode only; new members must stay optional so
+ * existing capability implementations keep compiling.
+ */
+export type SteerConfigDelta = Readonly<{
+  permissionMode: PermissionMode;
+}>;
+
+/**
+ * Outcome of an in-flight config-delta application (lane Q):
+ * - `applied`: the backend verified the config is effective for the running turn.
+ * - `scheduled_in_turn`: the backend owns the delta and will apply it at the next safe point
+ *   DURING the current turn (still before/independent of the steered text's effect window).
+ * - `unsupported` / `failed`: the backend cannot own the delta mid-turn — the message must take
+ *   the legacy queue path (config applies when the queue drains at turn end).
+ */
+export type InFlightConfigApplyOutcome = Readonly<
+  | { status: 'applied' }
+  | { status: 'scheduled_in_turn' }
+  | { status: 'unsupported'; reason?: string | undefined }
+  | { status: 'failed'; reason?: string | undefined }
+>;
 
 export type InFlightSteerController = Readonly<{
   /**
@@ -25,6 +49,12 @@ export type InFlightSteerController = Readonly<{
    * This should NOT abort the current turn.
    */
   steerText: (text: string) => Promise<void>;
+  /**
+   * OPTIONAL capability (lane Q): apply a config delta to the RUNNING turn so a config-carrying
+   * message can still steer. Backends that cannot own mid-turn config changes (e.g. Codex —
+   * turn-boundary protocol) simply do not implement this; their messages keep the queue path.
+   */
+  applyConfigDeltaInFlight?: ((delta: SteerConfigDelta) => Promise<InFlightConfigApplyOutcome>) | undefined;
 }>;
 
 export function registerPermissionModeMessageQueueBinding(opts: {
@@ -61,17 +91,50 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     // In-flight steer is only valid when:
     // - the runtime is currently processing a turn,
     // - steering is supported,
-    // - the message does NOT alter permission mode (mode changes must be handled by the main loop),
-    // - and the message is not a control command like /clear or /compact.
+    // - the message is not a control command like /clear or /compact,
+    // - and the message either does NOT alter permission mode, or the backend exposes the
+    //   `applyConfigDeltaInFlight` capability (lane Q) so it can own the mode change mid-turn.
+    //   Without the capability, mode changes keep the queue path (handled by the main loop).
     const steer = opts.inFlightSteer;
+    const pushToQueueBestEffort = () => {
+      try {
+        pushMessageToQueueWithSpecialCommands({
+          queue: opts.queue,
+          message: { text, localId: message.localId ?? null, ...(message.meta ? { meta: message.meta } : {}) },
+          text,
+          mode: {
+            permissionMode: resolvedMode.queuePermissionMode,
+            ...resolveAppendSystemPromptModeOverride(message.meta),
+          },
+        });
+      } catch {
+        // Best-effort fallback: queueing should not be able to crash the process if a steer fails.
+      }
+    };
     if (
       steer &&
       steer.supportsInFlightSteer() &&
       steer.isTurnInFlight() &&
-      !didChangePermissionMode &&
-      special.type === null
+      special.type === null &&
+      (!didChangePermissionMode || typeof steer.applyConfigDeltaInFlight === 'function')
     ) {
+      const applyConfigDelta = didChangePermissionMode ? steer.applyConfigDeltaInFlight : undefined;
       steerSequence = steerSequence.then(async () => {
+        if (applyConfigDelta) {
+          let configOutcome: InFlightConfigApplyOutcome;
+          try {
+            configOutcome = await applyConfigDelta({ permissionMode: resolvedMode.queuePermissionMode });
+          } catch {
+            configOutcome = { status: 'failed', reason: 'config_apply_threw' };
+          }
+          if (configOutcome.status !== 'applied' && configOutcome.status !== 'scheduled_in_turn') {
+            // The backend cannot own the config mid-turn: legacy queue path (the mode applies when
+            // the queue drains). Not a bounce — the steer was never accepted — so no corrective
+            // unsafe_window publish (the UI already routes known-refused payloads honestly).
+            pushToQueueBestEffort();
+            return;
+          }
+        }
         try {
           let providerText = text;
           if (typeof session.getMetadataSnapshot === 'function') {
@@ -98,19 +161,10 @@ export function registerPermissionModeMessageQueueBinding(opts: {
           await steer.steerText(providerText);
           return;
         } catch {
-          try {
-            pushMessageToQueueWithSpecialCommands({
-              queue: opts.queue,
-              message: { text, localId: message.localId ?? null, ...(message.meta ? { meta: message.meta } : {}) },
-              text,
-              mode: {
-                permissionMode: resolvedMode.queuePermissionMode,
-                ...resolveAppendSystemPromptModeOverride(message.meta),
-              },
-            });
-          } catch {
-            // Best-effort fallback: queueing should not be able to crash the process if a steer fails.
-          }
+          pushToQueueBestEffort();
+          // Lane P (O-design Seam A corrective): a steer the runner accepted just BOUNCED to the
+          // queue — tell the UI the window is unsafe so the demotion is not silent.
+          publishSteerBounceUnavailable(session);
         }
       });
       return;
@@ -139,9 +193,29 @@ export function registerPermissionModeMessageQueueBinding(opts: {
   return { bindSession };
 }
 
+function publishSteerBounceUnavailable(session: PermissionModeQueueSessionBinding): void {
+  const updateAgentState = session.updateAgentState;
+  if (typeof updateAgentState !== 'function') return;
+  updateAgentStateBestEffort(
+    { updateAgentState: updateAgentState.bind(session) },
+    (current) => ({
+      ...current,
+      capabilities: {
+        ...(current.capabilities && typeof current.capabilities === 'object' ? current.capabilities : {}),
+        inFlightSteerAvailable: false,
+        inFlightSteerUnavailableReason: 'unsafe_window',
+        inFlightSteerStateAt: Date.now(),
+      },
+    }),
+    '[permissionMode]',
+    'in_flight_steer_bounce',
+  );
+}
+
 type PermissionModeQueueSessionBinding = {
   onUserMessage: (handler: (message: UserMessage) => void) => void;
   updateMetadata: (updater: (current: Metadata) => Metadata) => Promise<void> | void;
+  updateAgentState?: (updater: (current: AgentState) => AgentState) => Promise<void> | void;
   getMetadataSnapshot?: () => unknown;
   refreshSessionSnapshotFromServerBestEffort?: (opts?: { reason: 'connect' | 'waitForMetadataUpdate' }) => Promise<void>;
 };

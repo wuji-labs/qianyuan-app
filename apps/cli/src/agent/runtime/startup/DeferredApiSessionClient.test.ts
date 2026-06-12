@@ -45,7 +45,7 @@ describe('DeferredApiSessionClient', () => {
       sendSessionEvent: vi.fn(),
       sendClaudeSessionMessage: vi.fn(),
       recordClaudeJsonlMessageConsumed: vi.fn(),
-      fetchCommittedClaudeJsonlMessageKeys: vi.fn(async () => new Set(['claude-jsonl:main:user:u1'])),
+      fetchCommittedClaudeJsonlMessageBaseline: vi.fn(async () => ({ keys: new Set(['claude-jsonl:main:user:u1']), complete: true, oldestCoveredAtMs: null })),
       fetchRecentTranscriptTextItemsForAcpImport: vi.fn(async () => [{ role: 'user' as const, text: 'hello' }]),
       sendAgentMessage: vi.fn(),
       sendAgentMessageCommitted: vi.fn(async () => {}),
@@ -70,8 +70,8 @@ describe('DeferredApiSessionClient', () => {
     await expect(deferred.waitForMetadataUpdate()).resolves.toBe(true);
     await expect(deferred.popPendingMessage()).resolves.toBe(true);
     await expect(deferred.peekPendingMessageQueueV2Count({ reconcileWhenEmpty: 'skip' })).resolves.toBe(3);
-    await expect(deferred.fetchCommittedClaudeJsonlMessageKeys({ take: 1 })).resolves.toEqual(
-      new Set(['claude-jsonl:main:user:u1']),
+    await expect(deferred.fetchCommittedClaudeJsonlMessageBaseline({ take: 1 })).resolves.toEqual(
+      { keys: new Set(['claude-jsonl:main:user:u1']), complete: true, oldestCoveredAtMs: null },
     );
     await expect(deferred.fetchRecentTranscriptTextItemsForAcpImport({ take: 1 })).resolves.toEqual([
       { role: 'user', text: 'hello' },
@@ -86,7 +86,7 @@ describe('DeferredApiSessionClient', () => {
 
     expect(real.waitForMetadataUpdate).toHaveBeenCalledTimes(1);
     expect(real.peekPendingMessageQueueV2Count).toHaveBeenCalledWith({ reconcileWhenEmpty: 'skip' });
-    expect(real.fetchCommittedClaudeJsonlMessageKeys).toHaveBeenCalledWith({ take: 1 });
+    expect(real.fetchCommittedClaudeJsonlMessageBaseline).toHaveBeenCalledWith({ take: 1 });
     expect(real.fetchRecentTranscriptTextItemsForAcpImport).toHaveBeenCalledWith({ take: 1 });
     expect(real.recordClaudeJsonlMessageConsumed).toHaveBeenCalledWith({ type: 'user', uuid: 'u1' }, undefined);
     expect(real.popPendingMessage).toHaveBeenCalledTimes(1);

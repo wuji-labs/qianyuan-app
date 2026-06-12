@@ -57,6 +57,35 @@ describe('SessionUserMessageSendRequestSchema', () => {
     });
   });
 
+  it('drops untrusted final structured local image input paths from RPC metadata', () => {
+    expect(
+      SessionUserMessageSendRequestSchema.parse({
+        text: 'look at this',
+        meta: {
+          happierStructuredInputV1: {
+            v: 1,
+            imageInputs: [
+              {
+                type: 'localImage',
+                kind: 'image',
+                localPath: '/etc/passwd',
+                path: '/tmp/private.png',
+                mimeType: 'image/png',
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      text: 'look at this',
+      meta: {
+        happierStructuredInputV1: {
+          v: 1,
+        },
+      },
+    });
+  });
+
   it('does not preserve raw structured input when one envelope field is malformed', () => {
     expect(
       SessionUserMessageSendRequestSchema.parse({
@@ -254,6 +283,62 @@ describe('SessionUserMessageSendRequestSchema', () => {
             localPath: '.happier/uploads/messages/m1/screen.png',
             path: '.happier/uploads/messages/m1/screen.png',
             provenance: { kind: 'sessionAttachmentUpload' },
+          },
+        ],
+      },
+    });
+  });
+
+  it('preserves final structured image inputs when the caller supplies a trusted attachment allowlist', () => {
+    const meta = {
+      happier: {
+        kind: 'attachments.v1',
+        payload: {
+          attachments: [
+            {
+              name: 'screen.png',
+              path: '.happier/uploads/messages/m1/screen.png',
+              mimeType: 'image/png',
+              sizeBytes: 42,
+            },
+          ],
+        },
+      },
+      happierStructuredInputV1: {
+        v: 1,
+        imageInputs: [
+          {
+            type: 'localImage',
+            kind: 'image',
+            localPath: '.happier/uploads/messages/m1/screen.png',
+            mimeType: 'image/png',
+            provenance: { kind: 'sessionAttachmentUpload' },
+          },
+          {
+            type: 'image',
+            kind: 'image',
+            url: 'https://example.test/screen.png',
+            mimeType: 'image/png',
+          },
+        ],
+      },
+    };
+
+    expect(sanitizeSessionUserMessageSendMeta(meta, {
+      allowedLocalImagePaths: new Set(['.happier/uploads/messages/m1/screen.png']),
+    })).toMatchObject({
+      happierStructuredInputV1: {
+        v: 1,
+        imageInputs: [
+          {
+            type: 'localImage',
+            localPath: '.happier/uploads/messages/m1/screen.png',
+            path: '.happier/uploads/messages/m1/screen.png',
+            provenance: { kind: 'sessionAttachmentUpload' },
+          },
+          {
+            type: 'image',
+            url: 'https://example.test/screen.png',
           },
         ],
       },

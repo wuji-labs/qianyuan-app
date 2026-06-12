@@ -1,6 +1,26 @@
 import { z } from 'zod';
 
+import { SessionUsageLimitRecoveryOperationResultV1Schema } from '../sessionControl/sessionUsageLimitRecoveryOperationResultV1.js';
+import { SessionUsageLimitRecoveryResumePromptModeV1Schema } from '../sessionMetadata/sessionUsageLimitRecoveryV1.js';
 import { SessionWorkStateStatusV1Schema, SessionWorkStateV1Schema } from './sessionWorkStateV1.js';
+
+type MetadataRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): MetadataRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as MetadataRecord : null;
+}
+
+function asRecordArray(value: unknown): MetadataRecord[] {
+  return Array.isArray(value) ? value.map(asRecord).filter((entry): entry is MetadataRecord => Boolean(entry)) : [];
+}
+
+function responseWithCatalogItems(value: unknown, legacyKey: 'skills' | 'vendorPlugins'): unknown {
+  const record = asRecord(value);
+  if (!record || Array.isArray(record[legacyKey])) return value;
+  const catalog = asRecord(record.catalog);
+  const items = asRecordArray(catalog?.items);
+  return items.length > 0 ? { ...record, [legacyKey]: items } : value;
+}
 
 export const SessionWorkStateGetRequestV1Schema = z.object({}).passthrough();
 export type SessionWorkStateGetRequestV1 = z.infer<typeof SessionWorkStateGetRequestV1Schema>;
@@ -59,6 +79,7 @@ export const SessionUsageLimitWaitResumeEnableRequestV1Schema = z
     issueFingerprint: IssueFingerprintFieldSchema.optional(),
     remember: z.boolean().optional(),
     rememberPreference: z.boolean().optional(),
+    resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.optional(),
   })
   .passthrough();
 export type SessionUsageLimitWaitResumeEnableRequestV1 = z.infer<typeof SessionUsageLimitWaitResumeEnableRequestV1Schema>;
@@ -76,6 +97,7 @@ export const SessionUsageLimitCheckNowRequestV1Schema = z
     sessionId: SessionIdRequestFieldSchema,
     provider: z.string().trim().min(1).optional(),
     operation: z.enum(['check_now', 'switch_account_now']).optional(),
+    resumePromptMode: SessionUsageLimitRecoveryResumePromptModeV1Schema.optional(),
   })
   .passthrough();
 export type SessionUsageLimitCheckNowRequestV1 = z.infer<typeof SessionUsageLimitCheckNowRequestV1Schema>;
@@ -95,15 +117,15 @@ export const SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema =
 export type SessionConnectedServiceAuthInvalidateTransportsResponseV1 =
   z.infer<typeof SessionConnectedServiceAuthInvalidateTransportsResponseV1Schema>;
 
-export const SessionUsageLimitWaitResumeEnableResponseV1Schema = SessionUsageLimitOperationResponseV1Schema;
+export const SessionUsageLimitWaitResumeEnableResponseV1Schema = SessionUsageLimitRecoveryOperationResultV1Schema;
 export type SessionUsageLimitWaitResumeEnableResponseV1 =
   z.infer<typeof SessionUsageLimitWaitResumeEnableResponseV1Schema>;
 
-export const SessionUsageLimitWaitResumeCancelResponseV1Schema = SessionUsageLimitOperationResponseV1Schema;
+export const SessionUsageLimitWaitResumeCancelResponseV1Schema = SessionUsageLimitRecoveryOperationResultV1Schema;
 export type SessionUsageLimitWaitResumeCancelResponseV1 =
   z.infer<typeof SessionUsageLimitWaitResumeCancelResponseV1Schema>;
 
-export const SessionUsageLimitCheckNowResponseV1Schema = SessionUsageLimitOperationResponseV1Schema;
+export const SessionUsageLimitCheckNowResponseV1Schema = SessionUsageLimitRecoveryOperationResultV1Schema;
 export type SessionUsageLimitCheckNowResponseV1 = z.infer<typeof SessionUsageLimitCheckNowResponseV1Schema>;
 
 export const DaemonSessionGoalGetRequestV1Schema = z
@@ -134,14 +156,18 @@ export type DaemonSessionGoalClearRequestV1 = z.infer<typeof DaemonSessionGoalCl
 export const SessionVendorPluginSummaryV1Schema = z
   .object({
     vendorPluginRef: z.string().min(1),
-    name: z.string().min(1),
+    name: z.string().min(1).optional(),
     displayName: z.string().min(1).optional(),
     description: z.string().min(1).optional(),
     installed: z.boolean().optional(),
     enabled: z.boolean().optional(),
     mentionable: z.boolean().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .transform((value) => ({
+    ...value,
+    name: value.name ?? value.displayName ?? value.vendorPluginRef,
+  }));
 export type SessionVendorPluginSummaryV1 = z.infer<typeof SessionVendorPluginSummaryV1Schema>;
 
 export const SessionVendorPluginCatalogListRequestV1Schema = z
@@ -158,28 +184,38 @@ export const DaemonSessionVendorPluginCatalogListRequestV1Schema = SessionVendor
   .passthrough();
 export type DaemonSessionVendorPluginCatalogListRequestV1 = z.infer<typeof DaemonSessionVendorPluginCatalogListRequestV1Schema>;
 
-export const SessionVendorPluginCatalogListResponseV1Schema = z
-  .object({
-    vendorPlugins: z.array(SessionVendorPluginSummaryV1Schema).default([]),
-    unsupported: z.boolean().optional(),
-  })
-  .passthrough();
+export const SessionVendorPluginCatalogListResponseV1Schema = z.preprocess(
+  (value) => responseWithCatalogItems(value, 'vendorPlugins'),
+  z
+    .object({
+      vendorPlugins: z.array(SessionVendorPluginSummaryV1Schema).default([]),
+      unsupported: z.boolean().optional(),
+    })
+    .passthrough(),
+);
 export type SessionVendorPluginCatalogListResponseV1 = z.infer<typeof SessionVendorPluginCatalogListResponseV1Schema>;
+
+const SessionSkillCatalogOriginV1Schema = z.union([
+  z.enum(['vendor', 'happier', 'derived', 'fallback']),
+  z.enum([
+    'codex_native',
+    'opencode_native',
+    'claude_native',
+    'pi_native',
+    'happier_projected',
+    'text_fallback_only',
+  ]),
+]);
 
 export const SessionSkillCatalogItemV1Schema = z
   .object({
+    id: z.string().min(1).optional(),
     name: z.string().min(1),
     displayName: z.string().min(1).optional(),
     description: z.string().min(1).optional(),
     path: z.string().min(1).optional(),
-    origin: z.enum([
-      'codex_native',
-      'opencode_native',
-      'claude_native',
-      'pi_native',
-      'happier_projected',
-      'text_fallback_only',
-    ]),
+    origin: SessionSkillCatalogOriginV1Schema,
+    backendId: z.string().min(1).optional(),
     enabled: z.boolean().optional(),
   })
   .passthrough();
@@ -191,10 +227,13 @@ export type SessionSkillCatalogListRequestV1 = z.infer<typeof SessionSkillCatalo
 export const DaemonSessionSkillCatalogListRequestV1Schema = DaemonSessionVendorPluginCatalogListRequestV1Schema;
 export type DaemonSessionSkillCatalogListRequestV1 = z.infer<typeof DaemonSessionSkillCatalogListRequestV1Schema>;
 
-export const SessionSkillCatalogListResponseV1Schema = z
-  .object({
-    skills: z.array(SessionSkillCatalogItemV1Schema).default([]),
-    unsupported: z.boolean().optional(),
-  })
-  .passthrough();
+export const SessionSkillCatalogListResponseV1Schema = z.preprocess(
+  (value) => responseWithCatalogItems(value, 'skills'),
+  z
+    .object({
+      skills: z.array(SessionSkillCatalogItemV1Schema).default([]),
+      unsupported: z.boolean().optional(),
+    })
+    .passthrough(),
+);
 export type SessionSkillCatalogListResponseV1 = z.infer<typeof SessionSkillCatalogListResponseV1Schema>;

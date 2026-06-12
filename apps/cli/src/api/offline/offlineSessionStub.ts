@@ -25,7 +25,7 @@ type ApiSessionClientStubContract = Pick<
     | 'sendAgentMessageCommitted'
     | 'sendClaudeSessionMessage'
     | 'recordClaudeJsonlMessageConsumed'
-    | 'fetchCommittedClaudeJsonlMessageKeys'
+    | 'fetchCommittedClaudeJsonlMessageBaseline'
     | 'fetchRecentTranscriptTextItemsForAcpImport'
     | 'sendSessionEvent'
     | 'keepAlive'
@@ -76,7 +76,7 @@ class OfflineSessionStub extends EventEmitter implements ApiSessionClientStubCon
     ): Promise<void> {}
     sendClaudeSessionMessage(_body: unknown, _meta?: Record<string, unknown>): void {}
     recordClaudeJsonlMessageConsumed(_body: unknown, _meta?: Record<string, unknown>): void {}
-    async fetchCommittedClaudeJsonlMessageKeys(): Promise<ReadonlySet<string>> { return new Set(); }
+    async fetchCommittedClaudeJsonlMessageBaseline(): Promise<import('@/backends/claude/utils/claudeJsonlMessageKey').CommittedClaudeJsonlMessageBaseline> { return { keys: new Set(), complete: true, oldestCoveredAtMs: null }; }
     async fetchRecentTranscriptTextItemsForAcpImport(): Promise<Array<{ role: 'user' | 'agent'; text: string }>> { return []; }
     sendSessionEvent(
         _event:

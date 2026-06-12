@@ -28,6 +28,12 @@ export type SurfacePrimarySessionRuntimeIssueInput = Omit<ClassifyPrimarySession
   cause?: ClassifyPrimarySessionRuntimeIssueInput['cause'] | 'cancelled' | null;
   session?: RuntimeIssueSession | null;
   recordIssue?: (record: PrimarySessionRuntimeIssueRecord) => void | Promise<void>;
+  /**
+   * Session-scoped issues (host death, readiness timeout) may occur with no
+   * active turn; opting in allocates and fails a session-owned turn so the
+   * issue is surfaced instead of becoming a silent no-op.
+   */
+  allocateTurnWhenIdle?: boolean;
 }>;
 
 function normalizeProviderFact(value: string | null | undefined): string | undefined {
@@ -88,6 +94,7 @@ export async function surfacePrimarySessionRuntimeIssue(
       provider: record.provider,
       providerTurnId: record.providerTurnId,
       issue,
+      ...(input.allocateTurnWhenIdle ? { allocateWhenIdle: true } : {}),
     });
     await input.recordIssue?.(record);
     return issue;

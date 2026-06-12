@@ -51,6 +51,12 @@ export type FailTurnInput = Readonly<{
     providerTurnId?: string | null;
     issue?: SessionRuntimeIssueV1 | null;
     observedAt?: number;
+    /**
+     * Session-scoped failures (host death, readiness timeout) can occur with no
+     * active turn. Opting in allocates a session-owned turn and immediately
+     * fails it so the issue is surfaced instead of silently dropped.
+     */
+    allocateWhenIdle?: boolean;
 }>;
 
 export type CancelTurnInput = Readonly<{

@@ -181,7 +181,7 @@ describe('rpcHandlers.sessionGoals', () => {
       issueFingerprint: '   ',
     }))).toEqual({
       ok: false,
-      status: 'unsupported',
+      status: 'malformed_response',
       sessionId: 'session-prefix',
       errorCode: 'invalid_parameters',
     });
@@ -190,7 +190,7 @@ describe('rpcHandlers.sessionGoals', () => {
       issueFingerprint: '   ',
     }))).toEqual({
       ok: false,
-      status: 'unsupported',
+      status: 'malformed_response',
       sessionId: 'session-prefix',
       errorCode: 'invalid_parameters',
     });
@@ -206,7 +206,7 @@ describe('rpcHandlers.sessionGoals', () => {
       rememberPreference: 'yes',
     }))).toEqual({
       ok: false,
-      status: 'unsupported',
+      status: 'malformed_response',
       sessionId: 'session-prefix',
       errorCode: 'invalid_parameters',
     });

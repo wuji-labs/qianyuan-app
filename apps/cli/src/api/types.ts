@@ -14,6 +14,7 @@ import type {
   PrimaryTurnStatusV1,
   ContentPublicKeyFingerprint,
   SessionRollbackRangesV1,
+  SessionUsageLimitRecoveryV1,
   SessionTerminalMetadata,
   SessionMessageRole,
   SessionContinuationRecoveryV1,
@@ -60,7 +61,7 @@ import type {
  *
  * When calling Claude SDK, Codex modes are mapped at the SDK boundary:
  * - yolo → bypassPermissions
- * - safe-yolo → acceptEdits
+ * - safe-yolo → auto
  * - read-only → dontAsk
  */
 export const PERMISSION_MODES = SESSION_PERMISSION_MODES
@@ -503,6 +504,7 @@ export type Metadata = {
   kiloSessionId?: string, // Kilo ACP session ID (opaque)
   piSessionId?: string, // Pi RPC session ID (opaque)
   piSessionFile?: string, // Absolute Pi session file path (preferred resume primitive)
+  sessionUsageLimitRecoveryV1?: SessionUsageLimitRecoveryV1,
   copilotSessionId?: string, // Copilot ACP session ID (opaque)
   cursorSessionId?: string, // Cursor ACP session ID (opaque)
   auggieAllowIndexing?: boolean, // Auggie indexing enablement (spawn-time)
@@ -701,7 +703,24 @@ export type Metadata = {
    * (some agents support live model switching; others may require a new session).
    */
   modelOverrideV1?: ModelOverrideV1,
+  /**
+   * Owed-delivery watermark (QA A-F2/D15b): highest user-row seq actually handed to the runner's
+   * agent loop. Daemon attach paths clamp the resume catch-up cursor to this value so user rows
+   * committed while the runner was down are redelivered instead of silently skipped.
+   */
+  deliveredUserMessageSeqV1?: number,
 };
+
+/**
+ * Reason class for "cannot steer the in-flight turn right now" (lane P, O-design Seam A):
+ * - `backend_unsupported`: the runtime/backend never supports in-flight steering.
+ * - `unsafe_window`: steering is supported but the current window cannot accept a steer
+ *   (Codex steer-context mismatch, Claude screen veto / composer-not-ready, ACP between turns).
+ * - `turn_settling`: the turn is ending / in a stale-recovery window (canonical turn inactive).
+ * - `user_terminal_draft`: steering is starved by a draft sitting in the terminal composer
+ *   (lane X, incident cmq8y3nlx) — published after the bounded starvation escalation.
+ */
+export type InFlightSteerUnavailableReason = 'backend_unsupported' | 'unsafe_window' | 'turn_settling' | 'user_terminal_draft';
 
 export type AgentState = {
   controlledByUser?: boolean | null | undefined
@@ -717,6 +736,21 @@ export type AgentState = {
     inFlightSteer?: boolean | null | undefined
     inFlightSteerSupported?: boolean | null | undefined
     inFlightSteerAvailable?: boolean | null | undefined
+    /**
+     * Why in-flight steering is currently unavailable (lane P, O-design Seam A). Present only when
+     * `inFlightSteerAvailable === false`; absence means an older CLI (back-compat by optionality).
+     * `mode_change_refused` is deliberately NOT a published reason — it is a property of the
+     * payload, computed UI-locally.
+     */
+    inFlightSteerUnavailableReason?: InFlightSteerUnavailableReason | null | undefined
+    /** Timestamp (ms) of the last steerability evaluation — staleness guard for the UI. */
+    inFlightSteerStateAt?: number | null | undefined
+    /**
+     * Lane Q: the runtime can apply a steered message's config delta (permission/plan mode) to the
+     * RUNNING turn, so a mode-carrying message may steer without interrupting. Lets the UI offer
+     * "Apply setting & steer now". Absence means an older CLI / unsupported backend (fail-closed).
+     */
+    inFlightConfigApplySupported?: boolean | null | undefined
     localPermissionBridgeInLocalMode?: boolean | null | undefined
     permissionsInUiWhileLocal?: boolean | null | undefined
   } | null | undefined

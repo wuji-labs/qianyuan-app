@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { SessionTurnMutationV1 } from '@/api/session/mutations/sessionMutationTypes';
 import type { SessionTurnLifecycle } from '@/agent/runtime/session/turn/types';
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 import * as runtimeIssueSurface from './surfacePrimarySessionRuntimeIssue';
 
 function createLifecycleStub(overrides: Partial<SessionTurnLifecycle>): SessionTurnLifecycle {
@@ -96,6 +98,56 @@ describe('surfacePrimarySessionRuntimeIssue', () => {
     expect(cancelTurn).toHaveBeenCalledWith({
       provider: 'claude',
     });
+  });
+
+  it('surfaces an idle session-scoped failure as a begin+fail session turn when allocation is requested (silent host-death fix)', async () => {
+    const mutations: SessionTurnMutationV1[] = [];
+    const lifecycle = createSessionTurnLifecycle({
+      sessionId: 's1',
+      createId: () => 'idle-death',
+      now: () => 555,
+      enqueueSessionTurn: async (mutation) => {
+        mutations.push(mutation);
+      },
+    });
+
+    const issue = await runtimeIssueSurface.surfacePrimarySessionRuntimeIssue({
+      provider: 'claude',
+      cause: 'process_exit',
+      occurredAt: 555,
+      error: new Error('Claude unified terminal host is not alive'),
+      session: { sessionTurnLifecycle: lifecycle },
+      allocateTurnWhenIdle: true,
+    });
+
+    expect(issue).toMatchObject({
+      scope: 'primary_session',
+      status: 'failed',
+      source: 'provider_process_exit',
+    });
+    expect(mutations.map((mutation) => mutation.action)).toEqual(['begin', 'fail']);
+    expect(mutations[1]).toMatchObject({ provider: 'claude', issue });
+  });
+
+  it('keeps an idle session-scoped failure a no-op without the allocation opt-in (duplicate/late terminal reports)', async () => {
+    const mutations: SessionTurnMutationV1[] = [];
+    const lifecycle = createSessionTurnLifecycle({
+      sessionId: 's1',
+      createId: () => 'idle-late-report',
+      now: () => 556,
+      enqueueSessionTurn: async (mutation) => {
+        mutations.push(mutation);
+      },
+    });
+
+    await runtimeIssueSurface.surfacePrimarySessionRuntimeIssue({
+      provider: 'claude',
+      cause: 'process_exit',
+      error: new Error('late duplicate exit report'),
+      session: { sessionTurnLifecycle: lifecycle },
+    });
+
+    expect(mutations).toEqual([]);
   });
 
   it('records in-progress and completed session turn states through lifecycle helpers', async () => {

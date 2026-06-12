@@ -40,7 +40,7 @@ import {
     type SessionMutationOutbox,
     type SessionMutationSocket,
 } from './session/mutations/createSessionMutationOutbox';
-import { createSessionEndMutation } from './session/mutations/sessionMutationTypes';
+import { createSessionEndMutation, createSessionTurnMutation } from './session/mutations/sessionMutationTypes';
 
 import type { DaemonToServerEvents, ServerToDaemonEvents } from './machine/socketTypes';
 import { registerMachineRpcHandlers, type MachineRpcHandlerDeps, type MachineRpcHandlers } from './machine/rpcHandlers';
@@ -520,6 +520,30 @@ export class ApiMachineClient {
             ...(payload.exit !== undefined ? { exit: payload.exit } : {}),
         })).catch((error) => {
             logger.warn('[API MACHINE] Failed to enqueue durable session-end mutation', {
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
+    }
+
+    /**
+     * Durable daemon-side settlement of a dead runner's open canonical turn (Lane N1). Delivered
+     * as an `end_session` turn mutation through the per-session mutation outbox; the machine
+     * socket has no turn-mutation event, so delivery uses the HTTP turn route. The server no-ops
+     * when no turn is open or the open turn began after `time` (a replacement runner's turn).
+     */
+    enqueueSessionTurnSettlementMutation(payload: Readonly<{ sid: string; time: number }>): void {
+        const sessionId = payload.sid.trim();
+        if (!sessionId) {
+            return;
+        }
+
+        void this.getSessionEndMutationOutbox(sessionId).enqueueSessionTurn(createSessionTurnMutation({
+            sessionId,
+            action: 'end_session',
+            mutationId: `daemon-exit-turn-settlement:${sessionId}:${payload.time}`,
+            observedAt: payload.time,
+        })).catch((error) => {
+            logger.warn('[API MACHINE] Failed to enqueue durable session turn settlement mutation', {
                 error: serializeAxiosErrorForLog(error),
             });
         });

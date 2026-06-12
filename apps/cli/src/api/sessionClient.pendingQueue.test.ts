@@ -412,7 +412,7 @@ describe('ApiSessionClient pending queue materialization', () => {
         expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
     });
 
-    it('materializeNextPendingMessageSafely returns deferred when the supervisor is offline', async () => {
+    it('materializeNextPendingMessageSafely still attempts (HTTP fallback) when the supervisor is offline', async () => {
         const sessionSocket = createApiSessionSocketStub({ connected: false });
         const userSocket = createApiSessionSocketStub();
 
@@ -440,11 +440,12 @@ describe('ApiSessionClient pending queue materialization', () => {
             },
         });
 
-        await expect(expectSafeMaterializer(client)()).resolves.toEqual({
-            type: 'deferred',
-            reason: 'supervisor_offline',
-        });
-        expect(sessionSocket.emitWithAck).not.toHaveBeenCalledWith('pending-materialize-next', expect.anything());
+        // A wedged 'offline' supervisor while HTTP still works must not silently strand the
+        // queue (QA C-F2/A-F3): the materialize attempt proceeds and transport failures are
+        // handled per-request. Fail-safe = periodic failed attempt, never silent stuck.
+        const result = await expectSafeMaterializer(client)() as { type: string };
+        expect(result.type).not.toBe('deferred');
+
     });
 
     it('materializeNextPendingMessageSafely returns deferred when the supervisor auth failed', async () => {
@@ -880,7 +881,10 @@ describe('ApiSessionClient pending queue materialization', () => {
         ];
         const sessionSocket = createApiSessionSocketStub({
             connected: true,
-            emitWithAck: async () => {
+            emitWithAck: async (event) => {
+                if (event !== 'pending-materialize-next') {
+                    return { ok: true };
+                }
                 const next = materializeResponses.shift();
                 if (!next) {
                     throw new Error('unexpected materialize call');

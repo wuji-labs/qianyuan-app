@@ -267,6 +267,15 @@ export {
 } from './push/expoPushDelivery.js';
 
 export {
+  ConnectedServiceLimitCategoryV1Schema,
+  normalizeConnectedServiceLimitCategoryV1,
+  readConnectedServiceLimitCategoryV1,
+  type ConnectedServiceLimitCategoryInputV1,
+  type ConnectedServiceLimitCategoryLegacyAliasV1,
+  type ConnectedServiceLimitCategoryV1,
+} from './connect/connectedServiceLimitCategory.js';
+
+export {
   ConnectedServiceAuthGroupActiveProfileRequestV1Schema,
   ConnectedServiceAuthGroupCreateRequestV1Schema,
   ConnectedServiceAuthGroupIdSchema,
@@ -564,6 +573,9 @@ export {
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
   ConnectedServiceSwitchAttemptOutcomeV1Schema,
   ConnectedServiceSwitchAttemptSessionAdoptionV1Schema,
+  RuntimeConfigOutcomeStatusV1Schema,
+  RuntimeConfigOutcomeTimingV1Schema,
+  RuntimeConfigOutcomeChangeKeyV1Schema,
   TranscriptRawAgentContentV1Schema,
   TranscriptRawAgentEventV1Schema,
   TranscriptRawAgentRecordV1Schema,
@@ -575,6 +587,9 @@ export {
   type ConnectedServiceSwitchAttemptOutcomeActionV1,
   type ConnectedServiceSwitchAttemptOutcomeV1,
   type ConnectedServiceSwitchAttemptSessionAdoptionV1,
+  type RuntimeConfigOutcomeStatusV1,
+  type RuntimeConfigOutcomeTimingV1,
+  type RuntimeConfigOutcomeChangeKeyV1,
   type TranscriptRawAgentContentV1,
   type TranscriptRawAgentEventV1,
   type TranscriptRawAgentRecordV1,
@@ -944,12 +959,14 @@ export {
   SessionRuntimeUsageLimitDetailsV1Schema,
   SessionRuntimeIssueV1Schema,
   SessionUsageLimitRecoveryAuthSelectionV1Schema,
+  SessionUsageLimitRecoveryResumePromptModeV1Schema,
   SessionUsageLimitRecoveryOperationResultErrorStatusV1Schema,
   SessionUsageLimitRecoveryOperationResultOkStatusV1Schema,
   SessionUsageLimitRecoveryOperationResultV1Schema,
   SessionUsageLimitRecoveryV1Schema,
   isSessionUsageLimitRecoveryOperationResultV1,
   normalizeSessionUsageLimitRecoveryOperationResultV1,
+  resolveSessionUsageLimitRecoveryResumePromptModeV1,
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SESSION_USAGE_LIMIT_RECOVERY_OPERATION_RESULT_ERROR_STATUSES_V1,
   SESSION_USAGE_LIMIT_RECOVERY_OPERATION_RESULT_OK_STATUSES_V1,
@@ -1019,6 +1036,7 @@ export {
   type SessionRuntimeIssueV1,
   type NormalizeSessionUsageLimitRecoveryOperationResultV1Options,
   type SessionUsageLimitRecoveryAuthSelectionV1,
+  type SessionUsageLimitRecoveryResumePromptModeV1,
   type SessionUsageLimitRecoveryOperationResultErrorStatusV1,
   type SessionUsageLimitRecoveryOperationResultOkStatusV1,
   type SessionUsageLimitRecoveryOperationResultV1,
@@ -1121,6 +1139,18 @@ export {
   buildConnectedServiceMaterializationIdentityV1,
   readConnectedServiceMaterializationIdentityV1FromMetadata,
 } from './sessionMetadata/connectedServiceMaterializationIdentityV1.js';
+
+export {
+  CONNECTED_SERVICE_QUOTA_REFS_MAX_REFS,
+  CONNECTED_SERVICE_QUOTA_REFS_METADATA_KEY,
+  ConnectedServiceQuotaRefV1Schema,
+  ConnectedServiceQuotaRefsV1Schema,
+  normalizeConnectedServiceQuotaRefs,
+  readConnectedServiceQuotaRefsFromMetadata,
+  writeConnectedServiceQuotaRefToMetadata,
+  type ConnectedServiceQuotaRefV1,
+  type ConnectedServiceQuotaRefsV1,
+} from './sessionMetadata/connectedServiceQuotaRefsV1.js';
 
 export {
   ModelOverrideV1Schema,

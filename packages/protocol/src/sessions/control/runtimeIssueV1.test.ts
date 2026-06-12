@@ -103,11 +103,23 @@ describe('SessionRuntimeUsageLimitDetailsV1Schema', () => {
       recoveryDecision: 'switching',
     });
 
-    expect(parsed.limitCategory).toBe('quota');
+    expect(parsed.limitCategory).toBe('usage_limit');
     expect(parsed.effectiveMeterId).toBe('weekly');
     expect(parsed.effectiveRemainingPct).toBe(7);
     expect(parsed.allWindows).toHaveLength(2);
     expect(parsed.recoveryDecision).toBe('switching');
+  });
+
+  it('normalizes legacy runtime issue limit categories to canonical public names', () => {
+    expect(SessionRuntimeUsageLimitDetailsV1Schema.parse({
+      ...baseDetails,
+      limitCategory: 'auth',
+    }).limitCategory).toBe('auth_invalid');
+
+    expect(SessionRuntimeUsageLimitDetailsV1Schema.parse({
+      ...baseDetails,
+      limitCategory: 'plan',
+    }).limitCategory).toBe('plan_invalid');
   });
 
   it('parses temporary provider throttle details outside usage-limit details', () => {

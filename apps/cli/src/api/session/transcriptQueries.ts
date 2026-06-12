@@ -11,6 +11,7 @@ import { serializeAxiosErrorForLog } from '../client/serializeAxiosErrorForLog';
 import { decodeBase64, decrypt } from '../encryption';
 import { SessionMessageContentSchema, type PermissionMode } from '../types';
 import { extractSemanticTranscriptItem } from '@/session/services/transcript/extractSemanticTranscriptItem';
+import type { SemanticTranscriptItem, SemanticTranscriptRole } from '@/session/services/transcript/semanticTranscriptItem';
 
 type EncryptionVariant = 'legacy' | 'dataKey';
 
@@ -184,6 +185,123 @@ export async function hasCommittedUserMessageAfterMs(params: Readonly<{
     if (isAuthenticationError(error)) throw error;
     logTranscriptQueryFailure('[API] Failed to fetch transcript messages for continuation recovery suppression', error);
     return false;
+  }
+}
+
+export type CommittedProviderActivityAfterUserPromptEvidence =
+  | Readonly<{
+      status: 'activity_found';
+      latestUserMessageAtMs: number;
+      activityAtMs: number;
+      activityKind: string;
+      activityRole: Exclude<SemanticTranscriptRole, 'user'>;
+    }>
+  | Readonly<{
+      status: 'no_activity_found';
+      latestUserMessageAtMs: number;
+    }>
+  | Readonly<{
+      status: 'unknown';
+      reason:
+        | 'latest_user_prompt_unavailable'
+        | 'transcript_unavailable'
+        | 'ambiguous_post_prompt_row';
+    }>;
+
+function readTranscriptCreatedAt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value))
+    : null;
+}
+
+export async function detectCommittedProviderActivityAfterLatestUserPrompt(
+  params: SessionTranscriptQueryParams & Readonly<{
+    failureAtMs: number;
+    take?: number;
+  }>,
+): Promise<CommittedProviderActivityAfterUserPromptEvidence> {
+  const take = normalizeTake(params.take, 100);
+  const failureAtMs = Number.isFinite(params.failureAtMs)
+    ? Math.max(0, Math.trunc(params.failureAtMs))
+    : 0;
+  const serverUrl = resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
+
+  try {
+    const response = await axios.get(`${serverUrl}/v1/sessions/${params.sessionId}/messages`, {
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        'Content-Type': 'application/json',
+      },
+      params: { limit: take },
+      timeout: 10_000,
+    });
+
+    const data = response?.data as unknown;
+    const raw = data && typeof data === 'object' ? (data as Record<string, unknown>).messages : null;
+    if (!Array.isArray(raw)) return { status: 'unknown', reason: 'transcript_unavailable' };
+
+    const transcriptRows = raw
+      .map((msg, index) => {
+        const record = msg && typeof msg === 'object' && !Array.isArray(msg)
+          ? msg as Record<string, unknown>
+          : null;
+        if (!record) return null;
+        const createdAt = readTranscriptCreatedAt(record.createdAt);
+        if (createdAt === null) return null;
+        const item = extractSemanticTranscriptItem({
+          row: record,
+          index,
+          ctx: {
+            encryptionKey: params.encryptionKey,
+            encryptionVariant: params.encryptionVariant,
+          },
+          options: {
+            mode: 'transcript',
+            transcriptRoles: ['user', 'assistant'],
+            includeTools: true,
+            includeReasoning: true,
+            includeEvents: true,
+            maxTextChars: null,
+          },
+        }).item;
+        return { createdAt, item };
+      })
+      .filter((row): row is { createdAt: number; item: SemanticTranscriptItem | null } => row !== null);
+
+    const latestUser = transcriptRows
+      .filter((row): row is { createdAt: number; item: SemanticTranscriptItem } =>
+        row.item?.semanticRole === 'user' && row.createdAt <= failureAtMs)
+      .sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+    if (!latestUser) {
+      return { status: 'unknown', reason: 'latest_user_prompt_unavailable' };
+    }
+
+    const laterRows = transcriptRows
+      .filter((row) => row.createdAt > latestUser.createdAt)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    if (laterRows.some((row) => row.item === null)) {
+      return { status: 'unknown', reason: 'ambiguous_post_prompt_row' };
+    }
+    const semanticLaterRows = laterRows as Array<{ createdAt: number; item: SemanticTranscriptItem }>;
+    const providerActivity = semanticLaterRows.find((row) => row.item.semanticRole !== 'user') ?? null;
+    if (providerActivity) {
+      return {
+        status: 'activity_found',
+        latestUserMessageAtMs: latestUser.createdAt,
+        activityAtMs: providerActivity.createdAt,
+        activityKind: providerActivity.item.kind,
+        activityRole: providerActivity.item.semanticRole as Exclude<SemanticTranscriptRole, 'user'>,
+      };
+    }
+
+    return {
+      status: 'no_activity_found',
+      latestUserMessageAtMs: latestUser.createdAt,
+    };
+  } catch (error) {
+    if (isAuthenticationError(error)) throw error;
+    logTranscriptQueryFailure('[API] Failed to fetch transcript messages for connected-service provider activity evidence', error);
+    return { status: 'unknown', reason: 'transcript_unavailable' };
   }
 }
 

@@ -547,9 +547,77 @@ function addConnectedServiceRuntimeAuthRecoveryEventIssues(
   }
 }
 
+// The five public runtime-config-outcome statuses are frozen. Queued/scheduled/skipped
+// state is carried by the optional `timing` field below, never by new status enum values,
+// because older clients reject unknown enum values for a known field.
+export const RuntimeConfigOutcomeStatusV1Schema = z.enum([
+  'applied',
+  'requires_restart',
+  'requires_interactive_control',
+  'unsupported',
+  'failed',
+]);
+
+export type RuntimeConfigOutcomeStatusV1 = z.infer<typeof RuntimeConfigOutcomeStatusV1Schema>;
+
+// Optional timing detail for a runtime-config outcome. This is NOT a status; it explains
+// when the (already statused) change takes effect relative to the active TUI/turn window.
+export const RuntimeConfigOutcomeTimingV1Schema = z.enum([
+  'current_window',
+  'queued_until_safe_window',
+  'scheduled_for_next_prompt',
+  'next_idle',
+  'before_next_prompt',
+  'skipped_already_effective',
+  'not_applicable',
+]);
+
+export type RuntimeConfigOutcomeTimingV1 = z.infer<typeof RuntimeConfigOutcomeTimingV1Schema>;
+
+export const RuntimeConfigOutcomeChangeKeyV1Schema = z.enum([
+  'model',
+  'fallbackModel',
+  'permissionMode',
+  'reasoningEffort',
+  'maxThinkingTokens',
+  'launchOption',
+  'sessionMode',
+]);
+
+export type RuntimeConfigOutcomeChangeKeyV1 = z.infer<typeof RuntimeConfigOutcomeChangeKeyV1Schema>;
+
+const RuntimeConfigOutcomeScalarV1Schema = z.union([
+  z.string().trim().min(1).max(512),
+  z.number().finite(),
+  z.boolean(),
+  z.null(),
+]);
+
+const RuntimeConfigOutcomeChangeV1Schema = z
+  .object({
+    key: RuntimeConfigOutcomeChangeKeyV1Schema,
+    requested: RuntimeConfigOutcomeScalarV1Schema.optional(),
+    previous: RuntimeConfigOutcomeScalarV1Schema.optional(),
+    effective: RuntimeConfigOutcomeScalarV1Schema.optional(),
+    reason: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
+
 const AgentEventSchema = z.discriminatedUnion('type', [
   withAgentEventLifecycle(z.object({ type: z.literal('switch'), mode: z.enum(['local', 'remote']) })),
   withAgentEventLifecycle(z.object({ type: z.literal('message'), message: z.string() })),
+  withAgentEventLifecycle(
+    z.object({
+      type: z.literal('runtime-config-outcome'),
+      provider: z.string().trim().min(1).max(128).optional(),
+      runtime: z.string().trim().min(1).max(128),
+      status: RuntimeConfigOutcomeStatusV1Schema,
+      timing: RuntimeConfigOutcomeTimingV1Schema.optional(),
+      reason: z.string().trim().min(1).max(256).optional(),
+      message: z.string().trim().min(1).max(2_000),
+      changes: z.array(RuntimeConfigOutcomeChangeV1Schema).max(20).optional(),
+    }),
+  ),
   withAgentEventLifecycle(
     z.object({
       type: z.literal('context-compaction'),

@@ -4,6 +4,7 @@ import axios from 'axios';
 import { Socket } from 'socket.io-client'
 import { AgentState, ClientToServerEvents, MessageAckResponseSchema, MessageContent, Metadata, ServerToClientEvents, Session, SessionMessageContent, SessionMessageContentSchema, Update, UserMessage, UserMessageSchema, Usage } from '../types'
 import { decodeBase64, decrypt, encodeBase64, encrypt } from '../encryption';
+import { mergeDeliveredUserMessageSeqV1, readDeliveredUserMessageSeqV1 } from './deliveredUserMessageSeq';
 import { backoff } from '@/utils/time';
 import { configuration } from '@/configuration';
 import { resolveLoopbackHttpUrl } from '../client/loopbackUrl';
@@ -14,6 +15,7 @@ import {
     buildClaudeJsonlMessageKey,
     extractClaudeJsonlMessageKeyFromLocalId,
     extractClaudeJsonlMessageKeyFromSessionContent,
+    type CommittedClaudeJsonlMessageBaseline,
 } from '@/backends/claude/utils/claudeJsonlMessageKey';
 import { randomUUID } from 'node:crypto';
 import { AsyncLock } from '@/utils/lock';
@@ -72,8 +74,11 @@ import { handleSessionStateUpdate } from './sessionStateUpdateHandling';
 import type { SessionSnapshotRefreshReasonInput } from './sessionSnapshotRefreshReason';
 import {
     isActiveLatestTurnStatus,
+    isTerminalTurnLifecycleEvent,
+    latestTurnStatusForTurnLifecycleEvent,
     readLatestTurnStatusSnapshot,
     type LatestTurnStatusSnapshot,
+    type SessionTurnLifecycleObserverEvent,
 } from './sessionTurnStatusSnapshot';
 import { createSessionSocketStaleSafetyScheduler, type SessionSocketStaleSafetyScheduler } from './sessionSocketStaleSafety';
 import type { ACPMessageData, ACPProvider, SessionEventMessage } from './sessionMessageTypes';
@@ -220,6 +225,9 @@ export class ApiSessionClient extends EventEmitter {
     private lastPendingQueueStateReconcileAt = 0;
     private latestTurnStatus: LatestTurnStatusSnapshot | undefined = undefined;
     private lastTurnStatusRefreshPendingVersion: number | null = null;
+    private lastBlockedTurnStatusRefreshAt = 0;
+    private owedUserMessageCatchUpInFlight = false;
+    private lastOwedUserMessageCatchUpAt = 0;
     private readonly pendingCommitRetryAttemptsByLocalId = new Map<string, number>();
     private userSocketDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private closed = false;
@@ -230,6 +238,9 @@ export class ApiSessionClient extends EventEmitter {
     private readonly receivedMessageIds = new Set<string>();
     private lastObservedMessageSeq = 0;
     private lastObservedUserMessageSeq = 0;
+    /** Owed-delivery watermark (A-F2/D15b): highest user-row seq handed to the agent loop this process. */
+    private highestDeliveredUserMessageSeq: number | null = null;
+    private deliveredUserMessageSeqPersistInFlight = false;
     private readonly turnAssistantTextSnapshotStore = createTurnAssistantTextSnapshotStore({
         maxTextChars: configuration.readyNotificationAssistantTextMaxChars,
     });
@@ -565,8 +576,9 @@ export class ApiSessionClient extends EventEmitter {
         this.sessionTurnLifecycle = createSessionTurnLifecycle({
             sessionId: this.sessionId,
             enqueueSessionTurn: createSessionTurnMutationWriter(this.sessionMutationOutbox).enqueueSessionTurn,
-            onTurnLifecycleEvent: (event) => {
-                void this.notifyDaemonConnectedServiceTurnLifecycle(event);
+            onTurnLifecycleEvent: (event, terminalStatus) => {
+                this.observeTurnLifecycleForPendingDrain(event, terminalStatus);
+                void this.notifyDaemonConnectedServiceTurnLifecycle(event, terminalStatus);
             },
         });
 
@@ -776,9 +788,109 @@ export class ApiSessionClient extends EventEmitter {
             || isSessionContinuationRecoveryBlockingPendingDrain(this.metadata);
     }
 
+    /**
+     * Canonical turn lifecycle → pending-queue drain trigger.
+     *
+     * Turns recorded through the canonical session turn lifecycle (e.g. Claude unified
+     * terminal turns) do not flow through ACP lifecycle markers, so without this the
+     * locally cached latest-turn-status snapshot can stay 'in_progress' forever after a
+     * turn ends — permanently blocking pending-queue materialization until a manual
+     * "Send now". Keep the snapshot truthful and, on terminal events, wake pending
+     * consumers and recover a possibly lost pending-count nudge (fail-safe: a duplicate
+     * wake/reconcile is harmless; a missing one strands queued messages).
+     */
+    private observeTurnLifecycleForPendingDrain(
+        event: SessionTurnLifecycleObserverEvent,
+        terminalStatus?: 'completed' | 'failed',
+    ): void {
+        const mapped = latestTurnStatusForTurnLifecycleEvent(event, terminalStatus);
+        if (mapped !== undefined) {
+            this.latestTurnStatus = mapped;
+        }
+        if (!isTerminalTurnLifecycleEvent(event) || this.closed) return;
+        logger.debug('[pendingQueue] turn-end drain trigger', {
+            sessionId: this.sessionId,
+            event,
+            terminalStatus: terminalStatus ?? null,
+            pendingCount: this.pendingQueueState.known ? this.pendingQueueState.pendingCount : null,
+        });
+        this.pendingWakeSeq += 1;
+        this.emit('metadata-updated');
+        void this.reconcilePendingQueueState({ force: false }).catch(() => undefined);
+        void this.catchUpOwedUserMessagesAfterTurnEnd().catch(() => undefined);
+    }
+
+    /**
+     * Owed-delivery recovery at turn end (QA C-F2/A-F3 family): a user row committed into the
+     * transcript while the provider turn was running can miss its socket broadcast, and nothing
+     * replays it later — it stays invisible to the agent loop forever. Re-pull the transcript
+     * window after the delivered/observed user-row cursor; `sessionNewMessageUpdate` echo
+     * suppression and the deliveredUserMessageSeqV1 watermark absorb duplicates
+     * (at-least-once delivery, never silently stuck).
+     */
+    private async catchUpOwedUserMessagesAfterTurnEnd(): Promise<void> {
+        if (this.owedUserMessageCatchUpInFlight) return;
+        const now = Date.now();
+        if (
+            this.lastOwedUserMessageCatchUpAt > 0
+            && now - this.lastOwedUserMessageCatchUpAt < configuration.pendingQueueStateReconcileThrottleMs
+        ) {
+            return;
+        }
+        this.lastOwedUserMessageCatchUpAt = now;
+        const watermark = readDeliveredUserMessageSeqV1(this.metadata as unknown as Record<string, unknown> | null);
+        const afterSeq = Math.max(0, Math.min(
+            watermark ?? Number.MAX_SAFE_INTEGER,
+            this.lastObservedUserMessageSeq,
+        ));
+        this.owedUserMessageCatchUpInFlight = true;
+        logger.debug('[pendingQueue] owed user-message turn-end catch-up', {
+            sessionId: this.sessionId,
+            afterSeq,
+            deliveredWatermark: watermark,
+            lastObservedUserMessageSeq: this.lastObservedUserMessageSeq,
+        });
+        try {
+            // Explicit cursor: this is a deliberate owed-delivery replay (the watermark/observed
+            // cursor authorizes delivery of rows beyond it to the agent queue).
+            await this.catchUpSessionMessages(afterSeq, { afterSeqIsExplicit: true });
+        } catch (error) {
+            logger.debug('[pendingQueue] owed user-message turn-end catch-up failed (non-fatal)', {
+                sessionId: this.sessionId,
+                afterSeq,
+                error: serializeAxiosErrorForLog(error),
+            });
+        } finally {
+            this.owedUserMessageCatchUpInFlight = false;
+        }
+    }
+
+    /**
+     * Self-heal a stale 'in_progress' snapshot status: when ONLY the snapshot status
+     * blocks materialization (no canonical active turn locally — e.g. a respawned
+     * runner that never began the turn, or a lost turn-end signal), re-fetch the
+     * server snapshot on a throttle so queued messages can never starve forever.
+     */
+    private async refreshStaleBlockedTurnStatusIfNeeded(): Promise<void> {
+        if (this.sessionTurnLifecycle.hasActiveTurn()) return;
+        if (!isActiveLatestTurnStatus(this.latestTurnStatus)) return;
+        const now = Date.now();
+        if (
+            this.lastBlockedTurnStatusRefreshAt > 0
+            && now - this.lastBlockedTurnStatusRefreshAt < configuration.pendingQueueStateReconcileThrottleMs
+        ) {
+            return;
+        }
+        this.lastBlockedTurnStatusRefreshAt = now;
+        await this.syncSessionSnapshotFromServer({ reason: 'explicit-drain' });
+    }
+
     private async reconcileTurnStatusBeforePendingMaterializationIfNeeded(): Promise<boolean> {
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) return true;
-        if (this.isPendingMaterializationBlocked()) return true;
+        if (this.isPendingMaterializationBlocked()) {
+            await this.refreshStaleBlockedTurnStatusIfNeeded();
+            return true;
+        }
         if (this.latestTurnStatus === undefined) return true;
 
         const pendingVersion = this.pendingQueueState.pendingVersion;
@@ -1111,6 +1223,7 @@ export class ApiSessionClient extends EventEmitter {
                 encryptionKey: this.encryptionKey,
                 encryptionVariant: this.encryptionVariant,
                 receivedMessageIds: this.receivedMessageIds,
+                allowReprocessReceivedMessageIds: opts.catchUpAfterSeqIsExplicit === true,
                 lastObservedMessageSeq: this.lastObservedMessageSeq,
                 lastObservedUserMessageSeq: this.lastObservedUserMessageSeq,
                 hasSelfEchoSuppressedLocalId: (localId) => this.hasSelfEchoSuppressedLocalId(localId),
@@ -1125,6 +1238,7 @@ export class ApiSessionClient extends EventEmitter {
                         catchUpAfterSeq: opts.catchUpAfterSeq,
                         catchUpAfterSeqIsExplicit: opts.catchUpAfterSeqIsExplicit,
                     }),
+                onUserMessageDeliveredToAgentQueue: (seq) => this.recordDeliveredUserMessageSeq(seq),
                 onObservedMessage: (message) => {
                     this.observeTurnAssistantTextFromSessionContent(message.body, {
                         source: 'transcript',
@@ -2378,12 +2492,14 @@ export class ApiSessionClient extends EventEmitter {
 
     private async notifyDaemonConnectedServiceTurnLifecycle(
         event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled',
+        terminalStatus?: 'completed' | 'failed',
     ): Promise<void> {
         if (!this.startedByDaemonProcess) return;
         try {
             const result = await notifyDaemonConnectedServiceTurnLifecycle({
                 sessionId: this.sessionId,
                 event,
+                ...(terminalStatus ? { terminalStatus } : {}),
             });
             if (result?.error) {
                 logger.debug('[SESSION CLIENT] Failed to notify daemon connected-service turn lifecycle (non-fatal)', {
@@ -2546,14 +2662,27 @@ export class ApiSessionClient extends EventEmitter {
         });
     }
 
-    async fetchCommittedClaudeJsonlMessageKeys(opts?: { take?: number }): Promise<ReadonlySet<string>> {
+    async fetchCommittedClaudeJsonlMessageBaseline(opts?: { take?: number }): Promise<CommittedClaudeJsonlMessageBaseline> {
         const take = typeof opts?.take === 'number' && Number.isFinite(opts.take) && opts.take > 0
             ? Math.trunc(opts.take)
             : 5_000;
-        const request = async () => {
+        const request = async (): Promise<CommittedClaudeJsonlMessageBaseline> => {
             const keys = new Set<string>();
             let remaining = take;
             let beforeSeq: number | undefined;
+            let complete = true;
+            let oldestCoveredAtMs: number | null = null;
+            const observeRowCoverage = (createdAt: unknown): void => {
+                const createdAtMs = typeof createdAt === 'number' && Number.isFinite(createdAt)
+                    ? createdAt
+                    : typeof createdAt === 'string'
+                        ? Date.parse(createdAt)
+                        : Number.NaN;
+                if (!Number.isFinite(createdAtMs)) return;
+                if (oldestCoveredAtMs === null || createdAtMs < oldestCoveredAtMs) {
+                    oldestCoveredAtMs = createdAtMs;
+                }
+            };
             while (remaining > 0) {
                 const page = await fetchEncryptedTranscriptMessagesPage({
                     token: this.token,
@@ -2564,6 +2693,7 @@ export class ApiSessionClient extends EventEmitter {
                     roles: ['user', 'agent', 'event'],
                 });
                 for (const row of page.messages) {
+                    observeRowCoverage(row.createdAt);
                     const keyFromLocalId = typeof row.localId === 'string'
                         ? extractClaudeJsonlMessageKeyFromLocalId(row.localId)
                         : null;
@@ -2586,9 +2716,16 @@ export class ApiSessionClient extends EventEmitter {
                 }
                 remaining -= page.messages.length;
                 if (!page.hasMore || page.nextBeforeSeq === null || page.messages.length === 0) break;
+                if (remaining <= 0) {
+                    // The take budget ran out while the server still had older rows: the baseline
+                    // window is PARTIAL, and rows older than `oldestCoveredAtMs` cannot be proven
+                    // uncommitted (Lane N4).
+                    complete = false;
+                    break;
+                }
                 beforeSeq = page.nextBeforeSeq;
             }
-            return keys;
+            return { keys, complete, oldestCoveredAtMs };
         };
         const supervisor = this.sessionConnectionSupervisor;
         if (!supervisor) {
@@ -2686,6 +2823,14 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     /**
+     * Whether the canonical session turn lifecycle currently has an open (non-terminal) turn.
+     * Used by terminal-runtime arbiters to bound their own turn-state heuristics (Lane N2).
+     */
+    hasActiveCanonicalTurn(): boolean {
+        return this.sessionTurnLifecycle.hasActiveTurn();
+    }
+
+    /**
      * Send session death message
      */
     sendSessionDeath(): Promise<void> {
@@ -2744,6 +2889,35 @@ export class ApiSessionClient extends EventEmitter {
      * Update session metadata
      * @param handler - Handler function that returns the updated metadata
      */
+    /**
+     * Owed-delivery watermark persistence (A-F2/D15b). Best-effort: failures keep the watermark
+     * behind, which only widens redelivery (never loses messages).
+     */
+    private recordDeliveredUserMessageSeq(seq: number): void {
+        if (!Number.isInteger(seq) || seq < 0) return;
+        this.highestDeliveredUserMessageSeq = Math.max(this.highestDeliveredUserMessageSeq ?? -1, seq);
+        void this.persistDeliveredUserMessageSeq();
+    }
+
+    private async persistDeliveredUserMessageSeq(): Promise<void> {
+        if (this.deliveredUserMessageSeqPersistInFlight) return;
+        const target = this.highestDeliveredUserMessageSeq;
+        if (target === null) return;
+        this.deliveredUserMessageSeqPersistInFlight = true;
+        try {
+            await this.updateMetadata((metadata) => mergeDeliveredUserMessageSeqV1(metadata, target).metadata);
+        } catch (error) {
+            logger.debug('[API] Failed to persist delivered user-message watermark (best-effort)', error);
+            return;
+        } finally {
+            this.deliveredUserMessageSeqPersistInFlight = false;
+        }
+        // A newer delivery may have arrived while the write was in flight; converge.
+        if (this.highestDeliveredUserMessageSeq !== null && this.highestDeliveredUserMessageSeq > target) {
+            void this.persistDeliveredUserMessageSeq();
+        }
+    }
+
     updateMetadata(handler: (metadata: Metadata) => Metadata): Promise<void> {
         return this.metadataLock.inLock(async () => {
             await updateSessionMetadataWithAck({
@@ -3209,8 +3383,20 @@ export class ApiSessionClient extends EventEmitter {
         if (supervisorState?.phase === 'auth_failed') {
             return { type: 'deferred', reason: 'supervisor_auth_failed' };
         }
-        if (supervisorState && supervisorState.phase !== 'online') {
+        if (supervisorState && supervisorState.phase === 'shutting_down') {
             return { type: 'deferred', reason: 'supervisor_offline' };
+        }
+        if (supervisorState && supervisorState.phase !== 'online') {
+            // Degraded socket phases (connecting/offline/idle) must NOT hard-defer: the
+            // materialize transport falls back to HTTP (requireOnline:false), and daemon/server
+            // churn can wedge the socket supervisor out of 'online' for long stretches while HTTP
+            // still works — hard-deferring here silently strands queued messages forever
+            // (QA C-F2/A-F3, live runner pid-98509). Fail-safe is a periodic failed attempt,
+            // never a silent stuck queue; transport-level failures are handled below.
+            logger.debug('[pendingQueue] materializing with degraded session socket supervisor', {
+                sessionId: this.sessionId,
+                phase: supervisorState.phase,
+            });
         }
 
         const policy = resolvePendingQueueReconcileWhenEmpty(opts, 'skip');
@@ -3228,17 +3414,36 @@ export class ApiSessionClient extends EventEmitter {
         }
         const refreshedTurnStatus = await this.reconcileTurnStatusBeforePendingMaterializationIfNeeded();
         if (!refreshedTurnStatus) {
+            this.logPendingMaterializationSkip('turn_status_refresh_failed');
             return { type: 'no_pending' };
         }
         if (!this.pendingQueueState.known || this.pendingQueueState.pendingCount <= 0) {
             return { type: 'no_pending' };
         }
         if (this.isPendingMaterializationBlocked()) {
+            this.logPendingMaterializationSkip('blocked');
             return { type: 'no_pending' };
         }
 
         const inner = await this.runMaterializeNextPendingMessageInner();
         return inner.result;
+    }
+
+    /**
+     * Known-positive pending count with no materialization attempt is the silent-stuck
+     * shape (QA A-F3/C-F2); log why the drain was skipped so it is diagnosable from
+     * runner logs without instrumented builds.
+     */
+    private logPendingMaterializationSkip(reason: 'blocked' | 'turn_status_refresh_failed'): void {
+        logger.debug('[pendingQueue] materialization skipped', {
+            sessionId: this.sessionId,
+            reason,
+            hasCanonicalActiveTurn: this.sessionTurnLifecycle.hasActiveTurn(),
+            latestTurnStatus: this.latestTurnStatus ?? null,
+            continuationRecoveryBlocked: isSessionContinuationRecoveryBlockingPendingDrain(this.metadata),
+            pendingCount: this.pendingQueueState.known ? this.pendingQueueState.pendingCount : null,
+            pendingVersion: this.pendingQueueState.known ? this.pendingQueueState.pendingVersion : null,
+        });
     }
 
     async popPendingMessage(): Promise<boolean> {

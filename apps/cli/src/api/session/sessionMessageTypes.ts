@@ -60,6 +60,7 @@ export type ACPProvider = string;
 export type SessionEventMessage =
   | (TranscriptEventLifecycle & { type: 'switch'; mode: 'local' | 'remote' })
   | (TranscriptEventLifecycle & { type: 'message'; message: string })
+  | (TranscriptEventLifecycle & Extract<TranscriptRawAgentEventV1, { type: 'runtime-config-outcome' }>)
   | (TranscriptEventLifecycle & ConnectedServiceRuntimeAuthRecoveryEvent)
   | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)
   | { type: 'permission-mode-changed'; mode: import('../types').PermissionMode }
