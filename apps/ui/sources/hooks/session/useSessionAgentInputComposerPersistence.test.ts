@@ -51,6 +51,45 @@ function installMockDocument(visibilityState: 'hidden' | 'visible' = 'visible') 
     };
 }
 
+function installMockWindowLifecycleEvents() {
+    const listenersByEvent = new Map<string, Set<() => void>>();
+    const previousAddEventListenerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'addEventListener');
+    const previousRemoveEventListenerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'removeEventListener');
+
+    Object.defineProperty(globalThis, 'addEventListener', {
+        configurable: true,
+        value: (eventName: string, listener: () => void) => {
+            const listeners = listenersByEvent.get(eventName) ?? new Set<() => void>();
+            listeners.add(listener);
+            listenersByEvent.set(eventName, listeners);
+        },
+    });
+    Object.defineProperty(globalThis, 'removeEventListener', {
+        configurable: true,
+        value: (eventName: string, listener: () => void) => {
+            listenersByEvent.get(eventName)?.delete(listener);
+        },
+    });
+
+    return {
+        emit: (eventName: string) => {
+            listenersByEvent.get(eventName)?.forEach((listener) => listener());
+        },
+        restore: () => {
+            if (previousAddEventListenerDescriptor) {
+                Object.defineProperty(globalThis, 'addEventListener', previousAddEventListenerDescriptor);
+            } else {
+                delete (globalThis as { addEventListener?: unknown }).addEventListener;
+            }
+            if (previousRemoveEventListenerDescriptor) {
+                Object.defineProperty(globalThis, 'removeEventListener', previousRemoveEventListenerDescriptor);
+            } else {
+                delete (globalThis as { removeEventListener?: unknown }).removeEventListener;
+            }
+        },
+    };
+}
+
 vi.mock('react-native-mmkv', () => {
     class MMKV {
         getString(key: string) {
@@ -421,6 +460,65 @@ describe('useSessionAgentInputComposerPersistence', () => {
             }));
             expect(draftValueStore.readSessionDraftValue(scope, 'session-a', 'structuredInput.mentions')).toEqual([mention]);
         } finally {
+            mockDocument.restore();
+            vi.useRealTimers();
+        }
+    });
+
+    it('flushes pending local UI and structured input state when the web window blurs while visible', async () => {
+        vi.useFakeTimers();
+        const mockDocument = installMockDocument('visible');
+        const mockWindowLifecycle = installMockWindowLifecycleEvents();
+        const { useSessionAgentInputComposerPersistence } = await importHook();
+        const localUiStateStore = await importLocalUiStateStore();
+        const draftValueStore = await importSessionDraftValueStore();
+        const localUiStatePersistence = await importLocalUiStatePersistence();
+        const draftValuePersistence = await importSessionDraftValuesPersistence();
+        const scope = activeScopeState.value;
+        const owner = { kind: 'session' as const, sessionId: 'session-a' };
+        const mention = {
+            kind: 'skill' as const,
+            tokenText: '$review',
+            start: 4,
+            end: 11,
+            name: 'review',
+        };
+
+        try {
+            const hook = await renderHook(
+                () => useSessionAgentInputComposerPersistence({
+                    sessionId: 'session-a',
+                    text: 'Ask $review',
+                    textLength: 'Ask $review'.length,
+                    fontScale: 1,
+                }),
+            );
+
+            await act(async () => {
+                hook.getCurrent().inputPersistence.onScrollYChange(64);
+                hook.getCurrent().structuredInputPersistence.onMentionsChange([mention]);
+            });
+
+            expect(localUiStatePersistence.loadPersistedAgentInputLocalUiState(scope)['session:session-a']).toBeUndefined();
+            expect(draftValuePersistence.loadPersistedSessionDraftValues(scope)['session-a']).toBeUndefined();
+
+            mockDocument.setVisibilityState('visible');
+            await act(async () => {
+                mockWindowLifecycle.emit('blur');
+            });
+
+            localUiStateStore.invalidateAgentInputLocalUiStateCache(scope);
+            draftValueStore.invalidateSessionDraftValuesCache(scope);
+            expect(localUiStateStore.readAgentInputLocalUiState(scope, owner, {
+                textLength: 'Ask $review'.length,
+                fontScale: 1,
+            })).toEqual(expect.objectContaining({
+                scrollY: 64,
+                textLength: 'Ask $review'.length,
+            }));
+            expect(draftValueStore.readSessionDraftValue(scope, 'session-a', 'structuredInput.mentions')).toEqual([mention]);
+        } finally {
+            mockWindowLifecycle.restore();
             mockDocument.restore();
             vi.useRealTimers();
         }

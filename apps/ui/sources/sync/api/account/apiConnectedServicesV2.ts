@@ -2,6 +2,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { serverFetch } from '@/sync/http/client';
 import { HappyError } from '@/utils/errors/errors';
 import { backoff } from '@/utils/timing/time';
+import { createConnectedServiceApiError } from './connectedServiceApiError';
 
 import type { ConnectedServiceId, SealedConnectedServiceCredentialV1 } from '@happier-dev/protocol';
 
@@ -11,12 +12,6 @@ type ConnectedServiceCredentialMetadataInput = Readonly<{
   providerAccountId?: string | null;
   expiresAt?: number | null;
 }>;
-
-function extractErrorCode(json: unknown): string | null {
-  if (!json || typeof json !== 'object') return null;
-  const maybe = json as any;
-  return typeof maybe.error === 'string' ? maybe.error : null;
-}
 
 export async function registerConnectedServiceCredentialSealed(
   credentials: AuthCredentials,
@@ -48,14 +43,11 @@ export async function registerConnectedServiceCredentialSealed(
 
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        let message = `Failed to connect ${params.serviceId}`;
-        try {
-          const json = await response.json();
-          message = extractErrorCode(json) ?? message;
-        } catch {
-          // ignore
-        }
-        throw new HappyError(message, false, { status: response.status, kind: 'server' });
+        const json = await response.json().catch(() => null);
+        throw createConnectedServiceApiError(json, {
+          status: response.status,
+          fallbackCode: 'connect_credential_request_failed',
+        });
       }
       throw new Error(`Failed to connect ${params.serviceId}: ${response.status}`);
     }
@@ -69,11 +61,13 @@ export async function registerConnectedServiceCredentialSealed(
 
 export async function deleteConnectedServiceCredential(
   credentials: AuthCredentials,
-  params: Readonly<{ serviceId: ConnectedServiceId; profileId: string }>,
+  params: Readonly<{ serviceId: ConnectedServiceId; profileId: string; cleanupGroupReferences?: boolean }>,
 ): Promise<void> {
   await backoff(async () => {
+    const path = `/v2/connect/${encodeURIComponent(params.serviceId)}/profiles/${encodeURIComponent(params.profileId)}/credential`
+      + (params.cleanupGroupReferences ? '?cleanupGroupReferences=true' : '');
     const response = await serverFetch(
-      `/v2/connect/${encodeURIComponent(params.serviceId)}/profiles/${encodeURIComponent(params.profileId)}/credential`,
+      path,
       {
         method: 'DELETE',
         headers: {
@@ -90,14 +84,11 @@ export async function deleteConnectedServiceCredential(
 
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        let message = 'connect_credential_not_found';
-        try {
-          const json = await response.json();
-          message = extractErrorCode(json) ?? message;
-        } catch {
-          // ignore
-        }
-        throw new HappyError(message, false, { status: response.status, kind: 'server' });
+        const json = await response.json().catch(() => null);
+        throw createConnectedServiceApiError(json, {
+          status: response.status,
+          fallbackCode: 'connect_credential_not_found',
+        });
       }
       throw new Error(`Failed to disconnect ${params.serviceId}: ${response.status}`);
     }
@@ -130,9 +121,10 @@ export async function getConnectedServiceCredentialSealed(
 
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        let message = 'connect_credential_not_found';
-        message = extractErrorCode(json) ?? message;
-        throw new HappyError(message, false, { status: response.status, kind: 'server' });
+        throw createConnectedServiceApiError(json, {
+          status: response.status,
+          fallbackCode: 'connect_credential_not_found',
+        });
       }
       throw new Error(`Failed to fetch connected service credential: ${response.status}`);
     }
@@ -196,14 +188,11 @@ export async function exchangeConnectedServiceOauthViaProxy(
 
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        let message = `Failed to exchange ${params.serviceId} OAuth code`;
-        try {
-          const json = await response.json();
-          message = extractErrorCode(json) ?? message;
-        } catch {
-          // ignore
-        }
-        throw new HappyError(message, false, { status: response.status, kind: 'server' });
+        const json = await response.json().catch(() => null);
+        throw createConnectedServiceApiError(json, {
+          status: response.status,
+          fallbackCode: 'connect_oauth_exchange_failed',
+        });
       }
       throw new Error(`Failed to exchange ${params.serviceId}: ${response.status}`);
     }
@@ -246,9 +235,10 @@ export async function startOpenAiCodexDeviceAuthViaProxy(
     const json = await response.json().catch(() => null);
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        let message = 'connect_oauth_exchange_failed';
-        message = extractErrorCode(json) ?? message;
-        throw new HappyError(message, false, { status: response.status, kind: 'server' });
+        throw createConnectedServiceApiError(json, {
+          status: response.status,
+          fallbackCode: 'connect_oauth_exchange_failed',
+        });
       }
       throw new Error(`Failed to start device auth: ${response.status}`);
     }
@@ -297,9 +287,10 @@ export async function pollOpenAiCodexDeviceAuthViaProxy(
     const json = await response.json().catch(() => null);
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-        let message = 'connect_oauth_exchange_failed';
-        message = extractErrorCode(json) ?? message;
-        throw new HappyError(message, false, { status: response.status, kind: 'server' });
+        throw createConnectedServiceApiError(json, {
+          status: response.status,
+          fallbackCode: 'connect_oauth_exchange_failed',
+        });
       }
       throw new Error(`Failed to poll device auth: ${response.status}`);
     }

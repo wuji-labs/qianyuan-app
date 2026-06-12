@@ -82,6 +82,16 @@ describe('settings registry completeness', () => {
             promptMode: 'standard',
             resumePromptMode: 'off',
         }).resumePromptMode).toBe('off');
+        expect(ACCOUNT_SETTING_ARTIFACTS.definitions.usageLimitRecoverySettingsV1.schema.parse({
+            v: 1,
+            mode: 'auto_wait',
+            promptMode: 'standard',
+            resumePromptMode: 'custom',
+            customResumePrompt: '  Pick the task back up.  ',
+        })).toMatchObject({
+            resumePromptMode: 'custom',
+            customResumePrompt: 'Pick the task back up.',
+        });
     });
 
     it('owns session list ordering mode as an account-synced enum setting', async () => {

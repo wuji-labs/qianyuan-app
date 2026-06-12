@@ -5,6 +5,7 @@ import { renderScreen } from '@/dev/testkit';
 import { installFormsCommonModuleMocks } from './formsTestHelpers';
 import type { MultiTextInputHandle as NativeMultiTextInputHandle } from './MultiTextInput';
 import type { MultiTextInputHandle as WebMultiTextInputHandle } from './MultiTextInput.web';
+import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from './largeTextInputPolicy';
 
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -248,6 +249,178 @@ describe('MultiTextInput', () => {
         expect(largeInput.props['data-testid']).toBe('composer-input-large');
         expect(largeInput.props.style.maxHeight).toBe(144);
         expect(largeInput.props.style.overflowY).toBe('auto');
+    });
+
+    it('keeps oversized web textarea text visible and natively scrollable', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const largeValue = `${'a'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1)}tail`;
+        const tree = (await renderScreen(React.createElement(MultiTextInput as unknown as React.ComponentType<Record<string, unknown>>, {
+            testID: 'composer-input-large',
+            value: largeValue,
+            maxHeight: 144,
+            onChangeText: () => {},
+        }))).tree;
+
+        const input = tree.findByType('textarea' as any);
+        expect(input.props.defaultValue).toBe(largeValue);
+        expect(input.props.style.fontSize).not.toBe('0px');
+        expect(input.props.style.lineHeight).not.toBe('0px');
+        expect(input.props.style.color).not.toBe('transparent');
+        expect(input.props.style.overflowY).toBe('auto');
+        expect(() => tree.findByProps({ 'data-testid': 'composer-input-large-value-preview' })).toThrow();
+    });
+
+    it('does not collapse textarea paint before an oversized text paste reaches the DOM when attachments are unavailable', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const tree = (await renderScreen(React.createElement(MultiTextInput as unknown as React.ComponentType<Record<string, unknown>>, {
+            testID: 'composer-input',
+            value: 'start',
+            onChangeText: () => {},
+        }))).tree;
+        const input = tree.findByType('textarea' as any);
+        const preventDefault = vi.fn();
+        const currentTarget = {
+            value: 'start',
+            selectionStart: 5,
+            selectionEnd: 5,
+            style: {} as Record<string, string>,
+        };
+
+        input.props.onPaste({
+            currentTarget,
+            preventDefault,
+            clipboardData: {
+                items: [],
+                files: [],
+                getData: (type: string) => type === 'text/plain'
+                    ? 'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1)
+                    : '',
+            },
+        });
+
+        expect(preventDefault).not.toHaveBeenCalled();
+        expect(currentTarget.style.fontSize).toBeUndefined();
+        expect(currentTarget.style.lineHeight).toBeUndefined();
+        expect(currentTarget.style.color).toBeUndefined();
+    });
+
+    it('keeps oversized web text pastes editable even when attachments are available', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const onFilesPasted = vi.fn();
+        const tree = (await renderScreen(React.createElement(MultiTextInput as unknown as React.ComponentType<Record<string, unknown>>, {
+            testID: 'composer-input',
+            value: 'start',
+            onChangeText: () => {},
+            onFilesPasted,
+        }))).tree;
+        const input = tree.findByType('textarea' as any);
+        const preventDefault = vi.fn();
+        const currentTarget = {
+            value: 'start',
+            selectionStart: 5,
+            selectionEnd: 5,
+            style: {} as Record<string, string>,
+        };
+        const pastedText = '<html>'.repeat(Math.ceil((TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1) / 6));
+
+        input.props.onPaste({
+            currentTarget,
+            preventDefault,
+            clipboardData: {
+                items: [],
+                files: [],
+                getData: (type: string) => type === 'text/plain' ? pastedText : '',
+            },
+        });
+
+        expect(preventDefault).not.toHaveBeenCalled();
+        expect(onFilesPasted).not.toHaveBeenCalled();
+        expect(currentTarget.style.fontSize).toBeUndefined();
+        expect(currentTarget.style.lineHeight).toBeUndefined();
+        expect(currentTarget.style.color).toBeUndefined();
+    });
+
+    it('defers oversized web text changes until the live text is flushed', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const ref = React.createRef<WebMultiTextInputHandle & { flushPendingTextChange?: () => string }>();
+        const onChangeText = vi.fn();
+        const onStateChange = vi.fn();
+        const tree = (await renderScreen(React.createElement(MultiTextInput as unknown as React.ComponentType<Record<string, unknown>>, {
+            ref,
+            testID: 'composer-input',
+            value: '',
+            onChangeText,
+            onStateChange,
+        }))).tree;
+        const input = tree.findByType('textarea' as any);
+        const largeText = 'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1);
+        const currentTarget = {
+            value: largeText,
+            selectionStart: largeText.length,
+            selectionEnd: largeText.length,
+            scrollHeight: 120,
+            style: {} as Record<string, string>,
+        };
+
+        await act(async () => {
+            input.props.onChange({
+                target: currentTarget,
+                currentTarget,
+            });
+        });
+
+        expect(onChangeText).not.toHaveBeenCalled();
+        expect(onStateChange).toHaveBeenCalledWith({
+            text: largeText,
+            selection: { start: largeText.length, end: largeText.length },
+        });
+        expect(typeof ref.current?.flushPendingTextChange).toBe('function');
+
+        const flushed = ref.current?.flushPendingTextChange?.();
+
+        expect(flushed).toBe(largeText);
+        expect(onChangeText).toHaveBeenCalledWith(largeText);
+    });
+
+    it('drops pending oversized web text changes on unmount instead of emitting stale text', async () => {
+        vi.useFakeTimers();
+        try {
+            const { MultiTextInput } = await import('./MultiTextInput.web');
+            const onChangeText = vi.fn();
+            const screen = await renderScreen(React.createElement(MultiTextInput as unknown as React.ComponentType<Record<string, unknown>>, {
+                testID: 'composer-input',
+                value: '',
+                onChangeText,
+            }));
+            const input = screen.tree.findByType('textarea' as any);
+            const largeText = 'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1);
+            const currentTarget = {
+                value: largeText,
+                selectionStart: largeText.length,
+                selectionEnd: largeText.length,
+                scrollHeight: 120,
+                style: {} as Record<string, string>,
+            };
+
+            await act(async () => {
+                input.props.onChange({
+                    target: currentTarget,
+                    currentTarget,
+                });
+            });
+            expect(onChangeText).not.toHaveBeenCalled();
+
+            await act(async () => {
+                screen.tree.unmount();
+            });
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(1_000);
+            });
+
+            expect(onChangeText).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('forwards native key event metadata used by composer shortcuts', async () => {
@@ -596,6 +769,57 @@ describe('MultiTextInput', () => {
         expect(onStateChange).toHaveBeenCalledWith({
             text: 'hello',
             selection: { start: 3, end: 3 },
+        });
+    });
+
+    it('restores web selection against the live DOM text when React carries a projected value', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput.web');
+        const onChangeText = vi.fn();
+        const onSelectionChange = vi.fn();
+        const onStateChange = vi.fn();
+        const ref = React.createRef<WebMultiTextInputHandle>();
+        const liveText = `${'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1)} /run`;
+        const mockTextarea = {
+            value: liveText,
+            scrollTop: 0,
+            scrollHeight: 30,
+            style: {} as Record<string, string>,
+            setSelectionRange: vi.fn(),
+            dispatchEvent: vi.fn(),
+            focus: vi.fn(),
+            blur: vi.fn(),
+            getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 40 }),
+        };
+
+        await act(async () => {
+            renderer.create(
+                <MultiTextInput
+                    ref={ref}
+                    testID="composer-input"
+                    value=""
+                    onChangeText={onChangeText}
+                    onSelectionChange={onSelectionChange}
+                    onStateChange={onStateChange}
+                />,
+                {
+                    createNodeMock: (element) => {
+                        if (element.type === 'textarea') return mockTextarea;
+                        return null;
+                    },
+                },
+            );
+        });
+
+        await act(async () => {
+            ref.current?.setSelection?.({ start: liveText.length, end: liveText.length });
+        });
+
+        expect(onChangeText).not.toHaveBeenCalled();
+        expect(mockTextarea.setSelectionRange).toHaveBeenCalledWith(liveText.length, liveText.length);
+        expect(onSelectionChange).toHaveBeenCalledWith({ start: liveText.length, end: liveText.length });
+        expect(onStateChange).toHaveBeenCalledWith({
+            text: liveText,
+            selection: { start: liveText.length, end: liveText.length },
         });
     });
 

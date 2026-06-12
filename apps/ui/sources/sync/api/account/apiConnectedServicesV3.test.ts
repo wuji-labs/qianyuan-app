@@ -102,6 +102,30 @@ describe('apiConnectedServicesV3', () => {
     expect((init.headers as Headers).get('Content-Type')).toBeNull();
   });
 
+  it('sends the cleanup flag when deleting a plaintext credential that should be removed from auth groups', async () => {
+    mockServerConfig();
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'https://api.example.test/health') {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const { deleteConnectedServiceCredentialV3 } = await import('./apiConnectedServicesV3');
+    await deleteConnectedServiceCredentialV3(credentials, {
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      cleanupGroupReferences: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.test/v3/connect/claude-subscription/profiles/work/credential?cleanupGroupReferences=true',
+      expect.objectContaining({ method: 'DELETE', headers: expect.any(Headers) }),
+    );
+  });
+
   it('reads a plaintext credential record from the v3 endpoint', async () => {
     mockServerConfig();
     const record = {

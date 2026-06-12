@@ -79,6 +79,11 @@ import {
     createAccountSettingsScope,
     type AccountSettingsScope,
 } from './domains/settings/scope/accountSettingsScope';
+
+type LoadOlderMessagesOptions = Readonly<{
+    limit?: number;
+}>;
+
 import { createSyncGenerationGuard } from './domains/scope/syncGenerationGuard';
 import {
     clearWarmCacheAccountScope,
@@ -686,6 +691,7 @@ class Sync {
       private sessionMessagesFetchedLatestByKey = new Set<string>();
       private sessionMessagesLoadingOlderByKey = new Set<string>();
       private sessionMessagesLoadingNewerByKey = new Set<string>();
+      private deferredMessagesFetchSessionIds = new Set<string>();
       private sessionMessagesPaginationSupportedByKey = new Map<string, boolean>();
       private directSessionOlderCursorBySessionId = new Map<string, string | null>();
       private directSessionHasMoreOlderBySessionId = new Map<string, boolean>();
@@ -1131,7 +1137,11 @@ class Sync {
           });
       };
 
-      private getSessionMessagesPageSize(): number {
+      private getSessionMessagesPageSize(options?: LoadOlderMessagesOptions): number {
+          const optionLimit = options?.limit;
+          if (typeof optionLimit === 'number' && Number.isFinite(optionLimit)) {
+              return Math.max(1, Math.trunc(optionLimit));
+          }
           return Math.max(1, Math.trunc(this.syncTuning.sessionMessagesPageSize));
       }
 
@@ -1524,6 +1534,7 @@ class Sync {
         this.sessionMessagesFetchedLatestByKey.clear();
         this.sessionMessagesLoadingOlderByKey.clear();
         this.sessionMessagesLoadingNewerByKey.clear();
+        this.deferredMessagesFetchSessionIds.clear();
         this.sessionMessagesPaginationSupportedByKey.clear();
         this.directSessionTailCursorBySessionId.clear();
         this.sessionViewport.clear();
@@ -2552,6 +2563,9 @@ class Sync {
             metaOverrides,
             configuredMode: state.settings.sessionMessageSendMode,
             busySteerSendPolicy: state.settings.sessionBusySteerSendPolicy,
+            permissionModeApplyTiming: state.settings.sessionPermissionModeApplyTiming,
+            // Programmatic path: never prompt here; 'ask' still hardens the decision (queue).
+            nonSteerableSendPrompt: state.settings.sessionNonSteerableSendPrompt,
             resumeCapabilityOptions: buildResumeCapabilityOptionsFromUiState({
                 settings: state.settings,
                 results: undefined,
@@ -4010,6 +4024,22 @@ class Sync {
         ]);
     }
 
+    private hasUserOlderLoadInFlight(sessionId: string): boolean {
+        const prefix = `${sessionId}:`;
+        for (const key of this.sessionMessagesLoadingOlderByKey) {
+            if (key.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private replayDeferredMessagesFetch(sessionId: string): void {
+        if (this.deferredMessagesFetchSessionIds.delete(sessionId)) {
+            this.getOrCreateMessagesSync(sessionId).invalidateCoalesced();
+        }
+    }
+
     private fetchMessages = async (sessionId: string) => {
         if (this.hasFetchedSessionsSnapshotForActiveServer && !this.isSessionKnownOnResolvedOwnerServer(sessionId)) {
             // Do not fetch messages when we cannot resolve the session to either the active server
@@ -4018,6 +4048,15 @@ class Sync {
             if (storage.getState().sessionMessages[sessionId]?.isLoaded !== true) {
                 storage.getState().applyMessagesLoaded(sessionId);
             }
+            return;
+        }
+
+        if (this.hasUserOlderLoadInFlight(sessionId)) {
+            // Defer-not-drop: background catch-up must not apply messages while a user-triggered
+            // older-page load is in flight for this session (it would prepend uncoordinated content
+            // under the transcript viewport). Returning is a safe success for InvalidateSync; the
+            // deferral is replayed from loadOlderMessagesForChain once the in-flight load settles.
+            this.deferredMessagesFetchSessionIds.add(sessionId);
             return;
         }
 
@@ -4432,6 +4471,7 @@ class Sync {
           scope: SessionMessagesScope;
           sidechainId?: string | null;
           beforeSeqOverride?: number;
+          limit?: number;
       }>): Promise<{
           loaded: number;
           hasMore: boolean;
@@ -4463,6 +4503,10 @@ class Sync {
                   this.sessionMessagesLoadingOlderByKey.add(loadingKey);
                   try {
                       const shouldContinue = this.createServerScopeGuard();
+                      const requestedLimit =
+                          typeof params.limit === 'number' && Number.isFinite(params.limit)
+                              ? this.getSessionMessagesPageSize({ limit: params.limit })
+                              : null;
                       const page = await machineDirectSessionTranscriptPage({
                           machineId: directSessionLink.machineId,
                           providerId: directSessionLink.providerId,
@@ -4470,6 +4514,7 @@ class Sync {
                           source: directSessionLink.source,
                           direction: 'older',
                           cursor,
+                          ...(requestedLimit !== null ? { maxItems: requestedLimit } : {}),
                       }, { serverId: this.getDirectSessionServerScope(params.sessionId) });
                       if (!shouldContinue()) {
                           return { loaded: 0, hasMore: knownHasMore ?? true, status: 'not_ready' };
@@ -4497,6 +4542,7 @@ class Sync {
                       return { loaded: 0, hasMore: knownHasMore ?? true, status: 'loaded' };
                   } finally {
                       this.sessionMessagesLoadingOlderByKey.delete(loadingKey);
+                      this.replayDeferredMessagesFetch(params.sessionId);
                   }
               }
           }
@@ -4552,7 +4598,7 @@ class Sync {
                   sessionId: params.sessionId,
                   sessionEncryptionMode,
                   beforeSeq,
-                  limit: this.getSessionMessagesPageSize(),
+                  limit: this.getSessionMessagesPageSize({ limit: params.limit }),
                   scope: params.scope,
                   sidechainId: params.sidechainId ?? null,
                   getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
@@ -4596,23 +4642,24 @@ class Sync {
               return { loaded: 0, hasMore: knownHasMore ?? true, status: 'loaded' };
           } finally {
               this.sessionMessagesLoadingOlderByKey.delete(pagingKey);
+              this.replayDeferredMessagesFetch(params.sessionId);
           }
       }
 
-      public async loadOlderMessages(sessionId: string): Promise<{
+      public async loadOlderMessages(sessionId: string, options?: LoadOlderMessagesOptions): Promise<{
           loaded: number;
           hasMore: boolean;
           status: 'loaded' | 'no_more' | 'not_ready' | 'in_flight';
       }> {
-          return this.loadOlderMessagesForChain({ sessionId, scope: 'main' });
+          return this.loadOlderMessagesForChain({ sessionId, scope: 'main', limit: options?.limit });
       }
 
-      public async loadOlderMessagesFromCursor(sessionId: string, beforeSeq: number): Promise<{
+      public async loadOlderMessagesFromCursor(sessionId: string, beforeSeq: number, options?: LoadOlderMessagesOptions): Promise<{
           loaded: number;
           hasMore: boolean;
           status: 'loaded' | 'no_more' | 'not_ready' | 'in_flight';
       }> {
-          return this.loadOlderMessagesForChain({ sessionId, scope: 'main', beforeSeqOverride: beforeSeq });
+          return this.loadOlderMessagesForChain({ sessionId, scope: 'main', beforeSeqOverride: beforeSeq, limit: options?.limit });
       }
 
       public async fetchUserMessageHistoryPage(
@@ -4737,13 +4784,13 @@ class Sync {
           });
       }
 
-        public async loadOlderMessagesForkAware(childSessionId: string): Promise<{
+        public async loadOlderMessagesForkAware(childSessionId: string, options?: LoadOlderMessagesOptions): Promise<{
             loaded: number;
             hasMore: boolean;
             status: 'loaded' | 'no_more' | 'not_ready' | 'in_flight';
         }> {
             const fork = getForkedTranscriptSnapshotCached(storage.getState() as any, childSessionId);
-            if (!fork) return this.loadOlderMessages(childSessionId);
+            if (!fork) return this.loadOlderMessages(childSessionId, options);
 
             const request = resolveNextForkedTranscriptLoadOlderRequest({
                 fork,
@@ -4769,8 +4816,8 @@ class Sync {
 
             const result =
                 request.kind === 'loadOlderFromCursor'
-                    ? await this.loadOlderMessagesFromCursor(request.sessionId, request.beforeSeq)
-                    : await this.loadOlderMessages(request.sessionId);
+                    ? await this.loadOlderMessagesFromCursor(request.sessionId, request.beforeSeq, options)
+                    : await this.loadOlderMessages(request.sessionId, options);
 
             const overallHasMore = computeForkedTranscriptHasMoreOlder({
                 fork,
@@ -4849,7 +4896,15 @@ class Sync {
 
       public onSessionViewportChange(sessionId: string, state: SessionViewportChangeState): void {
           if (!sessionId) return;
-          if (state.shouldRestoreViewport !== true || state.isPinned === true) {
+          if (state.shouldRestoreViewport !== true) {
+              this.markSessionLiveTailIntent(sessionId);
+              return;
+          }
+          if (state.isPinned === true) {
+              const prevViewport = this.sessionViewport.get(sessionId);
+              if (prevViewport?.source === 'observed' && prevViewport.isPinned === false) {
+                  return;
+              }
               this.markSessionLiveTailIntent(sessionId);
               return;
           }

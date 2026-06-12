@@ -8,6 +8,9 @@ function buildUpdate(params: {
     messageId: string;
     messageSeq: number;
     content?: { t: 'encrypted'; c: string } | { t: 'plain'; v: unknown };
+    updateCreatedAt?: number;
+    messageCreatedAt?: number;
+    messageUpdatedAt?: number;
 }): {
     id: string;
     seq: number;
@@ -29,7 +32,7 @@ function buildUpdate(params: {
     return {
         id: 'u1',
         seq: 100,
-        createdAt: 1_000,
+        createdAt: params.updateCreatedAt ?? 1_000,
         body: {
             t: 'message-updated',
             sid: params.sid ?? 's1',
@@ -39,8 +42,8 @@ function buildUpdate(params: {
                 content: params.content ?? { t: 'encrypted', c: 'x' },
                 localId: null,
                 sidechainId: null,
-                createdAt: 1_000,
-                updatedAt: 2_000,
+                createdAt: params.messageCreatedAt ?? 1_000,
+                updatedAt: params.messageUpdatedAt ?? 2_000,
             },
         },
     };
@@ -149,6 +152,40 @@ describe('handleMessageUpdatedSocketUpdate', () => {
         } finally {
             consoleError.mockRestore();
         }
+    });
+
+    it('applies loaded stale message edits to the transcript without spending a session projection update', async () => {
+        const decryptMessage = vi.fn(async () => ({
+            id: 'm2',
+            localId: null,
+            createdAt: 1_000,
+            content: { role: 'assistant', content: { type: 'text', text: 'edited' } },
+        }));
+        const { params, applyMessages, applySessions, markSessionMaterializedMaxSeq } = buildHarness({
+            updateData: buildUpdate({
+                sid: 's1',
+                messageId: 'm2',
+                messageSeq: 2,
+                updateCreatedAt: 2_000,
+                messageCreatedAt: 1_000,
+            }),
+            getSession: () => ({
+                ...buildSession('s1', 5),
+                updatedAt: 1_500,
+                meaningfulActivityAt: 1_000,
+            } as Session),
+            getSessionEncryption: () => ({ decryptMessage }),
+            getSessionMaterializedMaxSeq: () => 2,
+            isSessionMessagesLoaded: () => true,
+            isSessionFullContentConsumerActive: () => true,
+        });
+
+        await handleMessageUpdatedSocketUpdate(params);
+
+        expect(decryptMessage).toHaveBeenCalledTimes(1);
+        expect(applyMessages).toHaveBeenCalledTimes(1);
+        expect(markSessionMaterializedMaxSeq).toHaveBeenCalledWith('s1', 2);
+        expect(applySessions).not.toHaveBeenCalled();
     });
 
     it('applies decrypted message updates even when the session is not yet hydrated, while still refreshing sessions', async () => {

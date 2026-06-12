@@ -521,6 +521,50 @@ describe('submitSessionUserMessage', () => {
         expect(calls.map((call) => call.type)).toEqual(['enqueue']);
     });
 
+    it('queues busy sends when provider-owned classification marks outgoing config metadata non-steerable', async () => {
+        const subject = await expectSubject();
+        if (!subject) return;
+        const { calls, port } = createPort();
+
+        const result = await subject.submitSessionUserMessage(port, {
+            sessionId: 's1',
+            session: createSession({
+                active: true,
+                presence: 'online',
+                agentStateVersion: 1,
+                thinking: true,
+                thinkingAt: 1_000,
+                agentState: {
+                    controlledByUser: false,
+                    capabilities: {
+                        inFlightSteer: true,
+                        inFlightSteerSupported: true,
+                        inFlightSteerAvailable: true,
+                    },
+                } as any,
+            }),
+            text: 'do this with the selected config',
+            metaOverrides: { reasoningEffort: 'xhigh' },
+            configuredMode: 'agent_queue',
+            busySteerSendPolicy: 'steer_immediately',
+            nonSteerableSendPrompt: 'queue_silently',
+            providerNonSteerablePayloadReason: 'provider_config_change_refused',
+            resumeCapabilityOptions: { accountSettings: {} },
+            nowMs: 1_100,
+        });
+
+        expect(result).toMatchObject({
+            type: 'wake_pending',
+            persistence: 'pending',
+            wake: { attempted: false, state: 'not_needed' },
+        });
+        expect(calls.map((call) => call.type)).toEqual(['enqueue']);
+        expect(calls[0]).toMatchObject({
+            type: 'enqueue',
+            metaOverrides: { reasoningEffort: 'xhigh' },
+        });
+    });
+
     it('does not make forceImmediate sticky for the next normal pending send', async () => {
         const subject = await expectSubject();
         if (!subject) return;

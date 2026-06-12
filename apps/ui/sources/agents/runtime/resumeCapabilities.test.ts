@@ -1,7 +1,7 @@
 import { buildBackendTargetKey } from '@happier-dev/protocol';
 import { describe, expect, test } from 'vitest';
 
-import { canAgentResume, canResumeSession, canResumeSessionWithOptions, getAgentVendorResumeId } from './resumeCapabilities';
+import { canAgentResume, canContinueSessionWithFreshSpawn, canResumeSession, canResumeSessionWithOptions, getAgentVendorResumeId } from './resumeCapabilities';
 
 describe('getAgentVendorResumeId', () => {
     test('returns null when metadata missing', () => {
@@ -211,5 +211,31 @@ describe('configured ACP resume capability', () => {
                 title: 'Custom Kiro',
             },
         }, options)).toBe(true);
+    });
+});
+
+describe('canContinueSessionWithFreshSpawn', () => {
+    test('continuable when the agent supports vendor resume but no vendor id was ever persisted (pre-SessionStart death, QA A-F5)', () => {
+        expect(canContinueSessionWithFreshSpawn({ flavor: 'claude' })).toBe(true);
+    });
+
+    test('not the fresh-spawn case once a vendor resume id exists', () => {
+        expect(canContinueSessionWithFreshSpawn({ flavor: 'claude', claudeSessionId: 'c1' })).toBe(false);
+    });
+
+    test('not continuable for unknown flavors', () => {
+        expect(canContinueSessionWithFreshSpawn({ flavor: 'mystery-agent' })).toBe(false);
+        expect(canContinueSessionWithFreshSpawn(null)).toBe(false);
+    });
+
+    test('continuable even when experimental vendor resume is disabled by settings (fresh spawn needs no resume support)', () => {
+        expect(canContinueSessionWithFreshSpawn(
+            { flavor: 'codex' },
+            { accountSettings: { codexBackendMode: 'mcp' } },
+        )).toBe(true);
+    });
+
+    test('configured ACP flavors are governed by the normal resume gate, not the fresh-spawn gate', () => {
+        expect(canContinueSessionWithFreshSpawn({ flavor: 'acp:custom-backend' })).toBe(false);
     });
 });

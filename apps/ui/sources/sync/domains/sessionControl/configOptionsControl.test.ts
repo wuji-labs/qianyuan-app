@@ -340,3 +340,42 @@ describe('computeSessionConfigOptionControls', () => {
         expect(res?.[0]?.effectiveValue).toBe('true');
     });
 });
+
+describe('ultracode override of the reasoning effort control', () => {
+    const configOptions = [
+        {
+            id: 'reasoning_effort',
+            name: 'Thinking',
+            type: 'select',
+            currentValue: 'high',
+            options: [
+                { value: 'high', name: 'High' },
+                { value: 'xhigh', name: 'XHigh' },
+            ],
+        },
+        { id: 'ultracode', name: 'Ultracode', type: 'boolean', currentValue: 'false' },
+    ];
+
+    it('marks the reasoning effort control disabled while ultracode is effectively on', () => {
+        const controls = computeSessionConfigOptionControlsForProvider({
+            providerId: 'claude',
+            configOptions,
+            overrides: { ultracode: { value: 'true' } },
+        });
+        const effort = controls?.find((control) => control.option.id === 'reasoning_effort');
+        expect(effort?.disabled).toBe(true);
+        expect(effort?.disabledByOptionName).toBe('Ultracode');
+        const ultracode = controls?.find((control) => control.option.id === 'ultracode');
+        expect(ultracode?.disabled).not.toBe(true);
+    });
+
+    it('keeps the reasoning effort control enabled while ultracode is off', () => {
+        const controls = computeSessionConfigOptionControlsForProvider({
+            providerId: 'claude',
+            configOptions,
+        });
+        const effort = controls?.find((control) => control.option.id === 'reasoning_effort');
+        expect(effort?.disabled).not.toBe(true);
+        expect(effort?.disabledByOptionName).toBeUndefined();
+    });
+});

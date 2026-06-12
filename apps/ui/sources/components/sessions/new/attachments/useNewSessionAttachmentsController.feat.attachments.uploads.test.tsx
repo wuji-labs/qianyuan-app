@@ -196,6 +196,28 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         resolveReviewCommentDraftAnchorsForPromptSpy.mockImplementation(async ({ drafts }: { drafts: unknown[] }) => drafts);
     });
 
+    it('passes a live input text override through simple sends before prompt state catches up', async () => {
+        const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
+        const handleCreateSession = vi.fn();
+        const hook = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-live-text',
+            isCreating: false,
+            sessionPrompt: '',
+            handleCreateSession,
+            selectedProfileId: null,
+            targetServerId: 'server-a',
+            baseActionChips: [],
+        }));
+
+        await act(async () => {
+            hook.getCurrent().handleSend({ inputTextOverride: 'large live prompt' });
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        expect(handleCreateSession).toHaveBeenCalledWith({ inputTextOverride: 'large live prompt' });
+        await hook.unmount();
+    });
+
     it('restores attachment drafts when the new-session flow remounts with the same flow id', async () => {
         const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
         const handleCreateSession = vi.fn();

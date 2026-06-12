@@ -83,6 +83,7 @@ export function AgentInputProviderUsageBadge(props: AgentInputProviderUsageBadge
                 }}
                 maxWidthCap={360}
                 testID="agent-input-provider-usage-popover"
+                scrollEnabled={false}
                 content={(
                     <View style={styles.popoverContent}>
                         <Text style={styles.popoverTitle}>

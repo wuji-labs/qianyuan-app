@@ -100,6 +100,7 @@ export function AgentInputSessionConfigOptionsSection(props: AgentInputSessionCo
                         : null;
 
                 const isSelect = option.type === 'select' && (option.options?.length ?? 0) > 0;
+                const isDisabled = control.disabled === true;
 
                 return (
                     <View key={option.id} testID={`agent-input-config-option:${option.id}`} style={styles.configCard}>
@@ -110,9 +111,11 @@ export function AgentInputSessionConfigOptionsSection(props: AgentInputSessionCo
                             testID={`agent-input-config-option-summary:${option.id}`}
                             style={styles.optionDescription}
                         >
-                            {control.isPending && requestedLabel
-                                ? t('agentInput.acp.pendingValue', { current: currentLabel, requested: requestedLabel })
-                                : t('agentInput.acp.currentValue', { value: currentLabel })}
+                            {isDisabled
+                                ? t('agentInput.acp.optionOverriddenBy', { name: control.disabledByOptionName ?? '' })
+                                : control.isPending && requestedLabel
+                                    ? t('agentInput.acp.pendingValue', { current: currentLabel, requested: requestedLabel })
+                                    : t('agentInput.acp.currentValue', { value: currentLabel })}
                         </Text>
                         {option.description ? (
                             <Text style={styles.optionDescription}>
@@ -121,14 +124,17 @@ export function AgentInputSessionConfigOptionsSection(props: AgentInputSessionCo
                         ) : null}
 
                         {isSelect ? (
-                            <View style={styles.choiceRow}>
+                            <View style={[styles.choiceRow, isDisabled ? styles.choiceRowDisabled : null]} pointerEvents={isDisabled ? 'none' : 'auto'}>
                                 {option.options?.map((choice) => {
                                     const isSelected = choice.value === effectiveValue;
                                     return (
                                         <Pressable
                                             testID={`agent-input-config-option-option:${option.id}:${String(choice.value)}`}
                                             key={`${option.id}:${String(choice.value)}`}
-                                            onPress={() => props.onSelectValue?.(option.id, choice.value)}
+                                            onPress={() => {
+                                                if (isDisabled) return;
+                                                props.onSelectValue?.(option.id, choice.value);
+                                            }}
                                             style={({ pressed }) => [
                                                 styles.choicePill,
                                                 isSelected ? transientStyles.choicePillSelected : null,
@@ -204,6 +210,9 @@ const styles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         gap: 6,
         paddingTop: 2,
+    },
+    choiceRowDisabled: {
+        opacity: 0.4,
     },
     choicePill: {
         minHeight: 30,

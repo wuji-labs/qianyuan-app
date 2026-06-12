@@ -138,6 +138,24 @@ function createAuthoritativeGroup(overrides: Record<string, unknown> = {}) {
     };
 }
 
+function createStructuredConnectedServiceError(
+    code: string,
+    fields: Readonly<{ status?: number; resetAtMs?: number; generation?: number }> = {},
+): Error & { code: string; status?: number; resetAtMs?: number; generation?: number } {
+    const error = new Error(code) as Error & {
+        code: string;
+        status?: number;
+        resetAtMs?: number;
+        generation?: number;
+    };
+    error.name = 'ConnectedServiceApiError';
+    error.code = code;
+    error.status = fields.status;
+    error.resetAtMs = fields.resetAtMs;
+    error.generation = fields.generation;
+    return error;
+}
+
 async function renderGroupsScreen() {
     const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
     const screen = await renderScreen(<ConnectedServiceDetailView />);
@@ -216,6 +234,20 @@ vi.mock('@/sync/domains/connectedServices/storeConnectedServiceCredentialForAcco
 
 vi.mock('@/sync/api/account/apiConnectedServiceAuthGroupsV3', () => authGroupApiSpies);
 
+vi.mock('@/sync/api/account/apiAccountEncryptionMode', () => ({
+    fetchAccountEncryptionMode: vi.fn(async () => ({ mode: 'e2ee', updatedAt: 0 })),
+}));
+
+vi.mock('@/sync/api/account/apiConnectedServicesQuotasV2', () => ({
+    getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
+    requestConnectedServiceQuotaSnapshotRefresh: vi.fn(async () => true),
+}));
+
+vi.mock('@/sync/api/account/apiConnectedServicesQuotasV3', () => ({
+    getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
+    requestConnectedServiceQuotaSnapshotRefreshV3: vi.fn(async () => true),
+}));
+
 vi.mock('@/components/ui/lists/ItemRowActions', () => {
     const React = require('react');
     type ItemRowActionsMockProps = React.PropsWithChildren<Record<string, unknown>>;
@@ -238,6 +270,7 @@ describe('ConnectedServiceDetailView groups', () => {
         modalSpies.alert.mockReset();
         syncSpies.refreshProfile.mockReset();
         syncSpies.applySettings.mockReset();
+        connectedServicesModuleState.searchParams = { serviceId: 'openai-codex' };
         connectedServiceCredentialSpies.storeConnectedServiceCredentialForAccount.mockClear();
         connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount.mockClear();
         authState.credentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') };
@@ -410,9 +443,17 @@ describe('ConnectedServiceDetailView groups', () => {
             await flushAsyncHandlers();
         });
 
+        expect(modalSpies.confirm).toHaveBeenCalledWith(
+            'modals.disconnect',
+            'connectedServices.detail.disconnectGroupCleanupConfirmBody',
+            expect.objectContaining({
+                confirmText: 'modals.disconnect',
+                cancelText: 'common.cancel',
+            }),
+        );
         expect(connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
-            { serviceId: 'openai-codex', profileId: 'work' },
+            { serviceId: 'openai-codex', profileId: 'work', cleanupGroupReferences: true },
         );
         expect(authGroupApiSpies.listConnectedServiceAuthGroupsV3.mock.calls.length).toBeGreaterThan(
             listCallsBeforeDisconnect,
@@ -453,6 +494,61 @@ describe('ConnectedServiceDetailView groups', () => {
         expect(syncSpies.refreshProfile).toHaveBeenCalled();
         expect(authGroupApiSpies.listConnectedServiceAuthGroupsV3.mock.calls.length).toBeGreaterThan(listCallsBeforeAction);
         expect(screen.findByTestId('connected-services-group:team-pool')).toBeTruthy();
+    });
+
+    it('keeps group creation visible but disabled when no runtime can switch the service', async () => {
+        connectedServicesModuleState.searchParams = { serviceId: 'github' };
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'github',
+                    profiles: [
+                        { profileId: 'work', status: 'connected', providerEmail: 'work@example.com' },
+                    ],
+                    groups: [],
+                },
+            ],
+        };
+        authoritativeGroupState.groups = [];
+
+        const screen = await renderGroupsScreen();
+        const createGroupRow = screen.tree.root.find((node) =>
+            node.props?.testID === 'connected-services-action:create-group'
+        );
+
+        expect(createGroupRow.props).toEqual(expect.objectContaining({
+            disabled: true,
+            subtitle: 'connectedServices.detail.groupActions.runtimeFallbackUnsupported',
+            onPress: undefined,
+        }));
+        expect(authGroupApiSpies.createConnectedServiceAuthGroupV3).not.toHaveBeenCalled();
+    });
+
+    it('keeps group creation enabled when a service can configure groups even without runtime fallback', async () => {
+        connectedServicesModuleState.searchParams = { serviceId: 'gemini' };
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'gemini',
+                    profiles: [
+                        { profileId: 'work', status: 'connected', providerEmail: 'work@example.com' },
+                    ],
+                    groups: [],
+                },
+            ],
+        };
+        authoritativeGroupState.groups = [];
+
+        const screen = await renderGroupsScreen();
+        const createGroupRow = screen.tree.root.find((node) =>
+            node.props?.testID === 'connected-services-action:create-group'
+        );
+
+        expect(createGroupRow.props).toEqual(expect.objectContaining({
+            disabled: false,
+            subtitle: 'connectedServices.detail.groupActions.createSubtitle',
+        }));
+        expect(typeof createGroupRow.props.onPress).toBe('function');
     });
 
     it('infers a safe group id when the display name has no slug characters', async () => {
@@ -711,6 +807,62 @@ describe('ConnectedServiceDetailView groups', () => {
         expect(authGroupApiSpies.listConnectedServiceAuthGroupsV3.mock.calls.length).toBeGreaterThanOrEqual(
             listCallsBeforeActions + 5,
         );
+    });
+
+    it('confirms and retries manual active-member switches when runtime cooldown blocks the first attempt', async () => {
+        const resetAtMs = Date.UTC(2026, 5, 8, 17, 52, 18);
+        authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3
+            .mockRejectedValueOnce(createStructuredConnectedServiceError('connect_group_profile_runtime_cooldown', {
+                status: 409,
+                resetAtMs,
+            }))
+            .mockImplementationOnce(async (_credentials, params) => {
+                const nextGroup = createAuthoritativeGroup({ activeProfileId: params.profileId });
+                authoritativeGroupState.groups = [nextGroup];
+                return nextGroup;
+            });
+        modalSpies.confirm.mockResolvedValueOnce(true);
+
+        const screen = await renderGroupsScreen();
+        const backupActions = screen.tree
+            .root
+            .findAll((node) => isItemRowActionsNode(node) && node.props?.title === 'backup')
+            .find((node) => Array.isArray(node.props.actions)
+                && node.props.actions.some((action: { id?: string }) => action.id === 'connected-services-group:primary:member:backup:action:set-active'));
+        const actions = backupActions?.props.actions as ReadonlyArray<{ id: string; onPress: () => void }> | undefined;
+
+        await invokeRowAction(actions!.find((action) => action.id === 'connected-services-group:primary:member:backup:action:set-active')!);
+
+        expect(modalSpies.confirm).toHaveBeenCalledWith(
+            'connectedServices.detail.errors.runtimeCooldownOverrideTitle',
+            'connectedServices.detail.errors.runtimeCooldownOverrideBody',
+            expect.objectContaining({
+                confirmText: 'connectedServices.detail.errors.runtimeCooldownOverrideConfirm',
+                cancelText: 'common.cancel',
+            }),
+        );
+        expect(authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ token: 't' }),
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                expectedGeneration: 2,
+            },
+        );
+        expect(authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ token: 't' }),
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                expectedGeneration: 2,
+                overrideRuntimeCooldown: true,
+            },
+        );
+        expect(modalSpies.alert).not.toHaveBeenCalled();
     });
 
     it('disables member active switching when account fallback is disabled', async () => {

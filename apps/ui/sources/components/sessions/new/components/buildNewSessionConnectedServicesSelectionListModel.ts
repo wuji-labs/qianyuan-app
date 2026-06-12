@@ -14,6 +14,7 @@ import {
 
 import type {
     ConnectedServicesAccountGroupOption,
+    ConnectedServicesAccountGroupReadiness,
     ConnectedServicesProfileOption,
     ConnectedServicesProfileOptionsByServiceId,
 } from '@/components/sessions/new/modules/connectedServicesNewSessionBindings';
@@ -35,6 +36,9 @@ export type ConnectedServicesSelectionListTranslationKey =
     | 'connectedServices.authModal.groupReadySubtitle'
     | 'connectedServices.authModal.groupExhaustedSubtitle'
     | 'connectedServices.authModal.groupNeedsMembersSubtitle'
+    | 'connectedServices.authModal.groupSwitchingSubtitle'
+    | 'connectedServices.authModal.groupErrorSubtitle'
+    | 'connectedServices.authModal.groupUnknownSubtitle'
     | 'connectedServices.authModal.nativeAuthTitle'
     | 'connectedServices.authModal.nativeAuthSubtitle'
     | 'connectedServices.authModal.notConnectedTitle'
@@ -116,9 +120,12 @@ function resolveProfileSubtitle(option: ConnectedServicesProfileOption): string 
     return undefined;
 }
 
-function resolveGroupSubtitleKey(status: 'ready' | 'exhausted' | 'needs_members'): ConnectedServicesSelectionListTranslationKey {
+function resolveGroupSubtitleKey(status: ConnectedServicesAccountGroupReadiness): ConnectedServicesSelectionListTranslationKey {
     if (status === 'exhausted') return 'connectedServices.authModal.groupExhaustedSubtitle';
     if (status === 'needs_members') return 'connectedServices.authModal.groupNeedsMembersSubtitle';
+    if (status === 'switching') return 'connectedServices.authModal.groupSwitchingSubtitle';
+    if (status === 'error') return 'connectedServices.authModal.groupErrorSubtitle';
+    if (status === 'unknown') return 'connectedServices.authModal.groupUnknownSubtitle';
     return 'connectedServices.authModal.groupReadySubtitle';
 }
 
@@ -188,9 +195,7 @@ export function buildNewSessionConnectedServicesSelectionListModel(
             ? readOptionalString(binding.groupId)
             : '';
         const selectedGroup = binding?.source === 'connected' && binding.selection === 'group' && explicitGroupId
-            ? groupOptions.find((option) =>
-                option.groupId === explicitGroupId
-                && resolveConnectedServiceAccountGroupViableProfileId({ group: option, connectedProfileIds }))
+            ? groupOptions.find((option) => option.groupId === explicitGroupId)
             : null;
         const unresolvedGroupBinding = binding?.source === 'connected' && binding.selection === 'group' && explicitGroupId && !selectedGroup;
         const effectiveProfileId = binding?.source === 'connected' && !unresolvedGroupBinding
@@ -210,10 +215,12 @@ export function buildNewSessionConnectedServicesSelectionListModel(
         for (const group of groupOptions) {
             const groupId = group.groupId.trim();
             const fallbackProfileId = resolveConnectedServiceAccountGroupViableProfileId({ group, connectedProfileIds });
-            if (!groupId || !fallbackProfileId) continue;
+            if (!groupId) continue;
             const selected = selectedGroup?.groupId === groupId;
             const optionId = createConnectedServiceGroupOptionId(serviceId, groupId);
-            const quotaBadges = params.quotaBadgesByKey[connectedServiceProfileKey({ serviceId, profileId: fallbackProfileId })] ?? [];
+            const quotaBadges = fallbackProfileId
+                ? params.quotaBadgesByKey[connectedServiceProfileKey({ serviceId, profileId: fallbackProfileId })] ?? []
+                : [];
             const optionBinding = {
                 source: 'connected',
                 selection: 'group',
@@ -238,9 +245,9 @@ export function buildNewSessionConnectedServicesSelectionListModel(
                 accessibilityLabel: resolveServiceOptionAccessibilityLabel({ serviceTitle, optionLabel: label }),
                 icon: params.renderSelectionIcon({
                     selected,
-                    variant: availability.disabled || group.status !== 'ready' ? 'warning' : 'default',
+                    variant: availability.disabled || group.status !== 'ready' || !fallbackProfileId ? 'warning' : 'default',
                 }),
-                disabled: availability.disabled === true,
+                disabled: availability.disabled === true || group.status !== 'ready' || !fallbackProfileId,
                 rightAccessory: quotaBadges.length > 0
                     ? params.renderQuotaBadges(quotaBadges)
                     : undefined,
@@ -309,7 +316,7 @@ export function buildNewSessionConnectedServicesSelectionListModel(
         }
 
         const nativeOptionId = createNativeServiceOptionId(serviceId);
-        const nativeSelected = !usesConnectedProfile;
+        const nativeSelected = !usesConnectedProfile && !selectedGroup;
         const nativeBinding = { source: 'native' } satisfies ConnectedServicesServiceBinding;
         const nativeAvailability = resolveAvailability({
             rootParams: params,

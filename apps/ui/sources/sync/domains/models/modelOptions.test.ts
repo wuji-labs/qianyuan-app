@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    findModelOptionForEffectiveModelId,
     getModelOptionsForAgentType,
     getModelOptionsForModes,
     getModelOptionsForSession,
@@ -66,6 +67,21 @@ describe('modelOptions', () => {
         const values = options.map((o) => o.value);
         expect(values[0]).toBe('default');
         expect(values.length).toBeGreaterThan(1);
+        expect(options.find((option) => option.value === 'claude-fable-5')).toMatchObject({
+            value: 'claude-fable-5',
+            label: 'Fable 5',
+            description: expect.any(String),
+            modelOptions: expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'reasoning_effort',
+                    currentValue: 'high',
+                    options: expect.arrayContaining([
+                        expect.objectContaining({ value: 'xhigh' }),
+                        expect.objectContaining({ value: 'max' }),
+                    ]),
+                }),
+            ]),
+        });
         expect(options.find((option) => option.value === 'claude-opus-4-8')).toMatchObject({
             value: 'claude-opus-4-8',
             label: 'Opus 4.8',
@@ -353,5 +369,30 @@ describe('modelOptions', () => {
         );
 
         expect(out.map((o) => o.value)).toEqual(['default', 'model-a']);
+    });
+});
+
+describe('modelOptions — ultracode and extended context (Claude)', () => {
+    it('surfaces the ultracode boolean model option from the catalog for xhigh-capable models', () => {
+        const options = getModelOptionsForAgentType('claude');
+        const fable = options.find((option) => option.value === 'claude-fable-5');
+        expect(fable?.modelOptions?.some((opt) => opt.id === 'ultracode' && opt.type === 'boolean')).toBe(true);
+        const sonnet = options.find((option) => option.value === 'claude-sonnet-4-6');
+        expect(sonnet?.modelOptions?.some((opt) => opt.id === 'ultracode')).toBe(false);
+    });
+
+    it('passes the extended-context variant id through for 1M opt-in models only', () => {
+        const options = getModelOptionsForAgentType('claude');
+        expect(options.find((option) => option.value === 'claude-sonnet-4-6')?.extendedContextModelId).toBe('claude-sonnet-4-6[1m]');
+        expect(options.find((option) => option.value === 'claude-opus-4-6')?.extendedContextModelId).toBe('claude-opus-4-6[1m]');
+        expect(options.find((option) => option.value === 'claude-fable-5')?.extendedContextModelId).toBeUndefined();
+    });
+
+    it('matches an effective extended-context model id back to its base option', () => {
+        const options = getModelOptionsForAgentType('claude');
+        const match = findModelOptionForEffectiveModelId(options, 'claude-sonnet-4-6[1m]');
+        expect(match?.value).toBe('claude-sonnet-4-6');
+        expect(findModelOptionForEffectiveModelId(options, 'claude-sonnet-4-6')?.value).toBe('claude-sonnet-4-6');
+        expect(findModelOptionForEffectiveModelId(options, 'missing-model')).toBeNull();
     });
 });

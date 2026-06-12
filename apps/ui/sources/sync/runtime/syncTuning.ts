@@ -5,6 +5,7 @@ export type SyncTuning = Readonly<{
     messageMaxIncrementalPagesOnResume: number;
     messageForceSnapshotOfflineMs: number;
     sessionMessagesPageSize: number;
+    transcriptNativeOlderMessagesPageSize: number;
     transcriptForwardPrefetchThresholdPx: number;
     transcriptBackwardPrefetchThresholdPx: number;
     transcriptFlashListEstimatedItemSize: number;
@@ -17,7 +18,6 @@ export type SyncTuning = Readonly<{
     transcriptOlderLoadCooldownMs: number;
     transcriptViewportAnchorCaptureDebounceMs: number;
     transcriptViewportAnchorOlderLookupMaxLoads: number;
-    transcriptViewportAnchorRenderRetryMax: number;
     transcriptDerivedItemsCacheMaxSessions: number;
     transcriptItemHeightCacheMaxEntries: number;
     transcriptForkedSnapshotCacheMaxSessions: number;
@@ -28,7 +28,6 @@ export type SyncTuning = Readonly<{
     transcriptViewportTelemetryEnabled: boolean;
     transcriptViewportTelemetryConsoleLog: boolean;
     transcriptViewportTelemetryMaxEvents: number;
-    transcriptNativeMvcpOnlyMode: boolean;
     transcriptInitialFillBudgetMs: number;
     transcriptInitialFillMaxNoProgressLoads: number;
     invalidateSyncAwaitTimeoutMs: number;
@@ -204,6 +203,7 @@ export function loadSyncTuning(opts?: {
         messageMaxIncrementalPagesOnResume: 3,
         messageForceSnapshotOfflineMs: 30 * 60 * 1000,
         sessionMessagesPageSize: 150,
+        transcriptNativeOlderMessagesPageSize: 64,
         transcriptForwardPrefetchThresholdPx: 800,
         transcriptBackwardPrefetchThresholdPx: 800,
         transcriptFlashListEstimatedItemSize: 120,
@@ -215,8 +215,7 @@ export function loadSyncTuning(opts?: {
         transcriptOlderLoadSpinnerDelayMs: 300,
         transcriptOlderLoadCooldownMs: 2000,
         transcriptViewportAnchorCaptureDebounceMs: 200,
-        transcriptViewportAnchorOlderLookupMaxLoads: 1,
-        transcriptViewportAnchorRenderRetryMax: 4,
+        transcriptViewportAnchorOlderLookupMaxLoads: 6,
         transcriptDerivedItemsCacheMaxSessions: 16,
         transcriptItemHeightCacheMaxEntries: 1024,
         transcriptForkedSnapshotCacheMaxSessions: 64,
@@ -227,7 +226,6 @@ export function loadSyncTuning(opts?: {
         transcriptViewportTelemetryEnabled: false,
         transcriptViewportTelemetryConsoleLog: false,
         transcriptViewportTelemetryMaxEvents: 512,
-        transcriptNativeMvcpOnlyMode: false,
         transcriptInitialFillBudgetMs: 2000,
         transcriptInitialFillMaxNoProgressLoads: 3,
         invalidateSyncAwaitTimeoutMs: 10_000,
@@ -304,6 +302,7 @@ export function loadSyncTuning(opts?: {
         messageMaxIncrementalPagesOnResume: readNumber(merged, 'messageMaxIncrementalPagesOnResume', { min: 1, max: 100 }) ?? defaults.messageMaxIncrementalPagesOnResume,
         messageForceSnapshotOfflineMs: readNumber(merged, 'messageForceSnapshotOfflineMs', { min: 0, max: 365 * 24 * 60 * 60 * 1000 }) ?? defaults.messageForceSnapshotOfflineMs,
         sessionMessagesPageSize: readNumber(merged, 'sessionMessagesPageSize', { min: 1, max: 1000 }) ?? defaults.sessionMessagesPageSize,
+        transcriptNativeOlderMessagesPageSize: readNumber(merged, 'transcriptNativeOlderMessagesPageSize', { min: 1, max: 1000 }) ?? defaults.transcriptNativeOlderMessagesPageSize,
         transcriptForwardPrefetchThresholdPx: readNumber(merged, 'transcriptForwardPrefetchThresholdPx', { min: 0, max: 50_000 }) ?? defaults.transcriptForwardPrefetchThresholdPx,
         transcriptBackwardPrefetchThresholdPx: readNumber(merged, 'transcriptBackwardPrefetchThresholdPx', { min: 0, max: 50_000 }) ?? defaults.transcriptBackwardPrefetchThresholdPx,
         transcriptFlashListEstimatedItemSize: readNumber(merged, 'transcriptFlashListEstimatedItemSize', { min: 20, max: 2000 }) ?? defaults.transcriptFlashListEstimatedItemSize,
@@ -318,7 +317,6 @@ export function loadSyncTuning(opts?: {
         transcriptOlderLoadCooldownMs: readNumber(merged, 'transcriptOlderLoadCooldownMs', { min: 0, max: 20_000 }) ?? defaults.transcriptOlderLoadCooldownMs,
         transcriptViewportAnchorCaptureDebounceMs: readNumber(merged, 'transcriptViewportAnchorCaptureDebounceMs', { min: 0, max: 20_000 }) ?? defaults.transcriptViewportAnchorCaptureDebounceMs,
         transcriptViewportAnchorOlderLookupMaxLoads: readNumber(merged, 'transcriptViewportAnchorOlderLookupMaxLoads', { min: 0, max: 10 }) ?? defaults.transcriptViewportAnchorOlderLookupMaxLoads,
-        transcriptViewportAnchorRenderRetryMax: readNumber(merged, 'transcriptViewportAnchorRenderRetryMax', { min: 0, max: 20 }) ?? defaults.transcriptViewportAnchorRenderRetryMax,
         transcriptDerivedItemsCacheMaxSessions: readNumber(merged, 'transcriptDerivedItemsCacheMaxSessions', { min: 1, max: 64 }) ?? defaults.transcriptDerivedItemsCacheMaxSessions,
         transcriptItemHeightCacheMaxEntries: readNumber(merged, 'transcriptItemHeightCacheMaxEntries', { min: 1, max: 10_000 }) ?? defaults.transcriptItemHeightCacheMaxEntries,
         transcriptForkedSnapshotCacheMaxSessions: readNumber(merged, 'transcriptForkedSnapshotCacheMaxSessions', { min: 1, max: 256 }) ?? defaults.transcriptForkedSnapshotCacheMaxSessions,
@@ -329,7 +327,6 @@ export function loadSyncTuning(opts?: {
         transcriptViewportTelemetryEnabled: readBoolean(merged, 'transcriptViewportTelemetryEnabled') ?? defaults.transcriptViewportTelemetryEnabled,
         transcriptViewportTelemetryConsoleLog: readBoolean(merged, 'transcriptViewportTelemetryConsoleLog') ?? defaults.transcriptViewportTelemetryConsoleLog,
         transcriptViewportTelemetryMaxEvents: readNumber(merged, 'transcriptViewportTelemetryMaxEvents', { min: 1, max: 100_000 }) ?? defaults.transcriptViewportTelemetryMaxEvents,
-        transcriptNativeMvcpOnlyMode: readBoolean(merged, 'transcriptNativeMvcpOnlyMode') ?? defaults.transcriptNativeMvcpOnlyMode,
         transcriptInitialFillBudgetMs: readNumber(merged, 'transcriptInitialFillBudgetMs', { min: 250, max: 20_000 }) ?? defaults.transcriptInitialFillBudgetMs,
         transcriptInitialFillMaxNoProgressLoads: readNumber(merged, 'transcriptInitialFillMaxNoProgressLoads', { min: 1, max: 50 }) ?? defaults.transcriptInitialFillMaxNoProgressLoads,
         invalidateSyncAwaitTimeoutMs: readNumber(merged, 'invalidateSyncAwaitTimeoutMs', { min: 250, max: 10 * 60_000 }) ?? defaults.invalidateSyncAwaitTimeoutMs,

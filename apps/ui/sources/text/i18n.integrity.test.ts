@@ -49,7 +49,15 @@ const IGNORED_UNTRANSLATED_KEYS = new Set([
     'settingsSession.sessionList.workingIndicatorSpinnerTitle',
     'settingsSession.sessionList.identityDisplayAvatarTitle',
     'settingsSession.transcript.messageActions.template.placeholder',
+    // Literal terminal multiplexer executable names.
+    'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.tmux.title',
+    'settingsProviders.plugins.claude.fields.claudeUnifiedTerminalHost.options.zellij.title',
 ]);
+const IGNORED_UNTRANSLATED_KEYS_BY_LOCALE: Readonly<Record<string, ReadonlySet<string>>> = {
+    // These locales use the same spelling for this label.
+    ca: new Set(['message.runtimeConfigOutcomeKeyModel']),
+    pl: new Set(['message.runtimeConfigOutcomeKeyModel']),
+};
 const IGNORED_UNTRANSLATED_KEY_PREFIXES = [
     'settingsAppearance.themeProfiles.',
     'settingsKeyboard.',
@@ -151,6 +159,12 @@ const FUNCTION_SAMPLE_ARGS_BY_KEY = new Map<string, unknown[]>([
     ['transcript.selection.selectedCount', [{ count: 1 }, { count: 2 }]],
     ['transcript.selection.copyA11y', [{ count: 1 }, { count: 2 }]],
     ['transcript.selection.sendA11y', [{ count: 1 }, { count: 2 }]],
+    ['connectedServices.detail.groups.memberQuotaExhaustedUntil', [{ time: '12:00' }]],
+    ['connectedServices.detail.groups.memberRateLimitedUntil', [{ time: '12:00' }]],
+    ['connectedServices.detail.groups.memberCapacityLimitedUntil', [{ time: '12:00' }]],
+    ['connectedServices.detail.groups.memberAuthInvalidUntil', [{ time: '12:00' }]],
+    ['connectedServices.detail.groups.memberPlanUnavailableUntil', [{ time: '12:00' }]],
+    ['connectedServices.detail.groups.memberValidationBlockedUntil', [{ time: '12:00' }]],
     ['memorySearchSettings.indexContents.subtitle', [{ sessions: 2, lightShards: 3, deepChunks: 4 }]],
     ['memorySearchSettings.queue.subtitle', [{ selected: 1, queued: 2, indexing: 3, indexed: 4, empty: 5, failed: 6, waiting: 7 }]],
     ['memorySearchSettings.queue.workerPhase', [{ phase: 'backfill' }]],
@@ -216,6 +230,7 @@ describe('i18n integrity', () => {
         const untranslated = allUntranslated
             .filter((entry) => {
                 if (IGNORED_UNTRANSLATED_KEYS.has(entry.key)) return false;
+                if (IGNORED_UNTRANSLATED_KEYS_BY_LOCALE[entry.locale]?.has(entry.key)) return false;
                 return !IGNORED_UNTRANSLATED_KEY_PREFIXES.some((prefix) => entry.key.startsWith(prefix));
             });
 

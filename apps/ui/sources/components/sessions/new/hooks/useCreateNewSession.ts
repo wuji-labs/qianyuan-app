@@ -105,8 +105,9 @@ export type CreatedSessionFollowUpContext = Readonly<{
     launchAttempt: NewSessionLaunchAttempt;
 }>;
 
-type HandleCreateSessionOptions = Readonly<{
+export type HandleCreateSessionOptions = Readonly<{
     initialMessage?: 'send' | 'skip';
+    inputTextOverride?: string;
     afterCreated?: (context: CreatedSessionFollowUpContext) => void | Promise<void>;
     /**
      * D2: relaunch under the newly-selected connected-service account WITHOUT resume continuity, after
@@ -291,11 +292,14 @@ export function useCreateNewSession(params: Readonly<{
             };
             const isLaunchScopeStillActive = (): boolean => resolveCurrentLaunchScopeKey() === launchScopeKey;
 
+            const sessionPromptText = typeof opts?.inputTextOverride === 'string'
+                ? opts.inputTextOverride
+                : current.sessionPrompt;
             const shouldSendInitialMessage = (opts?.initialMessage ?? 'send') !== 'skip';
-            const shouldPrepareInitialMessage = shouldSendInitialMessage && current.sessionPrompt.trim();
+            const shouldPrepareInitialMessage = shouldSendInitialMessage && sessionPromptText.trim();
             const resolvedInitialMessage = shouldPrepareInitialMessage
                 ? resolveSessionComposerSend({
-                    input: current.sessionPrompt,
+                    input: sessionPromptText,
                     executionRunsEnabled: current.executionRunsEnabled === true,
                     promptInvocationsV1: storage.getState().settings.promptInvocationsV1,
                 })
@@ -468,7 +472,7 @@ export function useCreateNewSession(params: Readonly<{
             const windowsTerminalWindowName = typeof current.settings.sessionWindowsTerminalWindowName === 'string'
                 ? current.settings.sessionWindowsTerminalWindowName.trim()
                 : '';
-            const normalizedSessionPrompt = current.sessionPrompt.trim();
+            const normalizedSessionPrompt = sessionPromptText.trim();
             const spawnSessionExtras = buildSpawnSessionExtrasFromUiState({
                 agentId: current.agentType,
                 settings: current.settings,
@@ -781,7 +785,7 @@ export function useCreateNewSession(params: Readonly<{
                             backendTarget: current.backendTarget ?? null,
                             permissionMode: current.permissionMode,
                             actionExecutor,
-                            previousMessage: current.sessionPrompt,
+                            previousMessage: sessionPromptText,
                             setMessage: () => {},
                             clearDraft: () => {},
                             trackMessageSent: () => {},

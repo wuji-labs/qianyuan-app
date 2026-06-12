@@ -5,10 +5,15 @@ import { createReducer, reducer, type ReducerState } from '../../reducer/reducer
 import type { Message } from '../../domains/messages/messageTypes';
 import type { NormalizedMessage } from '../../typesRaw';
 import type { Session } from '../../domains/state/storageTypes';
+import {
+    loadSessionPermissionModeUpdatedAts,
+    loadSessionPermissionModes,
+} from '../../domains/state/persistence';
 import { isToolPotentiallyMutableForScm } from '@/sync/domains/tools/toolMutationClassification';
 import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry';
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { shouldIncludeSubagentSourceMessage } from '@/sync/domains/session/subagents/subagentSourceMessageDetection';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 import { persistSessionPermissionData } from './sessionPermissionPersistence';
 import type { SessionPending } from './pending';
@@ -84,6 +89,7 @@ export type MessagesDomain = {
 
 type MessagesDomainDependencies = {
     sessions: Record<string, Session>;
+    sessionLocalStateScope?: ServerAccountScope | null;
     sessionListRenderables: Record<string, SessionListRenderableSession>;
     sessionListViewData: import('../../domains/session/listing/sessionListViewData').SessionListViewItem[] | null;
     sessionListViewDataByServerId: Record<string, import('../../domains/session/listing/sessionListViewData').SessionListViewItem[] | null>;
@@ -796,10 +802,13 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     };
                     nextSessionForRenderable = nextSession;
 
-                    // Persist permission modes (only non-default values to save space)
-                    // Note: this includes modes inferred from session messages so they load instantly on app restart.
+                    // Persist timestamped permission modes inferred from session messages so they load instantly on app restart.
                     if (shouldWritePermissionMode) {
-                        persistSessionPermissionData(updatedSessions);
+                        const sessionLocalStateScope = state.sessionLocalStateScope ?? null;
+                        persistSessionPermissionData(updatedSessions, sessionLocalStateScope, {
+                            modes: loadSessionPermissionModes(sessionLocalStateScope),
+                            updatedAts: loadSessionPermissionModeUpdatedAts(sessionLocalStateScope),
+                        });
                     }
                 }
 

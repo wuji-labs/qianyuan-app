@@ -76,6 +76,127 @@ describe('connectedServiceGroupViewModel', () => {
         expect(subtitle).toContain(t('connectedServices.detail.groups.memberLastFailure', { reason: 'auth_expired' }));
     });
 
+    it('normalizes typed limiter fields and surfaces the concrete blocker in member subtitles', () => {
+        const [group] = parseConnectedServiceGroupViewModels([{
+            groupId: 'primary',
+            activeProfileId: 'work',
+            members: [
+                {
+                    profileId: 'work',
+                    priority: 10,
+                    enabled: true,
+                    state: {
+                        quotaExhaustedUntilMs: 1_800_000_010_000,
+                        rateLimitedUntilMs: 1_800_000_020_000,
+                        capacityLimitedUntilMs: 1_800_000_030_000,
+                        authInvalidUntilMs: 1_800_000_040_000,
+                        lastObservedAtMs: 1_800_000_000_000,
+                        lastFailureKind: 'usage_limit',
+                    },
+                },
+            ],
+        }]);
+
+        const member = group.members[0]!;
+        const subtitle = formatConnectedServiceGroupMemberSubtitle(member, group.activeProfileId);
+
+        expect(member).toMatchObject({
+            quotaExhaustedUntilMs: 1_800_000_010_000,
+            rateLimitedUntilMs: 1_800_000_020_000,
+            capacityLimitedUntilMs: 1_800_000_030_000,
+            authInvalidUntilMs: 1_800_000_040_000,
+            lastObservedAtMs: 1_800_000_000_000,
+            blocker: {
+                kind: 'auth_invalid',
+                untilMs: 1_800_000_040_000,
+            },
+            readiness: 'auth_invalid',
+        });
+        expect(subtitle).toContain(t('connectedServices.detail.groups.memberAuthInvalidUntil', {
+            time: new Date(1_800_000_040_000).toLocaleString(),
+        }));
+        expect(subtitle).toContain(t('connectedServices.detail.groups.memberLastFailure', { reason: 'usage_limit' }));
+    });
+
+    it('does not surface expired limiter timestamps as active member blockers', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(1_800_000_100_000));
+        try {
+            const [group] = parseConnectedServiceGroupViewModels([{
+                groupId: 'primary',
+                activeProfileId: 'work',
+                members: [
+                    {
+                        profileId: 'work',
+                        priority: 10,
+                        enabled: true,
+                        state: {
+                            quotaExhaustedUntilMs: 1_800_000_010_000,
+                            lastObservedAtMs: 1_800_000_000_000,
+                            lastFailureKind: 'usage_limit',
+                        },
+                    },
+                ],
+            }]);
+
+            const member = group.members[0]!;
+            const subtitle = formatConnectedServiceGroupMemberSubtitle(member, group.activeProfileId);
+
+            expect(member.quotaExhaustedUntilMs).toBe(1_800_000_010_000);
+            expect(member.blocker).toBeNull();
+            expect(member.readiness).toBe('ready');
+            expect(subtitle).not.toContain(t('connectedServices.detail.groups.memberQuotaExhaustedUntil', {
+                time: new Date(1_800_000_010_000).toLocaleString(),
+            }));
+            expect(subtitle).toContain(t('connectedServices.detail.groups.memberLastFailure', { reason: 'usage_limit' }));
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not mark plan-unavailable or validation-blocked members as ready', () => {
+        const [group] = parseConnectedServiceGroupViewModels([{
+            groupId: 'primary',
+            activeProfileId: 'work',
+            members: [
+                {
+                    profileId: 'plan',
+                    priority: 10,
+                    enabled: true,
+                    state: { planUnavailableUntilMs: 1_800_000_050_000 },
+                },
+                {
+                    profileId: 'validation',
+                    priority: 20,
+                    enabled: true,
+                    state: { validationBlockedUntilMs: 1_800_000_060_000 },
+                },
+            ],
+        }]);
+
+        expect(group.members[0]).toMatchObject({
+            planUnavailableUntilMs: 1_800_000_050_000,
+            blocker: { kind: 'plan_unavailable', untilMs: 1_800_000_050_000 },
+            readiness: 'plan_unavailable',
+        });
+        expect(formatConnectedServiceGroupMemberSubtitle(group.members[0]!, group.activeProfileId)).toContain(
+            t('connectedServices.detail.groups.memberPlanUnavailableUntil', {
+                time: new Date(1_800_000_050_000).toLocaleString(),
+            }),
+        );
+
+        expect(group.members[1]).toMatchObject({
+            validationBlockedUntilMs: 1_800_000_060_000,
+            blocker: { kind: 'validation_blocked', untilMs: 1_800_000_060_000 },
+            readiness: 'validation_blocked',
+        });
+        expect(formatConnectedServiceGroupMemberSubtitle(group.members[1]!, group.activeProfileId)).toContain(
+            t('connectedServices.detail.groups.memberValidationBlockedUntil', {
+                time: new Date(1_800_000_060_000).toLocaleString(),
+            }),
+        );
+    });
+
     it('resolves a unified member identity with the display label primary and raw id only when distinct', () => {
         const labelled = resolveConnectedServiceGroupMemberIdentity({
             serviceId: 'openai-codex',
@@ -186,7 +307,10 @@ describe('connectedServiceGroupViewModel', () => {
         actions[2]!.onPress?.();
         actions[3]!.onPress?.();
 
-        expect(onSetActiveMember).toHaveBeenCalledWith('backup');
+        // F13/P6.12: with account fallback disabled the set-active action is
+        // inert (disabled + no onPress), so the handler must never fire.
+        expect(actions[0]!.onPress).toBeUndefined();
+        expect(onSetActiveMember).not.toHaveBeenCalled();
         expect(onSetMemberEnabled).toHaveBeenCalledWith(group.members[0], false);
         expect(onEditMemberPriority).toHaveBeenCalledWith(group.members[0]);
         expect(onRemoveMember).toHaveBeenCalledWith(group.members[0]);

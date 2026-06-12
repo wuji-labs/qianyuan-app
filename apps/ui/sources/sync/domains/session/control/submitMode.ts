@@ -31,12 +31,28 @@ export type SessionMessageDirectBypassReason =
     | 'server_scoped_rpc_active'
     | 'spawned_session_follow_up';
 
+/**
+ * Why this specific payload cannot be steered into the active turn (lane P, O-design §2.2).
+ * Computed UI-locally and synchronously — it mirrors the CLI's `bindPermissionModeQueue` steer
+ * gate (mode change attached, or a `/clear`//`/compact` special command).
+ */
+export type NonSteerablePayloadReason =
+    | 'mode_change_refused'
+    | 'special_command'
+    | 'provider_config_change_refused';
+
+export type NonSteerableSendPromptSetting = 'ask' | 'queue_silently' | 'off';
+
 export type SessionMessageDeliveryDecision = Readonly<{
     mode: MessageSendMode;
     intent: SessionMessageDeliveryIntent;
     reason: string;
     pendingSupportState: PendingQueueSubmitSupportState;
     directBypassReason?: SessionMessageDirectBypassReason;
+    /** Present when a busy-steer send was demoted because the PAYLOAD is non-steerable. */
+    nonSteerablePayloadReason?: NonSteerablePayloadReason;
+    /** CLI-published reason (Seam A) when the SESSION cannot steer right now; absent on old CLIs. */
+    sessionSteerUnavailableReason?: string | null;
 }>;
 
 type SessionSubmitRuntimeState = Readonly<{
@@ -46,6 +62,9 @@ type SessionSubmitRuntimeState = Readonly<{
     agentReady: boolean;
     inFlightSteerSupported: boolean | undefined;
     inFlightSteerAvailable: boolean | undefined;
+    steerUnavailableReason: string | null;
+    /** Lane Q: backend can apply a steered message's config delta (mode) to the RUNNING turn. */
+    inFlightConfigApplySupported: boolean;
 }>;
 
 function deriveSubmitRuntimeState(session: Session | null, nowMs: number): SessionSubmitRuntimeState {
@@ -69,7 +88,92 @@ function deriveSubmitRuntimeState(session: Session | null, nowMs: number): Sessi
         agentReady: Boolean(session && session.agentStateVersion > 0),
         inFlightSteerSupported: capabilities?.inFlightSteerSupported ?? capabilities?.inFlightSteer,
         inFlightSteerAvailable: capabilities?.inFlightSteerAvailable ?? capabilities?.inFlightSteer,
+        steerUnavailableReason: typeof capabilities?.inFlightSteerUnavailableReason === 'string'
+            ? capabilities.inFlightSteerUnavailableReason
+            : null,
+        inFlightConfigApplySupported: capabilities?.inFlightConfigApplySupported === true,
     };
+}
+
+function normalizeTimestamp(value: number | null | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Best-effort start estimate of the ACTIVE turn (lane X, X2): the `in_progress` observation
+ * timestamp when present, else the thinking timestamp. Used only to distinguish a FRESH
+ * user-intended mode change from standing desired≠published drift; `null` when no estimate exists
+ * (then the change is treated as fresh — conservative toward the honest modal).
+ */
+function estimateActiveTurnStartMs(session: Session | null): number | null {
+    if (!session) return null;
+    const inProgressAt = normalizeTimestamp(session.latestTurnStatusObservedAt);
+    if (session.latestTurnStatus === 'in_progress' && inProgressAt !== null) {
+        return inProgressAt;
+    }
+    return session.thinking === true ? normalizeTimestamp(session.thinkingAt) : null;
+}
+
+/**
+ * UI-local payload steerability check (lane P, O-design §2.2): mirrors the CLI steer gate in
+ * `bindPermissionModeQueue` exactly — a message that changes the permission mode or carries a
+ * special command (`/clear`, `/compact …`) is never steerable into the active turn.
+ *
+ * Mode-change detection compares the locally selected mode (attached to outgoing message meta by
+ * `sendMessage`) with the runner's published current mode. With
+ * `sessionPermissionModeApplyTiming === 'next_prompt'` the mode never applies mid-turn by
+ * definition, so it is not a steer blocker.
+ *
+ * Fresh-change gate (lane X, X2, incident cmq8y3nlx): only a FRESH user-intended change — made at
+ * or after the active turn started — counts as a mode-change payload. Standing desired≠published
+ * drift (e.g. a never-converged setting from a previous turn) rides the normal steer path
+ * silently; the CLI's before-prompt/in-flight controller already applies and converges it, with
+ * the runtime-config-outcome event as the visible record. Drift with NO user-change timestamp is
+ * standing drift by definition.
+ */
+export function getNonSteerablePayloadReason(opts: {
+    session: Session | null;
+    text?: string;
+    permissionModeApplyTiming?: 'immediate' | 'next_prompt';
+    providerNonSteerablePayloadReason?: Extract<NonSteerablePayloadReason, 'provider_config_change_refused'> | null;
+}): NonSteerablePayloadReason | null {
+    const text = (opts.text ?? '').trim();
+    if (text === '/clear' || text === '/compact' || text.startsWith('/compact ')) {
+        return 'special_command';
+    }
+    if (opts.providerNonSteerablePayloadReason === 'provider_config_change_refused') {
+        return opts.providerNonSteerablePayloadReason;
+    }
+    if ((opts.permissionModeApplyTiming ?? 'immediate') === 'next_prompt') {
+        return null;
+    }
+    const selectedMode = opts.session?.permissionMode ?? null;
+    if (typeof selectedMode !== 'string' || selectedMode.length === 0) {
+        return null;
+    }
+    const currentModeRaw = opts.session?.metadata?.permissionMode;
+    const currentMode = typeof currentModeRaw === 'string' && currentModeRaw.length > 0 ? currentModeRaw : 'default';
+    if (selectedMode === currentMode) {
+        return null;
+    }
+    const changedAt = normalizeTimestamp(opts.session?.permissionModeUpdatedAt);
+    if (changedAt === null) {
+        return null;
+    }
+    const turnStartMs = estimateActiveTurnStartMs(opts.session ?? null);
+    if (turnStartMs !== null && changedAt < turnStartMs) {
+        return null;
+    }
+    return 'mode_change_refused';
+}
+
+/**
+ * Lane Q: whether the session's backend published the in-flight config-apply capability —
+ * it can apply a steered message's permission/plan mode delta to the RUNNING turn, so the
+ * non-steerable-send affordance may offer "Apply setting & steer now". Fail-closed on absence.
+ */
+export function canApplySteerConfigInFlight(session: Session | null): boolean {
+    return session?.agentState?.capabilities?.inFlightConfigApplySupported === true;
 }
 
 export function canDirectSubmitUserMessageNow(opts: {
@@ -154,6 +258,27 @@ export function decideSessionMessageDelivery(opts: {
     session: Session | null;
     nowMs?: number;
     forceImmediate?: boolean;
+    /** Outgoing message text — enables the payload-aware steer gate (lane P). */
+    text?: string;
+    /** `sessionPermissionModeApplyTiming` setting; `next_prompt` skips the mode-change gate. */
+    permissionModeApplyTiming?: 'immediate' | 'next_prompt';
+    /** `sessionNonSteerableSendPrompt` setting; `off` restores the legacy (silent) behavior. */
+    nonSteerableSendPrompt?: NonSteerableSendPromptSetting;
+    /** Provider-owned classifier output for outgoing config metadata that cannot be steered. */
+    providerNonSteerablePayloadReason?: Extract<NonSteerablePayloadReason, 'provider_config_change_refused'> | null;
+    /**
+     * Lane Q: explicit user choice ("Apply setting & steer now") — the mode-change payload may
+     * take the steer path because the backend owns the delta in-turn. Only honored when the
+     * session publishes `inFlightConfigApplySupported` (fail-closed) and never for special commands.
+     */
+    applyConfigAndSteer?: boolean;
+    /**
+     * Lane X (X3 Case B): explicit user choice "Steer now without applying" — the TEXT steers the
+     * running turn; the mode/setting stays desired-state and applies later via the normal path
+     * (the caller sends the message with the published current mode so no delta rides it).
+     * Never honored for special commands.
+     */
+    steerWithoutConfig?: boolean;
 }): SessionMessageDeliveryDecision {
     const configuredMode = opts.configuredMode;
     const requestedMode = opts.explicitMode ?? configuredMode;
@@ -240,6 +365,18 @@ export function decideSessionMessageDelivery(opts: {
     //
     // Exception: if the agent supports in-flight steer and is online+ready, do NOT auto-enqueue while busy.
     // Steering preserves the current turn (Codex-style) and is the more intuitive default.
+    // Payload-aware steer gate (lane P, O-design §2.2): a busy send whose PAYLOAD cannot be
+    // steered must never silently take the agent_queue path — it would render as delivered while
+    // the CLI demotes it invisibly. The kill-switch setting restores legacy behavior.
+    const nonSteerablePayloadReason = runtimeState.isBusy && (opts.nonSteerableSendPrompt ?? 'ask') !== 'off'
+        ? getNonSteerablePayloadReason({
+            session,
+            text: opts.text,
+            permissionModeApplyTiming: opts.permissionModeApplyTiming,
+            providerNonSteerablePayloadReason: opts.providerNonSteerablePayloadReason,
+        })
+        : null;
+
     if (
         runtimeState.isBusy
         && runtimeState.inFlightSteerSupported === true
@@ -249,6 +386,42 @@ export function decideSessionMessageDelivery(opts: {
         && runtimeState.agentReady
         && busySteerSendPolicy === 'steer_immediately'
     ) {
+        if (nonSteerablePayloadReason !== null) {
+            if (
+                nonSteerablePayloadReason === 'mode_change_refused'
+                && opts.steerWithoutConfig === true
+            ) {
+                // Lane X (X3 Case B): the user chose to steer the text only; the caller strips the
+                // mode delta from this message and the setting applies on the next message.
+                return withDirectReason({
+                    mode: 'agent_queue',
+                    intent,
+                    reason: 'busy_steer_text_only',
+                    pendingSupportState,
+                });
+            }
+            if (
+                nonSteerablePayloadReason === 'mode_change_refused'
+                && opts.applyConfigAndSteer === true
+                && runtimeState.inFlightConfigApplySupported
+            ) {
+                // Lane Q: the backend applies the mode delta to the running turn, then steers the
+                // text — explicit per-message user choice, capability-gated.
+                return withDirectReason({
+                    mode: 'agent_queue',
+                    intent,
+                    reason: 'busy_steer_config_apply',
+                    pendingSupportState,
+                });
+            }
+            return {
+                mode: 'server_pending',
+                intent,
+                reason: 'busy_non_steerable_payload_pending',
+                pendingSupportState,
+                nonSteerablePayloadReason,
+            };
+        }
         return withDirectReason({
             mode: 'agent_queue',
             intent,
@@ -272,6 +445,10 @@ export function decideSessionMessageDelivery(opts: {
             intent,
             reason: 'busy_policy_pending',
             pendingSupportState,
+            ...(nonSteerablePayloadReason !== null ? { nonSteerablePayloadReason } : {}),
+            ...(runtimeState.steerUnavailableReason !== null
+                ? { sessionSteerUnavailableReason: runtimeState.steerUnavailableReason }
+                : {}),
         };
     }
 

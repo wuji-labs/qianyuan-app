@@ -12,6 +12,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { socketEmitWithAckFallback } from '@/sync/engine/socket/socketEmitWithAckFallback';
 import { assertEndpointAuthenticatedWithProbe } from '@/sync/runtime/connectivity/assertEndpointAuthenticatedWithProbe';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
+import { raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
 
 import type { ResolvedServerSessionRpcContext } from './resolveServerScopedSessionContext';
 
@@ -212,7 +213,10 @@ export function createServerScopedSessionSendMessage(deps?: Partial<Deps>): Read
       const rawAck = await socketEmitWithAckFallback({
         emitWithAck: async (event, payload, opts) => {
           const timeoutMs = typeof opts?.timeoutMs === 'number' && opts.timeoutMs > 0 ? opts.timeoutMs : context.timeoutMs;
-          return await socket.timeout(timeoutMs).emitWithAck(event, payload);
+          return await raceSocketIoAckTimeout(
+            socket.timeout(timeoutMs).emitWithAck(event, payload),
+            timeoutMs,
+          );
         },
         send: (event, payload) => {
           socket.emit(event, payload);

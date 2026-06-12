@@ -66,7 +66,36 @@ export type SessionConfigOptionControl = Readonly<{
     requestedValue?: SessionConfigOptionValueId;
     effectiveValue: SessionConfigOptionValueId;
     isPending: boolean;
+    /** True when another option overrides this one (e.g. ultracode pins effort to xhigh). */
+    disabled?: boolean;
+    /** Display name of the overriding option, for "overridden by X" copy. */
+    disabledByOptionName?: string;
 }>;
+
+/**
+ * Boolean options that, while ON, override another option's value (renderers dim/disable
+ * the overridden control). Keyed by generic config option id — e.g. Claude's session-only
+ * `ultracode` setting forces xhigh reasoning, overriding the `reasoning_effort` select.
+ */
+const OVERRIDING_BOOLEAN_OPTION_TARGETS: ReadonlyMap<string, string> = new Map([
+    ['ultracode', 'reasoning_effort'],
+]);
+
+function applyBooleanOverrideRules(controls: SessionConfigOptionControl[]): SessionConfigOptionControl[] {
+    for (const [sourceId, targetId] of OVERRIDING_BOOLEAN_OPTION_TARGETS) {
+        const source = controls.find((control) => control.option.id === sourceId);
+        if (!source || !isBooleanConfigOptionType(source.option.type)) continue;
+        if (!resolveBooleanConfigOptionValue(source.option, source.effectiveValue)) continue;
+        const targetIndex = controls.findIndex((control) => control.option.id === targetId);
+        if (targetIndex < 0) continue;
+        controls[targetIndex] = {
+            ...controls[targetIndex],
+            disabled: true,
+            disabledByOptionName: source.option.name,
+        };
+    }
+    return controls;
+}
 
 function resolveRequestedValue(
     option: SessionConfigOption,
@@ -202,7 +231,7 @@ function buildSessionConfigOptionControls(params: Readonly<{
         });
     }
 
-    return controls.length > 0 ? controls : null;
+    return controls.length > 0 ? applyBooleanOverrideRules(controls) : null;
 }
 
 export function computeSessionConfigOptionControls(params: {

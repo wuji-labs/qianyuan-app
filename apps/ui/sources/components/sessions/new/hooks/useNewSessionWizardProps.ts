@@ -134,7 +134,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     // Footer section
     sessionPrompt: string;
     setSessionPrompt: (v: string) => void;
-    handleCreateSession: () => void;
+    handleCreateSession: NewSessionWizardFooterProps['handleCreateSession'];
     canCreate: boolean;
     isCreating: boolean;
     submitAccessibilityLabel?: NewSessionWizardFooterProps['submitAccessibilityLabel'];

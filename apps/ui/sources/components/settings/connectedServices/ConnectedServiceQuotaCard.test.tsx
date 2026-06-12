@@ -584,6 +584,59 @@ describe('ConnectedServiceQuotaCard', () => {
     vi.useRealTimers();
   });
 
+  it('preserves the last loaded snapshot when a refresh reload fails', async () => {
+    fetchAccountEncryptionModeSpy.mockResolvedValue({ mode: 'plain', updatedAt: 0 });
+    const snapshot = ConnectedServiceQuotaSnapshotV1Schema.parse({
+      v: 1,
+      serviceId: 'anthropic',
+      profileId: 'work',
+      fetchedAt: 111,
+      staleAfterMs: 60_000,
+      planLabel: 'Pro',
+      accountLabel: null,
+      meters: [
+        {
+          meterId: 'weekly',
+          label: 'Weekly',
+          used: 82,
+          limit: 100,
+          unit: 'count',
+          utilizationPct: null,
+          resetsAt: null,
+          status: 'ok',
+          details: {},
+        },
+      ],
+    });
+    getConnectedServiceQuotaSnapshotPlainSpy
+      .mockResolvedValueOnce(snapshot)
+      .mockRejectedValue(new Error('quota refresh failed'));
+    requestConnectedServiceQuotaSnapshotRefreshV3Spy.mockResolvedValue(true);
+    const onSnapshot = vi.fn();
+
+    const tree = (await renderScreen(<ConnectedServiceQuotaCard
+          serviceId="anthropic"
+          profileId="work"
+          title="Quotas"
+          pinnedMeterIds={[]}
+          onSetPinnedMeterIds={() => {}}
+          onSnapshot={onSnapshot}
+        />)).tree;
+
+    await flushHookEffects({ turns: 3 });
+    expect(tree.findAll((n) => n.props?.title === 'Weekly')).toHaveLength(1);
+    const callsBeforeRefresh = onSnapshot.mock.calls.length;
+
+    const refreshItem = tree.find((n) => n.props?.title === 'Refresh');
+    await act(async () => {
+      await pressTestInstanceAsync(refreshItem);
+    });
+    await flushHookEffects({ turns: 5 });
+
+    expect(tree.findAll((n) => n.props?.title === 'Weekly')).toHaveLength(1);
+    expect(onSnapshot.mock.calls.slice(callsBeforeRefresh)).not.toContainEqual([null]);
+  });
+
   it('coalesces concurrent manual refresh requests', async () => {
     vi.useFakeTimers();
     let resolveRefresh!: (value: boolean) => void;

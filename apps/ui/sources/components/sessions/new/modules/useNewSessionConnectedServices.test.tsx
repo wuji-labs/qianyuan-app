@@ -408,6 +408,9 @@ describe('useNewSessionConnectedServices', () => {
                     connectedServices: {
                         supportedServiceIds: ['openai-codex'],
                         supportedKindsByServiceId: { 'openai-codex': ['oauth'] },
+                        sessionAuthSwitch: {
+                            continuityMode: 'restart_shared_state_required',
+                        },
                     },
                 },
                 agentOptionState: null,
@@ -448,7 +451,90 @@ describe('useNewSessionConnectedServices', () => {
             },
         });
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('connectedServices.serviceNames.openaiCodex: Primary pool');
+            .toBe('connectedServices.serviceNames.openaiCodex: Primary pool (fresh@example.com)');
+
+        await hook.unmount();
+    });
+
+    it('keeps account groups visible but disabled when the agent cannot switch group auth', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'openai-codex',
+                    profiles: [
+                        {
+                            profileId: 'work',
+                            status: 'connected',
+                            kind: 'oauth',
+                            providerEmail: 'work@example.com',
+                        },
+                    ],
+                    groups: [{
+                        groupId: 'primary',
+                        displayName: 'Primary pool',
+                        activeProfileId: 'work',
+                        memberProfileIds: ['work'],
+                    }],
+                },
+            ],
+        };
+
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: {
+                    id: 'codex',
+                    connectedServices: {
+                        supportedServiceIds: ['openai-codex'],
+                        supportedKindsByServiceId: { 'openai-codex': ['oauth'] },
+                    },
+                },
+                agentOptionState: {
+                    connectedServicesBindingsByServiceId: {
+                        'openai-codex': {
+                            source: 'connected',
+                            selection: 'group',
+                            groupId: 'primary',
+                        },
+                    },
+                },
+                settings: {
+                    connectedServicesProfileLabelByKey: {},
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+                },
+                targetServerId: null,
+                router: { push: vi.fn() },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+            }),
+        );
+
+        expect(hook.getCurrent().connectedServicesBindingsPayload).toBeNull();
+
+        const popoverRenderer = requireCollapsedContentPopover(
+            hook.getCurrent().connectedServicesAuthChip,
+        ).renderContent;
+        if (typeof popoverRenderer !== 'function') {
+            throw new Error('Expected connected services popover content renderer');
+        }
+        const popover = popoverRenderer({
+            requestClose: vi.fn(),
+            maxHeight: 420,
+        }) as React.ReactElement<{
+            accountGroupOptionsByServiceId?: Record<string, unknown[]>;
+            resolveOptionAvailability?: (params: { serviceId: string; optionId: string; binding: unknown }) => { disabled?: boolean; subtitle?: string };
+        }>;
+
+        expect(popover.props.accountGroupOptionsByServiceId?.['openai-codex']).toHaveLength(1);
+        expect(popover.props.resolveOptionAvailability?.({
+            serviceId: 'openai-codex',
+            optionId: 'connected-service:openai-codex:group:primary',
+            binding: { source: 'connected', selection: 'group', groupId: 'primary' },
+        })).toEqual({
+            disabled: true,
+            subtitle: 'connectedServices.authModal.groupUnsupportedSubtitle',
+        });
 
         await hook.unmount();
     });

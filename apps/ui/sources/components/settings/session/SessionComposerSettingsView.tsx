@@ -10,7 +10,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { t } from '@/text';
 import { useSettingMutable } from '@/sync/domains/state/storage';
-import type { BusySteerSendPolicy, MessageSendMode } from '@/sync/domains/session/control/submitMode';
+import type { BusySteerSendPolicy, MessageSendMode, NonSteerableSendPromptSetting } from '@/sync/domains/session/control/submitMode';
 
 type PendingQueueDrainMode = 'one_at_a_time' | 'drain_all';
 
@@ -19,6 +19,7 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
     const popoverBoundaryRef = React.useRef<any>(null);
     const [messageSendMode, setMessageSendMode] = useSettingMutable('sessionMessageSendMode');
     const [busySteerSendPolicy, setBusySteerSendPolicy] = useSettingMutable('sessionBusySteerSendPolicy');
+    const [nonSteerableSendPrompt, setNonSteerableSendPrompt] = useSettingMutable('sessionNonSteerableSendPrompt');
     const [pendingQueueDrainMode, setPendingQueueDrainMode] = useSettingMutable('sessionPendingQueueDrainMode');
     const [agentInputEnterToSend, setAgentInputEnterToSend] = useSettingMutable('agentInputEnterToSend');
     const [agentInputEnterToSendNative, setAgentInputEnterToSendNative] = useSettingMutable('agentInputEnterToSendNative');
@@ -77,6 +78,23 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
             key: 'server_pending',
             title: t('settingsSession.messageSending.busySteerPolicy.queueForReviewTitle'),
             subtitle: t('settingsSession.messageSending.busySteerPolicy.queueForReviewSubtitle'),
+        },
+    ];
+    const nonSteerablePromptOptions: Array<{ key: NonSteerableSendPromptSetting; title: string; subtitle: string }> = [
+        {
+            key: 'ask',
+            title: t('settingsSession.messageSending.nonSteerablePrompt.askTitle'),
+            subtitle: t('settingsSession.messageSending.nonSteerablePrompt.askSubtitle'),
+        },
+        {
+            key: 'queue_silently',
+            title: t('settingsSession.messageSending.nonSteerablePrompt.queueSilentlyTitle'),
+            subtitle: t('settingsSession.messageSending.nonSteerablePrompt.queueSilentlySubtitle'),
+        },
+        {
+            key: 'off',
+            title: t('settingsSession.messageSending.nonSteerablePrompt.offTitle'),
+            subtitle: t('settingsSession.messageSending.nonSteerablePrompt.offSubtitle'),
         },
     ];
     const pendingQueueDrainModeOptions: Array<{ key: PendingQueueDrainMode; title: string; subtitle: string }> = [
@@ -167,6 +185,20 @@ export const SessionComposerSettingsView = React.memo(function SessionComposerSe
                     ))}
                 </ItemGroup>
             ) : null}
+
+            <ItemGroup title={t('settingsSession.messageSending.nonSteerablePromptTitle')} footer={t('settingsSession.messageSending.nonSteerablePromptFooter')}>
+                {nonSteerablePromptOptions.map((option) => (
+                    <Item
+                        key={option.key}
+                        title={option.title}
+                        subtitle={option.subtitle}
+                        icon={<Ionicons name="hand-left-outline" size={29} color={theme.colors.accent.blue} />}
+                        rightElement={nonSteerableSendPrompt === option.key ? <Ionicons name="checkmark" size={20} color={theme.colors.accent.blue} /> : null}
+                        onPress={() => setNonSteerableSendPrompt(option.key)}
+                        showChevron={false}
+                    />
+                ))}
+            </ItemGroup>
 
             {pendingQueueMayBeUsed ? (
                 <ItemGroup title={t('settingsSession.messageSending.pendingDrainModeTitle')} footer={t('settingsSession.messageSending.pendingDrainModeFooter')}>

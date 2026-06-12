@@ -128,7 +128,9 @@ describe('MultiTextInputHandle (native)', () => {
         expect(ref.current).toBeTruthy();
 
         // Should not throw
-        ref.current!.setTextAndSelection('test', { start: 0, end: 4 });
+        await act(async () => {
+            ref.current!.setTextAndSelection('test', { start: 0, end: 4 });
+        });
     });
 });
 
@@ -249,6 +251,8 @@ describe('MultiTextInputHandle (web)', () => {
         expect(ref.current).toBeTruthy();
 
         // Should not throw
-        ref.current!.setTextAndSelection('test', { start: 0, end: 4 });
+        await act(async () => {
+            ref.current!.setTextAndSelection('test', { start: 0, end: 4 });
+        });
     });
 });

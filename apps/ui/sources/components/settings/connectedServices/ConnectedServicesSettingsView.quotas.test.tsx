@@ -250,6 +250,7 @@ describe('ConnectedServicesSettingsView quotas', () => {
       defaults: { configMode: 'linked', stateMode: 'shared' },
       byAgentId: {},
       acknowledgedRisksByAgentId: {
+        claude: { sharedStatePrivacy: true },
         codex: { sharedStatePrivacy: true },
         pi: { sharedStatePrivacy: true },
       },

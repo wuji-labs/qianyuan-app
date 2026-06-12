@@ -18,6 +18,8 @@ describe('loadSyncTuning', () => {
         expect(tuning.sessionSocketApplyCoalescingMaxBatchSize).toBeGreaterThan(1);
         expect(tuning.sessionListEagerHydrationCount).toBeLessThanOrEqual(4);
         expect(tuning.sessionMessagesPageSize).toBe(150);
+        expect(tuning.transcriptNativeOlderMessagesPageSize).toBe(64);
+        expect(tuning.transcriptNativeOlderMessagesPageSize).toBeLessThan(tuning.sessionMessagesPageSize);
         expect(tuning.transcriptOlderLoadCooldownMs).toBeGreaterThanOrEqual(2000);
         expect(tuning.transcriptOlderLoadCooldownMs).toBeLessThanOrEqual(2500);
         expect(tuning.sessionListAppendEagerHydrationCount).toBe(50);
@@ -38,8 +40,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptWebInitialPinRetryMilestonesMs).toEqual([16, 50, 100, 200, 400, 800]);
         expect(tuning.transcriptOlderLoadSpinnerDelayMs).toBe(300);
         expect(tuning.transcriptViewportAnchorCaptureDebounceMs).toBe(200);
-        expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(1);
-        expect(tuning.transcriptViewportAnchorRenderRetryMax).toBe(4);
+        expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(6);
         expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBe(16);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBeGreaterThan(0);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBeLessThanOrEqual(10_000);
@@ -52,7 +53,6 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptViewportTelemetryEnabled).toBe(false);
         expect(tuning.transcriptViewportTelemetryConsoleLog).toBe(false);
         expect(tuning.transcriptViewportTelemetryMaxEvents).toBe(512);
-        expect(tuning.transcriptNativeMvcpOnlyMode).toBe(false);
         expect(tuning.enrichedMarkdownRuntimePreloadRetryDelayMs).toBeGreaterThanOrEqual(1_000);
         expect(tuning.enrichedMarkdownRuntimePreloadRetryDelayMs).toBeLessThanOrEqual(300_000);
         expect(tuning.nativeCryptoWorkerMode).toBe('auto');
@@ -75,7 +75,6 @@ describe('loadSyncTuning', () => {
                     transcriptOlderLoadCooldownMs: 321,
                     transcriptViewportAnchorCaptureDebounceMs: 125,
                     transcriptViewportAnchorOlderLookupMaxLoads: 2,
-                    transcriptViewportAnchorRenderRetryMax: 3,
                     transcriptDerivedItemsCacheMaxSessions: 11,
                     transcriptItemHeightCacheMaxEntries: 321,
                     transcriptForkedSnapshotCacheMaxSessions: 17,
@@ -86,13 +85,13 @@ describe('loadSyncTuning', () => {
                     transcriptViewportTelemetryEnabled: true,
                     transcriptViewportTelemetryConsoleLog: true,
                     transcriptViewportTelemetryMaxEvents: 1024,
-                    transcriptNativeMvcpOnlyMode: true,
                     transcriptInitialFillBudgetMs: 4321,
                     transcriptInitialFillMaxNoProgressLoads: 7,
                     resumeConcurrencyLimit: 5,
                     sessionListBackgroundHydrationConcurrencyLimit: 2,
                     sessionListAppendEagerHydrationCount: 2,
                     sessionMessagesPageSize: 42,
+                    transcriptNativeOlderMessagesPageSize: 37,
                     sessionListBackgroundHydrationMaxRows: 11,
                     sessionViewportHydrationPriorityMaxRows: 6,
                     sessionListBackgroundHydrationYieldDelayMs: 3,
@@ -149,7 +148,6 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptOlderLoadCooldownMs).toBe(321);
         expect(tuning.transcriptViewportAnchorCaptureDebounceMs).toBe(125);
         expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(2);
-        expect(tuning.transcriptViewportAnchorRenderRetryMax).toBe(3);
         expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBe(11);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBe(321);
         expect(tuning.transcriptForkedSnapshotCacheMaxSessions).toBe(17);
@@ -160,13 +158,13 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptViewportTelemetryEnabled).toBe(true);
         expect(tuning.transcriptViewportTelemetryConsoleLog).toBe(true);
         expect(tuning.transcriptViewportTelemetryMaxEvents).toBe(1024);
-        expect(tuning.transcriptNativeMvcpOnlyMode).toBe(true);
         expect(tuning.transcriptInitialFillBudgetMs).toBe(4321);
         expect(tuning.transcriptInitialFillMaxNoProgressLoads).toBe(7);
         expect(tuning.resumeConcurrencyLimit).toBe(5);
         expect(tuning.sessionListBackgroundHydrationConcurrencyLimit).toBe(2);
         expect(tuning.sessionListAppendEagerHydrationCount).toBe(2);
         expect(tuning.sessionMessagesPageSize).toBe(42);
+        expect(tuning.transcriptNativeOlderMessagesPageSize).toBe(37);
         expect(tuning).toMatchObject({ sessionListBackgroundHydrationMaxRows: 11 });
         expect(tuning.sessionViewportHydrationPriorityMaxRows).toBe(6);
         expect(tuning.sessionListBackgroundHydrationYieldDelayMs).toBe(3);
@@ -255,7 +253,6 @@ describe('loadSyncTuning', () => {
                     transcriptOlderLoadCooldownMs: -1,
                     transcriptViewportAnchorCaptureDebounceMs: -1,
                     transcriptViewportAnchorOlderLookupMaxLoads: -1,
-                    transcriptViewportAnchorRenderRetryMax: -1,
                     transcriptDerivedItemsCacheMaxSessions: 0,
                     transcriptItemHeightCacheMaxEntries: 0,
                     transcriptForkedSnapshotCacheMaxSessions: 0,
@@ -265,13 +262,13 @@ describe('loadSyncTuning', () => {
                     transcriptMountSettleBottomDistanceNoiseFloorPx: -1,
                     transcriptViewportTelemetryEnabled: 'yes',
                     transcriptViewportTelemetryMaxEvents: 0,
-                    transcriptNativeMvcpOnlyMode: 'yes',
                     transcriptInitialFillBudgetMs: 10,
                     transcriptInitialFillMaxNoProgressLoads: 0,
                     resumeConcurrencyLimit: 0,
                     sessionListBackgroundHydrationConcurrencyLimit: 0,
                     sessionListAppendEagerHydrationCount: -1,
                     sessionMessagesPageSize: 0,
+                    transcriptNativeOlderMessagesPageSize: 0,
                     sessionListBackgroundHydrationMaxRows: -1,
                     sessionViewportHydrationPriorityMaxRows: -1,
                     sessionListBackgroundHydrationYieldDelayMs: -1,
@@ -322,8 +319,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptWebInitialPinRetryMilestonesMs).toEqual([16, 50, 100, 200, 400, 800]);
         expect(tuning.transcriptOlderLoadSpinnerDelayMs).toBe(300);
         expect(tuning.transcriptViewportAnchorCaptureDebounceMs).toBe(200);
-        expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(1);
-        expect(tuning.transcriptViewportAnchorRenderRetryMax).toBe(4);
+        expect(tuning.transcriptViewportAnchorOlderLookupMaxLoads).toBe(6);
         expect(tuning.transcriptDerivedItemsCacheMaxSessions).toBe(16);
         expect(tuning.transcriptItemHeightCacheMaxEntries).toBeGreaterThan(0);
         expect(tuning.transcriptForkedSnapshotCacheMaxSessions).toBe(64);
@@ -333,7 +329,6 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptMountSettleBottomDistanceNoiseFloorPx).toBeGreaterThanOrEqual(0);
         expect(tuning.transcriptViewportTelemetryEnabled).toBe(false);
         expect(tuning.transcriptViewportTelemetryMaxEvents).toBe(512);
-        expect(tuning.transcriptNativeMvcpOnlyMode).toBe(false);
         expect(tuning.transcriptInitialFillBudgetMs).toBeGreaterThanOrEqual(250);
         expect(tuning.transcriptInitialFillMaxNoProgressLoads).toBeGreaterThan(0);
         expect(tuning.transcriptOlderLoadCooldownMs).toBeGreaterThanOrEqual(100);
@@ -341,6 +336,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.sessionListBackgroundHydrationConcurrencyLimit).toBeGreaterThan(0);
         expect(tuning.sessionListAppendEagerHydrationCount).toBe(50);
         expect(tuning.sessionMessagesPageSize).toBe(150);
+        expect(tuning.transcriptNativeOlderMessagesPageSize).toBe(64);
         expect(tuning).toMatchObject({ sessionListBackgroundHydrationMaxRows: 0 });
         expect(tuning.sessionViewportHydrationPriorityMaxRows).toBeGreaterThan(0);
         expect(tuning.sessionViewportHydrationPriorityMaxRows).toBeLessThanOrEqual(8);

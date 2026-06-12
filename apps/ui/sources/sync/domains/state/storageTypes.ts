@@ -350,6 +350,20 @@ const AgentStateObjectSchema = z.object({
         inFlightSteer: z.boolean().optional(),
         inFlightSteerSupported: z.boolean().optional(),
         inFlightSteerAvailable: z.boolean().optional(),
+        /**
+         * Why in-flight steer is unavailable (lane P, Seam A). Kept permissive (string) for
+         * forward compatibility: newer CLIs may publish reasons this UI does not know yet.
+         * Known values: 'backend_unsupported' | 'unsafe_window' | 'turn_settling'
+         * | 'user_terminal_draft' (lane X: a terminal composer draft is starving steering).
+         */
+        inFlightSteerUnavailableReason: z.string().nullish(),
+        /** Timestamp (ms) of the last steerability evaluation — staleness guard. */
+        inFlightSteerStateAt: z.number().nullish(),
+        /**
+         * Lane Q: backend can apply a steered message's config delta (permission/plan mode) to
+         * the RUNNING turn — enables the "Apply setting & steer now" affordance. Fail-closed.
+         */
+        inFlightConfigApplySupported: z.boolean().nullish(),
         localPermissionBridgeInLocalMode: z.boolean().optional(),
         permissionsInUiWhileLocal: z.boolean().optional(),
     }).nullish(),

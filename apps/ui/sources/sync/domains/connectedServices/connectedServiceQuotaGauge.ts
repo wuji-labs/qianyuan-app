@@ -1,8 +1,11 @@
-import type {
-    ConnectedServiceQuotaMeterV1,
-    ConnectedServiceQuotaSnapshotV1,
-    SessionRuntimeIssueV1,
+import {
+    readConnectedServiceLimitCategoryV1,
+    type ConnectedServiceQuotaMeterV1,
+    type ConnectedServiceQuotaSnapshotV1,
+    type SessionRuntimeIssueV1,
 } from '@happier-dev/protocol';
+
+import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/registry/registryCore';
 
 import { clampQuotaPct, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
 
@@ -78,6 +81,8 @@ export type ConnectedServiceQuotaGaugeSource = Readonly<{
 const QUOTA_REMAINING_WARNING_THRESHOLD_PCT = 25;
 const QUOTA_REMAINING_CRITICAL_THRESHOLD_PCT = 10;
 const RUNTIME_ISSUE_QUOTA_PROJECTION_STALE_AFTER_MS = 30_000;
+const RUNTIME_ISSUE_NATIVE_PROFILE_ID = 'native';
+const RUNTIME_ISSUE_PROJECTION_PROFILE_ID = 'runtime';
 
 function readRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
@@ -105,6 +110,14 @@ function meterNameTokens(meter: Pick<ConnectedServiceQuotaMeterV1, 'meterId' | '
     return new Set(`${meter.meterId} ${meter.label}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
 }
 
+function readPublicLimitCategory(meter: ConnectedServiceQuotaMeterV1): ReturnType<typeof readConnectedServiceLimitCategoryV1> {
+    return readConnectedServiceLimitCategoryV1(
+        readMetadataString(meter, 'limitCategory')
+        ?? readMetadataString(meter, 'category')
+        ?? readMetadataString(meter, 'stateFamily'),
+    );
+}
+
 export function resolveConnectedServiceQuotaMeterScopePrefix(
     meter: Pick<ConnectedServiceQuotaMeterV1, 'meterId' | 'label'>,
 ): string | null {
@@ -128,10 +141,8 @@ function meterMatchesWindowMode(
 export function isConnectedServiceQuotaMeterPercentRankable(meter: ConnectedServiceQuotaMeterV1): boolean {
     if (meter.status === 'unavailable') return false;
 
-    const category = readMetadataString(meter, 'limitCategory')
-        ?? readMetadataString(meter, 'category')
-        ?? readMetadataString(meter, 'stateFamily');
-    if (category && !['quota', 'rate_limit'].includes(category)) {
+    const category = readPublicLimitCategory(meter);
+    if (category && !['usage_limit', 'rate_limit'].includes(category)) {
         return false;
     }
 
@@ -152,15 +163,12 @@ export function isConnectedServiceQuotaMeterPercentRankable(meter: ConnectedServ
 
 type ConnectedServiceQuotaComparableFamily = Readonly<{
     key: string;
-    category: 'quota' | 'rate_limit';
+    category: 'usage_limit' | 'rate_limit';
 }>;
 
 function resolveComparableFamily(meter: ConnectedServiceQuotaMeterV1): ConnectedServiceQuotaComparableFamily | null {
-    const categoryRaw = readMetadataString(meter, 'limitCategory')
-        ?? readMetadataString(meter, 'category')
-        ?? readMetadataString(meter, 'stateFamily')
-        ?? 'quota';
-    if (categoryRaw !== 'quota' && categoryRaw !== 'rate_limit') return null;
+    const categoryRaw = readPublicLimitCategory(meter) ?? 'usage_limit';
+    if (categoryRaw !== 'usage_limit' && categoryRaw !== 'rate_limit') return null;
 
     const unit = typeof meter.unit === 'string' && meter.unit.trim().length > 0 ? meter.unit.trim() : 'unknown';
     const familyId = readMetadataString(meter, 'quotaFamily')
@@ -179,7 +187,7 @@ export function selectComparableConnectedServiceQuotaMeters(
 ): ConnectedServiceQuotaMeterV1[] {
     const rankable = meters.filter(isConnectedServiceQuotaMeterPercentRankable);
     const groups = new Map<string, {
-        category: 'quota' | 'rate_limit';
+        category: 'usage_limit' | 'rate_limit';
         firstIndex: number;
         meters: ConnectedServiceQuotaMeterV1[];
     }>();
@@ -200,7 +208,7 @@ export function selectComparableConnectedServiceQuotaMeters(
     });
 
     const orderedGroups = Array.from(groups.values()).sort((a, b) => {
-        if (a.category !== b.category) return a.category === 'quota' ? -1 : 1;
+        if (a.category !== b.category) return a.category === 'usage_limit' ? -1 : 1;
         if (a.meters.length !== b.meters.length) return b.meters.length - a.meters.length;
         return a.firstIndex - b.firstIndex;
     });
@@ -346,7 +354,6 @@ export function resolveConnectedServiceQuotaGaugeSource(_params: Readonly<{
     const params = _params;
     if (!params.snapshot) return null;
     if (params.sourceKind === 'unsupported') return null;
-    if (params.sourceKind === 'native_auth') return null;
 
     const checkNowSupported =
         params.sourceKind === 'connected_service_group'
@@ -361,15 +368,44 @@ export function resolveConnectedServiceQuotaGaugeSource(_params: Readonly<{
     };
 }
 
+function resolveRuntimeIssueQuotaServiceId(issue: SessionRuntimeIssueV1): ConnectedServiceQuotaSnapshotV1['serviceId'] | null {
+    const refServiceId = issue.usageLimit?.quotaSnapshotRef?.serviceId;
+    if (refServiceId) return refServiceId;
+    const connectedServiceId = issue.usageLimit?.connectedService?.serviceId;
+    if (connectedServiceId) return connectedServiceId;
+
+    // Last-resort fallback: resolve through the agents registry so provider
+    // facts stay catalog-owned. The first supported connected service id is the
+    // provider's canonical native default (mirrors the CLI adapters'
+    // defaultNativeServiceId); providers without connected-services support
+    // stay gauge-less.
+    const agentId = resolveAgentIdFromFlavor(issue.provider);
+    if (!agentId) return null;
+    return getAgentCore(agentId).connectedServices?.supportedServiceIds[0] ?? null;
+}
+
+function resolveRuntimeIssueQuotaProfileId(issue: SessionRuntimeIssueV1): string {
+    const profileId = issue.usageLimit?.quotaSnapshotRef?.profileId?.trim();
+    if (profileId) return profileId;
+    const connectedProfileId = issue.usageLimit?.connectedService?.profileId?.trim();
+    if (connectedProfileId) return connectedProfileId;
+    const connectedGroupId = issue.usageLimit?.connectedService?.groupId?.trim();
+    if (connectedGroupId) return connectedGroupId;
+    return issue.usageLimit?.quotaSnapshotRef || issue.usageLimit?.connectedService
+        ? RUNTIME_ISSUE_PROJECTION_PROFILE_ID
+        : RUNTIME_ISSUE_NATIVE_PROFILE_ID;
+}
+
 export function deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(
     issue: SessionRuntimeIssueV1 | null | undefined,
 ): ConnectedServiceQuotaSnapshotV1 | null {
     const usageLimit = issue?.usageLimit;
     if (!usageLimit) return null;
-    if (usageLimit.limitCategory && !['quota', 'rate_limit'].includes(usageLimit.limitCategory)) return null;
+    const runtimeLimitCategory = readConnectedServiceLimitCategoryV1(usageLimit.limitCategory);
+    if (runtimeLimitCategory && !['usage_limit', 'rate_limit'].includes(runtimeLimitCategory)) return null;
 
-    const quotaSnapshotRef = usageLimit.quotaSnapshotRef;
-    if (!quotaSnapshotRef?.serviceId) return null;
+    const serviceId = resolveRuntimeIssueQuotaServiceId(issue);
+    if (!serviceId) return null;
 
     const windows = usageLimit.allWindows && usageLimit.allWindows.length > 0
         ? usageLimit.allWindows
@@ -381,6 +417,14 @@ export function deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(
                 resetAtMs: usageLimit.resetAtMs ?? undefined,
                 status: 'ok',
             }]
+            : typeof usageLimit.utilization === 'number' && Number.isFinite(usageLimit.utilization)
+                ? [{
+                    meterId: usageLimit.providerLimitId ?? usageLimit.effectiveMeterId ?? 'usage_limit',
+                    scope: usageLimit.providerLimitId ?? usageLimit.effectiveMeterId ?? usageLimit.quotaScope,
+                    remainingPct: clampQuotaPct(100 - usageLimit.utilization),
+                    resetAtMs: usageLimit.resetAtMs ?? undefined,
+                    status: 'ok',
+                }]
             : [];
     const meters: ConnectedServiceQuotaMeterV1[] = windows
         .map((window): ConnectedServiceQuotaMeterV1 | null => {
@@ -399,7 +443,7 @@ export function deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(
                 status: window.status === 'ok' || window.status === undefined ? 'ok' : 'unavailable',
                 confidence: 'exact',
                 details: {
-                    limitCategory: usageLimit.limitCategory ?? 'quota',
+                    limitCategory: runtimeLimitCategory ?? 'usage_limit',
                 },
             };
         })
@@ -407,22 +451,99 @@ export function deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(
 
     if (meters.length === 0) return null;
 
+    const providerId = issue.provider?.trim() || null;
+    const evidence = usageLimit.providerLimitId
+        ? {
+            kind: 'runtime_usage_limit',
+            observedAtMs: issue.occurredAt,
+            providerLimitId: usageLimit.providerLimitId,
+        }
+        : {
+            kind: 'runtime_usage_limit',
+            observedAtMs: issue.occurredAt,
+        };
+
     return {
         v: 1,
-        serviceId: quotaSnapshotRef.serviceId,
-        profileId: quotaSnapshotRef.profileId ?? quotaSnapshotRef.groupId ?? issue?.provider ?? 'runtime',
-        fetchedAt: quotaSnapshotRef.fetchedAtMs ?? issue.occurredAt,
+        serviceId,
+        profileId: resolveRuntimeIssueQuotaProfileId(issue),
+        fetchedAt: usageLimit.quotaSnapshotRef?.fetchedAtMs ?? issue.occurredAt,
         staleAfterMs: RUNTIME_ISSUE_QUOTA_PROJECTION_STALE_AFTER_MS,
         planLabel: usageLimit.planType ?? null,
-        accountLabel: quotaSnapshotRef.groupId ?? null,
+        accountLabel: null,
+        ...(providerId ? { providerId } : {}),
+        source: 'runtime_event',
+        confidence: 'exact',
+        evidence,
         meters,
     };
 }
 
-export function selectConnectedServiceSessionProviderUsageSnapshot(params: Readonly<{
+/**
+ * Provenance of the session's connected-service quota snapshot ref, reported by
+ * `resolveConnectedServiceQuotaProfileRefForSession`.
+ */
+export type ConnectedServiceQuotaProfileRefProvenance =
+    | 'connected_binding_group'
+    | 'connected_binding_profile'
+    | 'published_quota_ref';
+
+// Mirrors the CLI's `buildNativeQuotaProfileId` shapes (`acct:<hash>` /
+// `native:<hash>`) used when a runtime publishes a quota ref for native auth.
+const NATIVE_QUOTA_PROFILE_ID_PATTERN = /^(?:acct|native):/;
+
+function classifyConnectedServiceGaugeSourceKind(params: Readonly<{
+    provenance: ConnectedServiceQuotaProfileRefProvenance | null | undefined;
+    profileId: string;
+    sessionCheckNowSupported: boolean;
+}>): ConnectedServiceQuotaGaugeSourceKind {
+    switch (params.provenance) {
+        case 'connected_binding_group':
+            return 'connected_service_group';
+        case 'connected_binding_profile':
+            return 'connected_service_profile';
+        case 'published_quota_ref':
+            if (!NATIVE_QUOTA_PROFILE_ID_PATTERN.test(params.profileId)) {
+                return 'connected_service_profile';
+            }
+            // Native-auth published snapshots: only runtimes whose session
+            // surface owns live quota control (registry-resolved check-now
+            // support, e.g. the Codex app-server) keep an actionable source.
+            return params.sessionCheckNowSupported ? 'codex_app_server_native' : 'native_auth';
+        default:
+            return 'unsupported';
+    }
+}
+
+/**
+ * Production owner of the session provider-usage gauge source: routes both the
+ * runtime-evidence projection and the polled connected-service snapshot
+ * through the explicit gauge-source matrix so suppression ("no fake gauges")
+ * and check-now derivation have one owner.
+ */
+export function selectConnectedServiceSessionProviderUsageGaugeSource(params: Readonly<{
+    providerId: string | null;
     connectedServiceSnapshot: ConnectedServiceQuotaSnapshotV1 | null;
+    connectedServiceRefProvenance: ConnectedServiceQuotaProfileRefProvenance | null | undefined;
+    sessionCheckNowSupported?: boolean;
     runtimeIssue: SessionRuntimeIssueV1 | null | undefined;
-}>): ConnectedServiceQuotaSnapshotV1 | null {
+}>): ConnectedServiceQuotaGaugeSource | null {
     const runtimeIssueQuotaSnapshot = deriveConnectedServiceQuotaSnapshotFromRuntimeIssue(params.runtimeIssue);
-    return runtimeIssueQuotaSnapshot ?? params.connectedServiceSnapshot;
+    if (runtimeIssueQuotaSnapshot) {
+        return resolveConnectedServiceQuotaGaugeSource({
+            providerId: params.providerId ?? runtimeIssueQuotaSnapshot.providerId ?? runtimeIssueQuotaSnapshot.serviceId,
+            sourceKind: 'native_runtime_evidence',
+            snapshot: runtimeIssueQuotaSnapshot,
+        });
+    }
+    if (!params.connectedServiceSnapshot) return null;
+    return resolveConnectedServiceQuotaGaugeSource({
+        providerId: params.providerId ?? params.connectedServiceSnapshot.serviceId,
+        sourceKind: classifyConnectedServiceGaugeSourceKind({
+            provenance: params.connectedServiceRefProvenance,
+            profileId: params.connectedServiceSnapshot.profileId,
+            sessionCheckNowSupported: params.sessionCheckNowSupported === true,
+        }),
+        snapshot: params.connectedServiceSnapshot,
+    });
 }

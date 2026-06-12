@@ -10,6 +10,8 @@ import {
     readSessionInitialPromptV1,
     type SessionInitialPromptV1,
 } from '@/sync/domains/sessionInitialPrompt/sessionInitialPromptV1';
+import { containsLikelyNonWhitespace, isLargeTextInputValueLength } from '@/components/ui/forms/largeTextInputPolicy';
+import { useWebLifecycleFlush } from './useWebLifecycleFlush';
 
 interface UseDraftOptions {
     autoSaveInterval?: number; // in milliseconds, default 2000
@@ -68,6 +70,19 @@ export function useDraft(
         if (!sessionId) return;
         saveDraftForSession(sessionId, draft);
     }, [saveDraftForSession, sessionId]);
+
+    const flushLatestDraftIfChanged = useCallback(() => {
+        if (!sessionId) return;
+        const currentValue = latestValue.current;
+        if (currentValue === lastSavedValue.current) return;
+
+        if (saveTimeoutRef.current) {
+            clearTimeout(saveTimeoutRef.current);
+            saveTimeoutRef.current = null;
+        }
+
+        saveDraft(currentValue);
+    }, [saveDraft, sessionId]);
 
     const setDraftValue = useCallback((nextValueOrUpdater: string | ((currentValue: string) => string)) => {
         const nextValue = typeof nextValueOrUpdater === 'function'
@@ -204,16 +219,17 @@ export function useDraft(
         }
 
         if (value !== lastSavedValue.current) {
-            const wasEmpty = !lastSavedValue.current.trim();
-            const isEmpty = !value.trim();
+            const wasEmpty = !containsLikelyNonWhitespace(lastSavedValue.current);
+            const isEmpty = !containsLikelyNonWhitespace(value);
+            const shouldDebounceForLargeDraft = isLargeTextInputValueLength(value.length);
 
-            if (wasEmpty !== isEmpty) {
+            if (wasEmpty !== isEmpty && !shouldDebounceForLargeDraft) {
                 // State transition: empty <-> non-empty
-                // Save immediately for instant feedback
+                // Save immediately for instant feedback on normal-sized drafts.
                 saveDraft(value);
             } else if (!isEmpty) {
-                // Text is being modified (non-empty to non-empty)
-                // Debounce to avoid excessive saves
+                // Text is being modified (or is too large for synchronous first-transition persistence).
+                // Debounce to avoid excessive synchronous storage writes while the composer is active.
                 saveTimeoutRef.current = setTimeout(() => {
                     saveDraft(value);
                 }, autoSaveInterval);
@@ -234,9 +250,7 @@ export function useDraft(
 
         const handleAppStateChange = (nextAppState: AppStateStatus) => {
             if (nextAppState === 'background' || nextAppState === 'inactive') {
-                if (value !== lastSavedValue.current) {
-                    saveDraft(value);
-                }
+                flushLatestDraftIfChanged();
             }
         };
 
@@ -245,7 +259,9 @@ export function useDraft(
         return () => {
             subscription.remove();
         };
-    }, [sessionId, value, saveDraft]);
+    }, [flushLatestDraftIfChanged, sessionId]);
+
+    useWebLifecycleFlush(Boolean(sessionId), flushLatestDraftIfChanged);
 
     // Save on unmount only; session changes are handled explicitly above so they do not race with clearDraft().
     useEffect(() => {

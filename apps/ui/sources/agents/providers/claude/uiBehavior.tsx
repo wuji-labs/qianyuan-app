@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import type { AgentUiBehavior } from '@/agents/registry/registryUiBehavior';
 import { buildClaudeSessionComposerNextMessageMetaOverrides } from '@/agents/providers/claude/buildClaudeSessionComposerNextMessageMetaOverrides';
+import { classifyClaudeSessionComposerNonSteerablePayload } from '@/agents/providers/claude/classifyClaudeSessionComposerNonSteerablePayload';
 import { ClaudeAgentLaunchActionsCard } from '@/agents/providers/claude/sessionSubagents/ClaudeAgentLaunchActionsCard';
 import {
     createClaudeSubagentLauncherDetailsTab,
@@ -25,6 +26,12 @@ export const CLAUDE_UI_BEHAVIOR_OVERRIDE: AgentUiBehavior = {
             buildClaudeSessionComposerNextMessageMetaOverrides({
                 configOptionOverrides,
                 metaOverrides,
+            }),
+        getNonSteerablePayloadReason: ({ configOptionOverrides, metaOverrides, session }) =>
+            classifyClaudeSessionComposerNonSteerablePayload({
+                configOptionOverrides,
+                metaOverrides,
+                session,
             }),
     },
     sessionSubagents: {

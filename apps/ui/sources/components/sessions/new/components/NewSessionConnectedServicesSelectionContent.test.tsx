@@ -2,6 +2,7 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SelectionListProps } from '@/components/ui/selectionList';
+import { activateSelectionListRow } from '@/components/ui/selectionList/SelectionListRowActivation';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createPassThroughComponent } from '@/dev/testkit/mocks/components';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
@@ -67,5 +68,58 @@ describe('NewSessionConnectedServicesSelectionContent', () => {
 
         expect(capturedSelectionLists).toHaveLength(1);
         expect(capturedSelectionLists[0]?.heightBehavior).toBe('measuredToMaxHeight');
+    });
+
+    it('closes the connected-services popover after selecting a profile option', async () => {
+        const { NewSessionConnectedServicesSelectionContent } = await import('./NewSessionConnectedServicesSelectionContent');
+
+        capturedSelectionLists.length = 0;
+        const requestClose = vi.fn();
+        const setBindingForService = vi.fn();
+        await renderScreen(
+            <NewSessionConnectedServicesSelectionContent
+                supportedServiceIds={['anthropic']}
+                profileOptionsByServiceId={{
+                    anthropic: [{
+                        profileId: 'work',
+                        label: 'Work',
+                        providerEmail: 'work@example.com',
+                        kind: 'token',
+                        status: 'connected',
+                    }],
+                }}
+                bindingsByServiceId={{}}
+                setBindingForService={setBindingForService}
+                onOpenSettings={() => {}}
+                maxHeight={420}
+                requestClose={requestClose}
+            />,
+        );
+
+        expect(capturedSelectionLists).toHaveLength(1);
+        const selectionList = capturedSelectionLists[0]!;
+        const staticSection = selectionList.rootStep.sections[0];
+        if (!staticSection || staticSection.kind !== 'static') {
+            throw new Error('Expected a static connected-services section');
+        }
+        const profileOption = staticSection.options.find((option) => option.id.includes(':profile:'));
+        if (!profileOption) {
+            throw new Error('Expected a connected profile option');
+        }
+
+        await React.act(async () => {
+            activateSelectionListRow({
+                option: profileOption,
+                onSelect: selectionList.onSelect,
+                onPushStep: vi.fn(),
+            });
+        });
+
+        expect(setBindingForService).toHaveBeenCalledWith('anthropic', {
+            source: 'connected',
+            selection: 'profile',
+            profileId: 'work',
+        });
+        expect(requestClose).toHaveBeenCalledTimes(1);
     });
 });

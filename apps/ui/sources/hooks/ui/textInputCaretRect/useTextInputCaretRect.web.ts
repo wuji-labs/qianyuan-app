@@ -38,7 +38,7 @@ export function computeWebCaretRect(
  * ref is unavailable.
  */
 export function useTextInputCaretRect(input: UseTextInputCaretRectInput): CaretRect | null {
-    const { inputRef, selection, value, enabled = true } = input;
+    const { inputRef, selection, enabled = true } = input;
 
     const [rect, setRect] = React.useState<CaretRect | null>(null);
 
@@ -76,7 +76,7 @@ export function useTextInputCaretRect(input: UseTextInputCaretRectInput): CaretR
         return () => {
             el.removeEventListener('scroll', measure);
         };
-    }, [inputRef, selection?.start, selection?.end, value, enabled]);
+    }, [inputRef, selection?.start, selection?.end, enabled]);
 
     if (!enabled) return null;
 

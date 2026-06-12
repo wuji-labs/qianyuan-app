@@ -1,12 +1,10 @@
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { Metadata } from '@/sync/domains/state/storageTypes';
 import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
-import { getAgentStaticModels } from '@happier-dev/agents';
+import { getAgentStaticModels, providers as agentProviders } from '@happier-dev/agents';
 
-export const DEFAULT_CONTEXT_WARNING_WINDOW_TOKENS = 190_000;
-export const CLAUDE_1M_CONTEXT_WARNING_WINDOW_TOKENS = 950_000;
-export const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
-export const CLAUDE_1M_CONTEXT_WINDOW_TOKENS = 1_000_000;
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = agentProviders.claude.CLAUDE_DEFAULT_CONTEXT_WINDOW_TOKENS;
+export const CLAUDE_1M_CONTEXT_WINDOW_TOKENS = agentProviders.claude.CLAUDE_1M_CONTEXT_WINDOW_TOKENS;
 const CONTEXT_WARNING_WINDOW_RATIO = 0.95;
 
 function normalizeModelId(raw: unknown): string {
@@ -15,10 +13,6 @@ function normalizeModelId(raw: unknown): string {
 
 function normalizeContextWindowTokens(raw: unknown): number | null {
     return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
-}
-
-function isClaude1mModelId(modelId: string): boolean {
-    return modelId.endsWith('[1m]');
 }
 
 function descriptionSuggestsClaude1m(description: unknown): boolean {
@@ -39,10 +33,11 @@ export function toContextWarningWindowTokens(contextWindowTokens: number): numbe
 }
 
 type ContextUsageData = Readonly<{
+    contextSize?: number;
     contextWindowTokens?: number;
 }> | null | undefined;
 
-export function resolveContextWindowTokens(params: Readonly<{
+function resolveAssumedContextWindowTokens(params: Readonly<{
     agentId: AgentId;
     metadata: Metadata | null | undefined;
     usageData?: ContextUsageData;
@@ -75,26 +70,50 @@ export function resolveContextWindowTokens(params: Readonly<{
         return null;
     }
 
-    if (isClaude1mModelId(overrideModelId)) return CLAUDE_1M_CONTEXT_WINDOW_TOKENS;
+    // Claude model-id facts (any `[1m]` variant, always-1M base ids) own the next resolution step.
+    const overrideModelWindowTokens = agentProviders.claude.resolveClaudeContextWindowTokensForModelId(overrideModelId);
+    if (overrideModelWindowTokens !== null) return overrideModelWindowTokens;
 
     if (!sessionModelsState || sessionModelsState.provider !== 'claude') {
         return DEFAULT_CONTEXT_WINDOW_TOKENS;
     }
 
     const currentModelId = normalizeModelId(sessionModelsState.currentModelId);
-    if (isClaude1mModelId(currentModelId)) return CLAUDE_1M_CONTEXT_WINDOW_TOKENS;
+    const currentModelWindowTokens = agentProviders.claude.resolveClaudeContextWindowTokensForModelId(currentModelId);
+    if (currentModelWindowTokens !== null) return currentModelWindowTokens;
 
     const matchingModel = Array.isArray(sessionModelsState.availableModels)
         ? sessionModelsState.availableModels.find((model) => normalizeModelId(model.id) === currentModelId)
         : null;
     if (
         matchingModel &&
-        (isClaude1mModelId(normalizeModelId(matchingModel.id)) || descriptionSuggestsClaude1m(matchingModel.description))
+        (agentProviders.claude.isClaude1mModelId(normalizeModelId(matchingModel.id)) || descriptionSuggestsClaude1m(matchingModel.description))
     ) {
         return CLAUDE_1M_CONTEXT_WINDOW_TOKENS;
     }
 
     return DEFAULT_CONTEXT_WINDOW_TOKENS;
+}
+
+export function resolveContextWindowTokens(params: Readonly<{
+    agentId: AgentId;
+    metadata: Metadata | null | undefined;
+    usageData?: ContextUsageData;
+}>): number | null {
+    const assumedContextWindowTokens = resolveAssumedContextWindowTokens(params);
+    if (assumedContextWindowTokens === null) return null;
+    if (params.agentId !== 'claude') return assumedContextWindowTokens;
+
+    // Evidence fallback: observed usage beyond the assumed window proves the assumption stale
+    // (e.g. 1M enabled in Claude's own settings without Happier knowing). Bump along the known
+    // Claude window ladder instead of trusting the stale value.
+    const observedUsedTokens = typeof params.usageData?.contextSize === 'number'
+        ? params.usageData.contextSize
+        : 0;
+    return agentProviders.claude.bumpClaudeContextWindowTokensForObservedUsage({
+        contextWindowTokens: assumedContextWindowTokens,
+        observedUsedTokens,
+    });
 }
 
 export function resolveContextWarningWindowTokens(params: Readonly<{

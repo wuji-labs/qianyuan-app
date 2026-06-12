@@ -140,6 +140,8 @@ vi.mock('@/agents/catalog/catalog', () => ({
 }));
 
 vi.mock('@/sync/domains/models/modelOptions', () => ({
+    findModelOptionForEffectiveModelId: (options: readonly any[], id: string) =>
+        (options ?? []).find((o: any) => o.value === id) ?? (options ?? []).find((o: any) => o.extendedContextModelId === id) ?? null,
     getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
     supportsFreeformModelSelectionForSession: () => false,
 }));
@@ -574,6 +576,8 @@ describe('AgentInput (context usage badge)', () => {
 
         expect(screen.findByTestId('agent-input-provider-usage-popover')).toBeTruthy();
         expect(screen.findByTestId('agent-input-provider-usage-meter:weekly')).toBeTruthy();
+        const providerUsageOverlay = screen.findByType('FloatingOverlay');
+        expect(providerUsageOverlay?.props.scrollEnabled).toBe(false);
         expect(screen.getTextContent()).toContain('Claude usage');
         expect(screen.getTextContent()).toContain('Work account');
         expect(screen.getTextContent()).toContain('18% left · resets in 2h');

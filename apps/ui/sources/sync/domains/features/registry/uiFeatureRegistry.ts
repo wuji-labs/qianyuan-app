@@ -224,6 +224,9 @@ export const UI_FEATURE_REGISTRY = {
     'providers.claude.unifiedTerminal': {
         settingsToggle: undefined,
     },
+    'providers.claude.unifiedTerminal.tuiRuntimeControl': {
+        settingsToggle: undefined,
+    },
     'auth.recovery.providerReset': {
         settingsToggle: undefined,
     },

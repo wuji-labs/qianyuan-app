@@ -4,9 +4,14 @@ import { View, Platform, useWindowDimensions, ViewStyle, Pressable, ScrollView }
 import { layout } from '@/components/ui/layout/layout';
 import { MultiTextInput, KeyPressEvent, type MultiTextInputSubmitBehavior } from '@/components/ui/forms/MultiTextInput';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from '@/components/ui/forms/multiTextInputTypography';
+import {
+    areActiveWordsEqual,
+    areLiveInputTextStatusesEqual,
+    resolveLiveInputTextStatus,
+} from './liveInputState';
 import { Typography } from '@/constants/Typography';
 import type { PermissionMode, ModelMode } from '@/sync/domains/permissions/permissionTypes';
-import { getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption } from '@/sync/domains/models/modelOptions';
+import { findModelOptionForEffectiveModelId, getModelOptionsForSession, supportsFreeformModelSelectionForSession, type ModelOption } from '@/sync/domains/models/modelOptions';
 import { describeEffectiveModelMode } from '@/sync/domains/models/describeEffectiveModelMode';
 import { Modal } from '@/modal';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -132,6 +137,7 @@ import type {
     AgentInputExtraActionChip,
     AgentInputStatusBadge as AgentInputStatusBadgeDescriptor,
 } from './agentInputContracts';
+import type { AgentInputSendIntentOptions, AgentInputSendOptions } from './agentInputSendOptions';
 import { AgentInputStatusBadge } from './status/AgentInputStatusBadge';
 import type { AgentInputChipPickerOption } from './components/AgentInputChipPickerTypes';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
@@ -154,6 +160,13 @@ import {
 } from '@/keyboard/composer';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import type { KeyboardShortcutHandlers } from '@/keyboard/runtime';
+
+/**
+ * Synthesized model-card toggle id for catalog-declared extended-context model variants
+ * (e.g. Claude `[1m]`). NOT a real provider config option: selections route through the
+ * model-override pipeline (`onModelModeChange`) with the variant/base model id.
+ */
+export const EXTENDED_CONTEXT_MODEL_TOGGLE_OPTION_ID = 'extended_context_model';
 
 const NATIVE_ACTION_CHIP_GAP_Y = 1;
 const NATIVE_ACTION_BAR_SECTION_GAP_Y = 0;
@@ -235,11 +248,7 @@ interface AgentInputProps {
     placeholder: string;
     onChangeText: (text: string) => void;
     sessionId?: string;
-    onSend: (options?: Readonly<{
-        forceImmediate?: boolean;
-        deliveryIntent?: 'server_pending';
-        structuredInputMetaOverrides?: Record<string, unknown>;
-    }>) => void;
+    onSend: (options?: AgentInputSendOptions) => void;
     submitAccessibilityLabel?: string;
     sendIcon?: React.ReactNode;
     onMicPress?: () => void;
@@ -1095,7 +1104,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const shouldShowInputExpansionToggle = hasInputExpansion && inputExpansionToggleVisible;
     const shouldReserveInputExpansionToggleSpace = hasInputExpansion && inputExpansionCollapsedMaxHeight != null;
     const composerAnchorRef = React.useRef<View>(null);
-    const hasText = props.value.trim().length > 0;
+    const [liveTextStatus, setLiveTextStatus] = React.useState(() => resolveLiveInputTextStatus(props.value));
+    const liveTextStatusRef = React.useRef(liveTextStatus);
+    const hasText = liveTextStatus.hasText;
     const hasSendableContent = hasText || props.hasSendableAttachments === true;
     const micPressHandler = voiceEnabled ? props.onMicPress : undefined;
     const micActive = voiceEnabled && props.isMicActive === true;
@@ -1246,12 +1257,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const sendActionDisabled = Boolean(props.disabled || props.isSendDisabled || props.isSending);
     const inputRef = React.useRef<MultiTextInputHandle>(null);
-    const [inputState, setInputState] = React.useState<TextInputState>({
+    const initialInputState = React.useMemo<TextInputState>(() => ({
         text: props.value,
-        selection: { start: props.value.length, end: props.value.length }
-    });
-    const inputStateRef = React.useRef(inputState);
+        selection: { start: props.value.length, end: props.value.length },
+    }), []);
+    const inputStateRef = React.useRef<TextInputState>(initialInputState);
+    const [inputSelection, setInputSelection] = React.useState<TextInputState['selection']>(initialInputState.selection);
+    const [activeWordState, setActiveWordState] = React.useState<ActiveWord | undefined>(() => (
+        findActiveWord(initialInputState.text, initialInputState.selection, props.autocompletePrefixes)
+    ));
     const [hasAutocompleteTextInteraction, setHasAutocompleteTextInteraction] = React.useState(false);
+    const lastControlledValueRef = React.useRef(props.value);
+    const inputScopeKeyRef = React.useRef<string | null>(props.sessionId ?? null);
     const [uncontrolledStructuredInputMentions, setUncontrolledStructuredInputMentions] = React.useState<ComposerStructuredInputMention[]>([]);
     const structuredInputMentions = props.structuredInputMentions ?? uncontrolledStructuredInputMentions;
     const structuredInputMentionsRef = React.useRef<readonly ComposerStructuredInputMention[]>(structuredInputMentions);
@@ -1285,6 +1302,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         typeof messageHistory.hasRetainedSession === 'function' && messageHistory.hasRetainedSession()
     ), [messageHistory]);
 
+    const updateActiveWordState = React.useCallback((state: TextInputState) => {
+        const nextActiveWord = findActiveWord(state.text, state.selection, props.autocompletePrefixes);
+        setActiveWordState((currentActiveWord) => (
+            areActiveWordsEqual(currentActiveWord, nextActiveWord) ? currentActiveWord : nextActiveWord
+        ));
+    }, [props.autocompletePrefixes]);
+
+    const updateInputSelectionState = React.useCallback((selection: TextInputState['selection']) => {
+        setInputSelection((currentSelection) => (
+            areTextInputSelectionsEqual(currentSelection, selection) ? currentSelection : selection
+        ));
+    }, []);
+
     const handleInputStateChange = React.useCallback((newState: TextInputState) => {
         const previousText = inputStateRef.current.text;
         const historyAppliedInputState = historyAppliedInputStateRef.current;
@@ -1301,20 +1331,29 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             nextText: newState.text,
             mentions: current,
         }));
+        if (newState.text !== previousText && !isProgrammaticHistoryApply) {
+            setHasAutocompleteTextInteraction(true);
+        }
         inputStateRef.current = newState;
-        setInputState(newState);
+        updateActiveWordState(newState);
+        const nextStatus = resolveLiveInputTextStatus(newState.text);
+        if (!areLiveInputTextStatusesEqual(liveTextStatusRef.current, nextStatus)) {
+            liveTextStatusRef.current = nextStatus;
+            setLiveTextStatus(nextStatus);
+        }
+        updateInputSelectionState(newState.selection);
         props.inputPersistence?.onSelectionChangePersist(newState.selection, newState.text.length);
-    }, [hasRetainedHistorySession, messageHistory, props.inputPersistence, updateStructuredInputMentions]);
+    }, [hasRetainedHistorySession, messageHistory, props.inputPersistence, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         historyAppliedInputStateRef.current = null;
     }, [props.sessionId, historyScope]);
 
-    React.useEffect(() => {
-        inputStateRef.current = inputState;
-    }, [inputState]);
 
     React.useEffect(() => {
+        if (props.value === lastControlledValueRef.current) return;
+        lastControlledValueRef.current = props.value;
+
         const current = inputStateRef.current;
         if (current.text === props.value) return;
 
@@ -1333,8 +1372,46 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }));
         setHasAutocompleteTextInteraction(false);
         inputStateRef.current = nextState;
-        setInputState(nextState);
-    }, [props.value, updateStructuredInputMentions]);
+        updateActiveWordState(nextState);
+        const nextStatus = resolveLiveInputTextStatus(props.value);
+        if (!areLiveInputTextStatusesEqual(liveTextStatusRef.current, nextStatus)) {
+            liveTextStatusRef.current = nextStatus;
+            setLiveTextStatus(nextStatus);
+        }
+        updateInputSelectionState(nextSelection);
+    }, [props.value, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
+
+    React.useEffect(() => {
+        updateActiveWordState(inputStateRef.current);
+    }, [updateActiveWordState]);
+
+    React.useEffect(() => {
+        const nextScopeKey = props.sessionId ?? null;
+        if (inputScopeKeyRef.current === nextScopeKey) return;
+        inputScopeKeyRef.current = nextScopeKey;
+
+        const liveInputText = inputRef.current?.getText?.();
+        if (liveInputText === undefined || liveInputText === props.value) return;
+
+        const nextSelection = { start: props.value.length, end: props.value.length };
+        const nextState = { text: props.value, selection: nextSelection };
+        historyAppliedInputStateRef.current = { state: nextState };
+        updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
+            previousText: liveInputText,
+            nextText: props.value,
+            mentions: currentMentions,
+        }));
+        inputStateRef.current = nextState;
+        updateActiveWordState(nextState);
+        const nextStatus = resolveLiveInputTextStatus(props.value);
+        if (!areLiveInputTextStatusesEqual(liveTextStatusRef.current, nextStatus)) {
+            liveTextStatusRef.current = nextStatus;
+            setLiveTextStatus(nextStatus);
+        }
+        updateInputSelectionState(nextSelection);
+        inputRef.current?.setTextAndSelection(props.value, nextSelection);
+        historyAppliedInputStateRef.current = null;
+    }, [props.sessionId, props.value, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         setHasAutocompleteTextInteraction(false);
@@ -1357,9 +1434,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }
     }, [props.value, updateStructuredInputMentions]);
 
-    const handleSend = React.useCallback((options?: Readonly<{ forceImmediate?: boolean; deliveryIntent?: 'server_pending' }>) => {
+    const handleSend = React.useCallback((options?: AgentInputSendIntentOptions) => {
         if (sendActionDisabled) {
             return;
+        }
+        const liveInputText = inputRef.current?.flushPendingTextChange?.()
+            ?? inputRef.current?.getText?.()
+            ?? inputStateRef.current.text;
+        if (inputStateRef.current.text !== liveInputText) {
+            const nextState = {
+                text: liveInputText,
+                selection: { start: liveInputText.length, end: liveInputText.length },
+            };
+            inputStateRef.current = nextState;
+            const nextStatus = resolveLiveInputTextStatus(liveInputText);
+            liveTextStatusRef.current = nextStatus;
+            setLiveTextStatus(nextStatus);
+            updateInputSelectionState(nextState.selection);
         }
         if (props.sessionId) {
             inputRef.current?.blur();
@@ -1367,7 +1458,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         messageHistory.reset();
         const structuredInputMetaOverrides = buildStructuredInputMetaOverrides({
             mentions: structuredInputMentionsRef.current,
-            text: inputStateRef.current.text,
+            text: liveInputText,
         });
         const hasStructuredInputMeta = Object.keys(structuredInputMetaOverrides).length > 0;
         props.onSend(
@@ -1376,14 +1467,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     ...(options?.forceImmediate === true ? { forceImmediate: true } : {}),
                     ...(options?.deliveryIntent != null ? { deliveryIntent: options.deliveryIntent } : {}),
                     ...(hasStructuredInputMeta ? { structuredInputMetaOverrides } : {}),
+                    ...(liveInputText !== props.value ? { inputTextOverride: liveInputText } : {}),
                 }
-                : undefined,
+                : (liveInputText !== props.value ? { inputTextOverride: liveInputText } : undefined),
         );
     }, [
         messageHistory,
         props.onSend,
         props.sessionId,
+        props.value,
         sendActionDisabled,
+        updateInputSelectionState,
     ]);
 
     const effectiveChipDensity = React.useMemo<'auto' | 'labels' | 'icons'>(() => {
@@ -1462,11 +1556,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         };
     }, [enterToSendEnabled, isInputFocused, props.disabled]);
 
-    // Use the tracked selection from inputState.
-    const activeWordState = React.useMemo(
-        () => findActiveWord(inputState.text, inputState.selection, props.autocompletePrefixes),
-        [inputState.text, inputState.selection, props.autocompletePrefixes],
-    );
     const activeWord = activeWordState?.activeWord ?? null;
     const activeSuggestionQuery = isInputFocused && hasAutocompleteTextInteraction && !props.disabled ? activeWord : null;
     // Using default options: clampSelection=true, autoSelectFirst=true, wrapAround=true
@@ -1478,8 +1567,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (!suggestions[index] || !inputRef.current) return;
 
         const suggestion = suggestions[index];
-        const activeWordForSelection = findActiveWord(inputState.text, inputState.selection, props.autocompletePrefixes);
-        const insertionStart = activeWordForSelection?.offset ?? inputState.selection.start;
+        const currentInputState = inputStateRef.current;
+        const activeWordForSelection = findActiveWord(currentInputState.text, currentInputState.selection, props.autocompletePrefixes);
+        const insertionStart = activeWordForSelection?.offset ?? currentInputState.selection.start;
 
         const applyResolvedSelection = (result: Readonly<{ text: string; cursorPosition: number }>) => {
             inputRef.current?.setTextAndSelection(result.text, {
@@ -1490,8 +1580,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
         const applyDefaultSelection = () => {
             const result = applySuggestion(
-                inputState.text,
-                inputState.selection,
+                currentInputState.text,
+                currentInputState.selection,
                 suggestion.text,
                 props.autocompletePrefixes,
                 true
@@ -1509,8 +1599,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
         const override = props.onAutocompleteSuggestionSelect?.({
             suggestion,
-            inputText: inputState.text,
-            selection: inputState.selection,
+            inputText: currentInputState.text,
+            selection: currentInputState.selection,
             activeWord: activeWordForSelection ?? null,
         });
 
@@ -1528,7 +1618,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
         applyDefaultSelection();
         hapticsLight();
-    }, [suggestions, inputState, props.autocompletePrefixes, props.onAutocompleteSuggestionSelect, updateStructuredInputMentions]);
+    }, [suggestions, props.autocompletePrefixes, props.onAutocompleteSuggestionSelect, updateStructuredInputMentions]);
 
     // --- Command Menu adapter ---
     // Bridges existing autocomplete state into the CommandMenu primitive shape.
@@ -1550,7 +1640,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         activeWordRange: activeWordState
             ? { start: activeWordState.offset, end: activeWordState.endOffset }
             : null,
-        inputTextLength: inputState.text.length,
+        inputTextLength: liveTextStatus.length,
         moveUp,
         moveDown,
         handleSuggestionSelect,
@@ -1581,9 +1671,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     //   `inputRef` is passed directly with no cast.
     const caretRect = useTextInputCaretRect({
         inputRef,
-        value: inputState.text,
-        selection: inputState.selection,
-        enabled: isInputFocused && !props.disabled,
+        selection: inputSelection,
+        enabled: isInputFocused && !props.disabled && activeWord !== null,
     });
     const commandMenuAnchor: CommandMenuAnchor = React.useMemo(
         () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef),
@@ -1627,8 +1716,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [agentId, props.metadata, props.modelMode]);
 
     const effectiveModelLabel = React.useMemo(() => {
-        const found = modelOptions.find((o) => o.value === effectiveModelPolicy.effectiveModelId);
-        if (found) return found.label;
+        const found = findModelOptionForEffectiveModelId(modelOptions, effectiveModelPolicy.effectiveModelId);
+        if (found) {
+            return found.value === effectiveModelPolicy.effectiveModelId
+                ? found.label
+                : t('agentInput.model.extendedContextLabel', { model: found.label });
+        }
         return effectiveModelPolicy.effectiveModelId === 'default'
             ? t('agentInput.model.useCliSettings')
             : effectiveModelPolicy.effectiveModelId;
@@ -1772,22 +1865,59 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         sessionModeChipControl,
     ]);
 
+    const selectedModelForControls = React.useMemo(() => {
+        return findModelOptionForEffectiveModelId(modelOptions, effectiveModelPolicy.effectiveModelId);
+    }, [effectiveModelPolicy.effectiveModelId, modelOptions]);
+
     const selectedModelOptionControls = React.useMemo(() => {
         if (!props.onAcpConfigOptionChange) return null;
-        const selectedModel = modelOptions.find((option) => option.value === effectiveModelPolicy.effectiveModelId) ?? null;
-        if (!selectedModel?.modelOptions?.length) return null;
-        return computeAcpConfigOptionControlsFromOverride({
-            agentId,
-            configOptions: selectedModel.modelOptions,
-            overrides: props.acpConfigOptionOverridesOverride?.overrides ?? null,
-        });
+        const selectedModel = selectedModelForControls;
+        if (!selectedModel) return null;
+        const baseControls = selectedModel.modelOptions?.length
+            ? computeAcpConfigOptionControlsFromOverride({
+                agentId,
+                configOptions: selectedModel.modelOptions,
+                overrides: props.acpConfigOptionOverridesOverride?.overrides ?? null,
+            }) ?? []
+            : [];
+        // Extended-context (e.g. Claude `[1m]`) is a MODEL-ID VARIANT, not a config option:
+        // the toggle is synthesized here and routed through the model-override pipeline.
+        if (selectedModel.extendedContextModelId && props.onModelModeChange) {
+            const extendedSelected = effectiveModelPolicy.effectiveModelId === selectedModel.extendedContextModelId;
+            const value = extendedSelected ? 'true' : 'false';
+            baseControls.push({
+                option: {
+                    id: EXTENDED_CONTEXT_MODEL_TOGGLE_OPTION_ID,
+                    name: t('agentInput.model.extendedContextToggleLabel'),
+                    description: t('agentInput.model.extendedContextToggleDescription'),
+                    type: 'boolean',
+                    currentValue: value,
+                },
+                effectiveValue: value,
+                isPending: false,
+            });
+        }
+        return baseControls.length > 0 ? baseControls : null;
     }, [
         agentId,
         effectiveModelPolicy.effectiveModelId,
-        modelOptions,
+        selectedModelForControls,
         props.acpConfigOptionOverridesOverride,
         props.onAcpConfigOptionChange,
+        props.onModelModeChange,
     ]);
+
+    const handleSelectModelOptionValue = React.useCallback((configId: string, valueId: AcpConfigOptionValueId) => {
+        if (configId === EXTENDED_CONTEXT_MODEL_TOGGLE_OPTION_ID) {
+            const selectedModel = selectedModelForControls;
+            if (!selectedModel?.extendedContextModelId) return;
+            hapticsLight();
+            props.onModelModeChange?.(valueId === 'true' ? selectedModel.extendedContextModelId : selectedModel.value);
+            return;
+        }
+        hapticsLight();
+        props.onAcpConfigOptionChange?.(configId, valueId);
+    }, [props.onAcpConfigOptionChange, props.onModelModeChange, selectedModelForControls]);
     const hasSettingsAcpConfigSection = Boolean(acpConfigOptionControls);
 
     const shouldShowModelOptionDescriptions = React.useMemo(() => {
@@ -1840,14 +1970,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }}
             onSubmitCustomValue={canEnterCustomModel ? submitCustomModel : undefined}
             selectedModelOptionControls={selectedModelOptionControls}
-            onSelectModelOptionValue={
-                props.onAcpConfigOptionChange
-                    ? (configId, valueId) => {
-                        hapticsLight();
-                        props.onAcpConfigOptionChange?.(configId, valueId);
-                    }
-                    : undefined
-            }
+            onSelectModelOptionValue={props.onAcpConfigOptionChange ? handleSelectModelOptionValue : undefined}
             configControls={acpConfigOptionControls}
             onSelectConfigValue={
                 props.onAcpConfigOptionChange
@@ -1873,6 +1996,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onModelModeChange,
         submitCustomModel,
         selectedModelOptionControls,
+        handleSelectModelOptionValue,
     ]);
 
     const hasInternalAgentPickerOptions = Boolean(
@@ -2322,7 +2446,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
-        const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
+        const eventInputText = event.inputState?.text ?? inputRef.current?.getText?.() ?? inputStateRef.current.text;
+        const hasSendableInput = resolveLiveInputTextStatus(eventInputText).hasText || props.hasSendableAttachments === true;
         const sendShortcutAction = resolveComposerSendShortcutAction(event, {
             keyboardShortcutsV2Enabled,
             keyboardSingleKeyShortcutsEnabled,
@@ -2422,16 +2547,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             }
         }
         return false; // Key was not handled
-    }, [handleCommandMenuKey, inputState.text, inputState.selection.start, inputState.selection.end, props.showAbortButton, props.onAbort, isAborting, runAbortShortcutAction, enterToSendEnabled, props.value, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, keyboardShortcutsV2Enabled, keyboardSingleKeyShortcutsEnabled, keyboardShortcutOverridesV1, keyboardShortcutDisabledCommandIdsV1, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, applyHistoryInputText, sendActionDisabled, isHistoryBrowsing, hasRetainedHistorySession]);
+    }, [handleCommandMenuKey, props.hasSendableAttachments, handleSend, props.onPermissionModeChange, keyboardShortcutsV2Enabled, keyboardSingleKeyShortcutsEnabled, keyboardShortcutOverridesV1, keyboardShortcutDisabledCommandIdsV1, permissionModeOrder, effectivePermissionPolicy.effectiveMode, messageHistory, applyHistoryInputText, sendActionDisabled, isHistoryBrowsing, hasRetainedHistorySession, enterToSendEnabled, canStopFromComposer, isAborting, runAbortShortcutAction]);
 
     const handleSubmitEditing = React.useCallback(() => {
         if (Platform.OS === 'web') return;
         if (!enterToSendEnabled) return;
         if (sendActionDisabled) return;
-        const hasSendableInput = Boolean(props.value.trim()) || props.hasSendableAttachments === true;
+        const hasSendableInput = liveTextStatus.hasText || props.hasSendableAttachments === true;
         if (!hasSendableInput) return;
         handleSend();
-    }, [enterToSendEnabled, handleSend, props.hasSendableAttachments, props.value, sendActionDisabled]);
+    }, [enterToSendEnabled, handleSend, liveTextStatus.hasText, props.hasSendableAttachments, sendActionDisabled]);
 
     const submitBehavior = React.useMemo<MultiTextInputSubmitBehavior | undefined>(() => {
         if (Platform.OS === 'web') return undefined;

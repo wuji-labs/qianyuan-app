@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
-import { installConnectedServicesCommonModuleMocks } from '../connectedServicesTestHelpers';
+import {
+    connectedServicesModuleState,
+    installConnectedServicesCommonModuleMocks,
+} from '../connectedServicesTestHelpers';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -101,6 +104,24 @@ function createAuthoritativeGroup(overrides: Record<string, unknown> = {}) {
     };
 }
 
+function createStructuredConnectedServiceError(
+    code: string,
+    fields: Readonly<{ status?: number; resetAtMs?: number; generation?: number }> = {},
+): Error & { code: string; status?: number; resetAtMs?: number; generation?: number } {
+    const error = new Error(code) as Error & {
+        code: string;
+        status?: number;
+        resetAtMs?: number;
+        generation?: number;
+    };
+    error.name = 'ConnectedServiceApiError';
+    error.code = code;
+    error.status = fields.status;
+    error.resetAtMs = fields.resetAtMs;
+    error.generation = fields.generation;
+    return error;
+}
+
 installConnectedServicesCommonModuleMocks({
     searchParams: { serviceId: 'openai-codex', groupId: 'primary' },
     modal: async () => {
@@ -170,6 +191,8 @@ describe('ConnectedServiceGroupDetailView', () => {
         modalSpies.confirm.mockReset();
         modalSpies.alert.mockReset();
         syncSpies.refreshProfile.mockReset();
+        syncSpies.refreshProfile.mockResolvedValue(undefined);
+        connectedServicesModuleState.searchParams = { serviceId: 'openai-codex', groupId: 'primary' };
         featureEnabledById.clear();
         authState.credentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') };
         authoritativeGroupState.groups = [createAuthoritativeGroup()];
@@ -218,6 +241,28 @@ describe('ConnectedServiceGroupDetailView', () => {
         expect(items.find((item) => item.id === 'backup')?.rightElement).toBeNull();
     });
 
+    it('renders read-only switch-budget and recovery-mode policy rows', async () => {
+        const screen = await renderGroupDetailScreen();
+
+        const switchBudget = screen.tree.root.find((node) =>
+            node.props?.testID === 'connected-services-group-detail:switch-budget'
+            && node.props?.title === 'connectedServices.detail.groupDetail.switchBudgetTitle');
+        expect(switchBudget.props).toEqual(expect.objectContaining({
+            subtitle: 'connectedServices.detail.groupDetail.switchBudgetSubtitle',
+            showChevron: false,
+        }));
+        expect(switchBudget.props.onPress).toBeUndefined();
+
+        const recoveryMode = screen.tree.root.find((node) =>
+            node.props?.testID === 'connected-services-group-detail:recovery-mode'
+            && node.props?.title === 'connectedServices.detail.groupDetail.recoveryModeTitle');
+        expect(recoveryMode.props).toEqual(expect.objectContaining({
+            subtitle: 'connectedServices.detail.groupDetail.recoveryModeSwitchOrWaitSubtitle',
+            showChevron: false,
+        }));
+        expect(recoveryMode.props.onPress).toBeUndefined();
+    });
+
     it('disables the auto-switch control when account fallback is disabled by the server', async () => {
         featureEnabledById.set('connectedServices.accountFallback', false);
 
@@ -231,6 +276,154 @@ describe('ConnectedServiceGroupDetailView', () => {
             subtitle: 'connectedServices.detail.groupActions.accountFallbackDisabled',
             onPress: undefined,
         }));
+    });
+
+    it('keeps fallback controls visible but disabled when no runtime can switch the service', async () => {
+        connectedServicesModuleState.searchParams = { serviceId: 'github', groupId: 'primary' };
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'github',
+                    profiles: [
+                        { profileId: 'work', status: 'connected', providerEmail: 'work@example.com' },
+                        { profileId: 'backup', status: 'connected', providerEmail: 'backup@example.com' },
+                    ],
+                },
+            ],
+        };
+        authoritativeGroupState.groups = [
+            createAuthoritativeGroup({
+                serviceId: 'github',
+                members: [
+                    {
+                        v: 1,
+                        serviceId: 'github',
+                        groupId: 'primary',
+                        profileId: 'work',
+                        priority: 10,
+                        enabled: true,
+                        state: {},
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                    {
+                        v: 1,
+                        serviceId: 'github',
+                        groupId: 'primary',
+                        profileId: 'backup',
+                        priority: 20,
+                        enabled: true,
+                        state: {},
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                ],
+            }),
+        ];
+
+        const screen = await renderGroupDetailScreen();
+        const autoSwitchItem = screen.tree.root.find((node) =>
+            node.props?.testID === 'connected-services-group-detail:auto-switch'
+            && node.props?.title === 'connectedServices.detail.groupDetail.autoSwitchTitle');
+        const backupActions = screen.tree.root
+            .findAllByType('ItemRowActions' as any)
+            .find((node) => node.props.title === 'backup')?.props.actions as ReadonlyArray<{
+                id: string;
+                disabled?: boolean;
+                subtitle?: string;
+                onPress?: () => void;
+            }> | undefined;
+        const setActiveAction = backupActions?.find((action) => action.id.endsWith(':set-active'));
+
+        expect(autoSwitchItem.props).toEqual(expect.objectContaining({
+            disabled: true,
+            subtitle: 'connectedServices.detail.groupActions.runtimeFallbackUnsupported',
+            onPress: undefined,
+        }));
+        expect(setActiveAction).toEqual(expect.objectContaining({
+            disabled: true,
+            subtitle: 'connectedServices.detail.groupActions.runtimeFallbackUnsupported',
+            onPress: undefined,
+        }));
+        await act(async () => {
+            setActiveAction?.onPress?.();
+            await flushAsyncHandlers();
+        });
+        expect(authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3).not.toHaveBeenCalled();
+    });
+
+    it('disables fallback controls for services that can configure groups but cannot runtime-fallback within them', async () => {
+        connectedServicesModuleState.searchParams = { serviceId: 'gemini', groupId: 'primary' };
+        profileState.current = {
+            connectedServicesV2: [
+                {
+                    serviceId: 'gemini',
+                    profiles: [
+                        { profileId: 'work', status: 'connected', providerEmail: 'work@example.com' },
+                        { profileId: 'backup', status: 'connected', providerEmail: 'backup@example.com' },
+                    ],
+                },
+            ],
+        };
+        authoritativeGroupState.groups = [
+            createAuthoritativeGroup({
+                serviceId: 'gemini',
+                members: [
+                    {
+                        v: 1,
+                        serviceId: 'gemini',
+                        groupId: 'primary',
+                        profileId: 'work',
+                        priority: 10,
+                        enabled: true,
+                        state: {},
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                    {
+                        v: 1,
+                        serviceId: 'gemini',
+                        groupId: 'primary',
+                        profileId: 'backup',
+                        priority: 20,
+                        enabled: true,
+                        state: {},
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                ],
+            }),
+        ];
+
+        const screen = await renderGroupDetailScreen();
+        const autoSwitchItem = screen.tree.root.find((node) =>
+            node.props?.testID === 'connected-services-group-detail:auto-switch'
+            && node.props?.title === 'connectedServices.detail.groupDetail.autoSwitchTitle');
+        const backupActions = screen.tree.root
+            .findAllByType('ItemRowActions' as any)
+            .find((node) => node.props.title === 'backup')?.props.actions as ReadonlyArray<{
+                id: string;
+                disabled?: boolean;
+                subtitle?: string;
+                onPress?: () => void;
+            }> | undefined;
+        const setActiveAction = backupActions?.find((action) => action.id.endsWith(':set-active'));
+
+        expect(autoSwitchItem.props).toEqual(expect.objectContaining({
+            disabled: true,
+            subtitle: 'connectedServices.detail.groupActions.runtimeFallbackUnsupported',
+            onPress: undefined,
+        }));
+        expect(setActiveAction).toEqual(expect.objectContaining({
+            disabled: true,
+            subtitle: 'connectedServices.detail.groupActions.runtimeFallbackUnsupported',
+            onPress: undefined,
+        }));
+        await act(async () => {
+            setActiveAction?.onPress?.();
+            await flushAsyncHandlers();
+        });
+        expect(authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3).not.toHaveBeenCalled();
     });
 
     it('updates group name, policy, and dropdown membership through v3 group APIs', async () => {
@@ -313,7 +506,7 @@ describe('ConnectedServiceGroupDetailView', () => {
 
     it('renders member status rows and updates active member, enabled state, and priority', async () => {
         modalSpies.prompt.mockResolvedValueOnce('5');
-        const exhaustedUntilMs = Date.UTC(2026, 4, 19, 12, 30, 0);
+        const exhaustedUntilMs = Date.now() + 60_000;
         authoritativeGroupState.groups = [
             createAuthoritativeGroup({
                 members: [
@@ -396,5 +589,85 @@ describe('ConnectedServiceGroupDetailView', () => {
                 patch: { priority: 5, expectedGeneration: 2 },
             },
         );
+    });
+
+    it('confirms and retries manual active-member switches when runtime cooldown blocks the first attempt', async () => {
+        const resetAtMs = Date.UTC(2026, 5, 8, 17, 52, 18);
+        authoritativeGroupState.groups = [
+            createAuthoritativeGroup({
+                members: [
+                    {
+                        v: 1,
+                        serviceId: 'openai-codex',
+                        groupId: 'primary',
+                        profileId: 'work',
+                        priority: 10,
+                        enabled: true,
+                        state: {},
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                    {
+                        v: 1,
+                        serviceId: 'openai-codex',
+                        groupId: 'primary',
+                        profileId: 'backup',
+                        priority: 20,
+                        enabled: true,
+                        state: { exhaustedUntilMs: resetAtMs },
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                ],
+            }),
+        ];
+        authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3
+            .mockRejectedValueOnce(createStructuredConnectedServiceError('connect_group_profile_runtime_cooldown', {
+                status: 409,
+                resetAtMs,
+            }))
+            .mockImplementationOnce(async (_credentials, params) => createAuthoritativeGroup({ activeProfileId: params.profileId }));
+        modalSpies.confirm.mockResolvedValueOnce(true);
+
+        const screen = await renderGroupDetailScreen();
+        const backupActions = screen.tree.root
+            .findAllByType('ItemRowActions' as any)
+            .find((node) => node.props.title === 'backup')?.props.actions as ReadonlyArray<{ id: string; onPress: () => void }> | undefined;
+
+        await act(async () => {
+            backupActions?.find((action) => action.id.endsWith(':set-active'))?.onPress();
+            await flushAsyncHandlers();
+        });
+
+        expect(modalSpies.confirm).toHaveBeenCalledWith(
+            'connectedServices.detail.errors.runtimeCooldownOverrideTitle',
+            'connectedServices.detail.errors.runtimeCooldownOverrideBody',
+            expect.objectContaining({
+                confirmText: 'connectedServices.detail.errors.runtimeCooldownOverrideConfirm',
+                cancelText: 'common.cancel',
+            }),
+        );
+        expect(authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ token: 't' }),
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                expectedGeneration: 2,
+            },
+        );
+        expect(authGroupApiSpies.setConnectedServiceAuthGroupActiveProfileV3).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ token: 't' }),
+            {
+                serviceId: 'openai-codex',
+                groupId: 'primary',
+                profileId: 'backup',
+                expectedGeneration: 2,
+                overrideRuntimeCooldown: true,
+            },
+        );
+        expect(modalSpies.alert).not.toHaveBeenCalled();
     });
 });

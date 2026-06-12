@@ -88,6 +88,22 @@ describe('buildResumeSessionBaseOptionsFromSession', () => {
         });
     });
 
+    it('builds fresh-spawn continuation options for a session whose provider never started (no vendor resume id, QA A-F5)', () => {
+        setCanonicalSessionTarget('m1', '/tmp');
+        const base = buildResumeSessionBaseOptionsFromSession({
+            sessionId: 's1',
+            session: { metadata: { machineId: 'm1', path: '/tmp', flavor: 'claude' } } as any,
+            resumeCapabilityOptions: { accountSettings: {} },
+        });
+        expect(base).toMatchObject({
+            sessionId: 's1',
+            machineId: 'm1',
+            directory: '/tmp',
+            backendTarget: { kind: 'builtInAgent' },
+        });
+        expect(base).not.toHaveProperty('resume');
+    });
+
     it('does not use raw metadata as a live resume target when canonical reachability is unavailable', () => {
         expect(buildResumeSessionBaseOptionsFromSession({
             sessionId: 's1',

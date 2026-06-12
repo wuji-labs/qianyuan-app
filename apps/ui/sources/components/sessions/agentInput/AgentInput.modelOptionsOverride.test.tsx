@@ -150,6 +150,8 @@ vi.mock('@/agents/catalog/catalog', () => ({
 }));
 
 vi.mock('@/sync/domains/models/modelOptions', () => ({
+    findModelOptionForEffectiveModelId: (options: readonly any[], id: string) =>
+        (options ?? []).find((o: any) => o.value === id) ?? (options ?? []).find((o: any) => o.extendedContextModelId === id) ?? null,
     getModelOptionsForSession: (_agentId: string, metadata: any) => {
         const state = metadata?.sessionModelsV1 ?? metadata?.acpSessionModelsV1 ?? null;
         const hasDynamic =
@@ -1697,4 +1699,106 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(onRefresh).toHaveBeenCalledTimes(1);
     });
 
+});
+
+describe('AgentInput (extended-context model toggle)', () => {
+    const sonnetOverrideOptions = [
+        { value: 'default', label: 'Default (override)', description: '' },
+        {
+            value: 'claude-sonnet-4-6',
+            label: 'Sonnet 4.6',
+            description: '',
+            extendedContextModelId: 'claude-sonnet-4-6[1m]',
+            modelOptions: [
+                {
+                    id: 'reasoning_effort',
+                    name: 'Thinking',
+                    type: 'select',
+                    currentValue: 'high',
+                    options: [
+                        { value: 'low', name: 'Low' },
+                        { value: 'high', name: 'High' },
+                    ],
+                },
+            ],
+        },
+    ];
+
+    it('synthesizes the context toggle and routes it through the model-override pipeline', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const onModelModeChange = vi.fn();
+        const onAcpConfigOptionChange = vi.fn();
+        lastModelPickerOverlayProps = null;
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'claude',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'claude-sonnet-4-6',
+            onModelModeChange,
+            onAcpConfigOptionChange,
+            modelOptionsOverride: sonnetOverrideOptions,
+        } as any));
+
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        const controls = lastModelPickerOverlayProps?.selectedOptionControls ?? [];
+        const contextControl = controls.find((c: any) => c.option.id === 'extended_context_model');
+        expect(contextControl).toBeTruthy();
+        expect(contextControl.option.type).toBe('boolean');
+        expect(contextControl.effectiveValue).toBe('false');
+        // The effort control stays alongside the synthesized toggle.
+        expect(controls.some((c: any) => c.option.id === 'reasoning_effort')).toBe(true);
+
+        await act(async () => {
+            lastModelPickerOverlayProps.onSelectOptionControlValue('extended_context_model', 'true');
+        });
+
+        expect(onModelModeChange).toHaveBeenCalledWith('claude-sonnet-4-6[1m]');
+        expect(onAcpConfigOptionChange).not.toHaveBeenCalled();
+    });
+
+    it('treats the [1m] variant as its base model and toggles back to the bare id', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const onModelModeChange = vi.fn();
+        const onAcpConfigOptionChange = vi.fn();
+        lastModelPickerOverlayProps = null;
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: 'hello',
+            placeholder: 'placeholder',
+            onChangeText: () => {},
+            onSend: () => {},
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            agentType: 'claude',
+            permissionMode: 'default',
+            onPermissionModeChange: () => {},
+            modelMode: 'claude-sonnet-4-6[1m]',
+            onModelModeChange,
+            onAcpConfigOptionChange,
+            modelOptionsOverride: sonnetOverrideOptions,
+        } as any));
+
+        await screen.pressByTestIdAsync('agent-input-agent-chip');
+
+        const controls = lastModelPickerOverlayProps?.selectedOptionControls ?? [];
+        const contextControl = controls.find((c: any) => c.option.id === 'extended_context_model');
+        expect(contextControl?.effectiveValue).toBe('true');
+        // Model-scoped controls remain visible while the variant id is selected.
+        expect(controls.some((c: any) => c.option.id === 'reasoning_effort')).toBe(true);
+
+        await act(async () => {
+            lastModelPickerOverlayProps.onSelectOptionControlValue('extended_context_model', 'false');
+        });
+
+        expect(onModelModeChange).toHaveBeenCalledWith('claude-sonnet-4-6');
+        expect(onAcpConfigOptionChange).not.toHaveBeenCalled();
+    });
 });

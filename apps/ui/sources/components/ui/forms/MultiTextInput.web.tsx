@@ -8,6 +8,11 @@ import { useLocalSetting } from '@/sync/store/hooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
+import {
+    WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT,
+    TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS,
+    isLargeTextInputValueLength,
+} from './largeTextInputPolicy';
 
 export type { SupportedKey } from '@/keyboard/events';
 
@@ -28,6 +33,8 @@ export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
 export interface MultiTextInputHandle {
     setTextAndSelection: (text: string, selection: { start: number; end: number }) => void;
     setSelection: (selection: { start: number; end: number }) => void;
+    getText: () => string;
+    flushPendingTextChange: () => string;
     focus: () => void;
     blur: () => void;
 
@@ -82,7 +89,6 @@ interface MultiTextInputProps {
 }
 
 const DEFAULT_TEXT_STYLE: TextStyle = { fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE };
-const WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT = 50_000;
 
 type WebTextStyleOverride = Readonly<{
     color?: string;
@@ -152,6 +158,10 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     const uiFontScale = useLocalSetting('uiFontScale');
     const textareaRef = React.useRef<HTMLTextAreaElement>(null);
     const isComposingRef = React.useRef(false);
+    const liveValueRef = React.useRef(value);
+    const lastEmittedValueRef = React.useRef(value);
+    const pendingChangeTextRef = React.useRef<string | null>(null);
+    const pendingChangeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastScrollRestoreKeyRef = React.useRef<string | null>(null);
     const normalizedMaxHeight = normalizeWebTextareaMaxHeight(maxHeight);
     const [textareaHeight, setTextareaHeight] = React.useState<number | undefined>(
@@ -179,6 +189,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         paddingLeft: props.paddingLeft,
         paddingRight: props.paddingRight,
         ...scaledTextStyle,
+        caretColor: theme.colors.input.text,
     }), [
         props.paddingBottom,
         props.paddingLeft,
@@ -187,8 +198,47 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         scaledTextStyle,
         theme.colors.input.text,
     ]);
+    const clearPendingChangeTimer = React.useCallback(() => {
+        if (pendingChangeTimerRef.current === null) return;
+        clearTimeout(pendingChangeTimerRef.current);
+        pendingChangeTimerRef.current = null;
+    }, []);
 
-    const applyTextareaHeight = React.useCallback((node: HTMLTextAreaElement, nextValueLength = value.length) => {
+    const emitChangeText = React.useCallback((text: string) => {
+        clearPendingChangeTimer();
+        pendingChangeTextRef.current = null;
+        lastEmittedValueRef.current = text;
+        onChangeText(text);
+    }, [clearPendingChangeTimer, onChangeText]);
+
+    const scheduleChangeText = React.useCallback((text: string) => {
+        if (!isLargeTextInputValueLength(text.length)) {
+            emitChangeText(text);
+            return;
+        }
+        pendingChangeTextRef.current = text;
+        clearPendingChangeTimer();
+        pendingChangeTimerRef.current = setTimeout(() => {
+            const pendingText = pendingChangeTextRef.current;
+            if (pendingText === null) return;
+            emitChangeText(pendingText);
+        }, TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS);
+    }, [clearPendingChangeTimer, emitChangeText]);
+
+    React.useEffect(() => () => {
+        clearPendingChangeTimer();
+        pendingChangeTextRef.current = null;
+    }, [clearPendingChangeTimer]);
+
+    const flushPendingTextChange = React.useCallback((): string => {
+        const text = textareaRef.current?.value ?? liveValueRef.current;
+        if (pendingChangeTextRef.current !== null || text !== lastEmittedValueRef.current) {
+            emitChangeText(text);
+        }
+        return text;
+    }, [emitChangeText]);
+
+    const applyTextareaHeight = React.useCallback((node: HTMLTextAreaElement, nextValueLength = liveValueRef.current.length) => {
         if (nextValueLength > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT) {
             onContentHeightChange?.(normalizedMaxHeight);
             node.style.height = `${normalizedMaxHeight}px`;
@@ -202,13 +252,23 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         const nextHeight = Math.min(normalizedMaxHeight, Math.max(0, measuredHeight));
         node.style.height = `${nextHeight}px`;
         setTextareaHeight((current) => (current === nextHeight ? current : nextHeight));
-    }, [normalizedMaxHeight, onContentHeightChange, value.length]);
+    }, [normalizedMaxHeight, onContentHeightChange]);
 
     React.useLayoutEffect(() => {
         const node = textareaRef.current;
         if (!node) return;
-        applyTextareaHeight(node);
-    }, [applyTextareaHeight, textareaStyle, value]);
+        if (value === liveValueRef.current || value === lastEmittedValueRef.current) {
+            applyTextareaHeight(node);
+            return;
+        }
+
+        clearPendingChangeTimer();
+        pendingChangeTextRef.current = null;
+        liveValueRef.current = value;
+        lastEmittedValueRef.current = value;
+        node.value = value;
+        applyTextareaHeight(node, value.length);
+    }, [applyTextareaHeight, clearPendingChangeTimer, textareaStyle, value]);
 
     React.useLayoutEffect(() => {
         const node = textareaRef.current;
@@ -266,9 +326,9 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             start: e.target.selectionStart, 
             end: e.target.selectionEnd 
         };
-        
+        liveValueRef.current = text;
         applyTextareaHeight(e.currentTarget, text.length);
-        onChangeText(text);
+        scheduleChangeText(text);
         
         if (onStateChange) {
             onStateChange({ text, selection });
@@ -276,7 +336,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         if (onSelectionChange) {
             onSelectionChange(selection);
         }
-    }, [applyTextareaHeight, onChangeText, onStateChange, onSelectionChange]);
+    }, [applyTextareaHeight, onStateChange, onSelectionChange, scheduleChangeText]);
 
     const handleSelect = React.useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
         const target = e.target as HTMLTextAreaElement;
@@ -289,9 +349,9 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             onSelectionChange(selection);
         }
         if (onStateChange) {
-            onStateChange({ text: value, selection });
+            onStateChange({ text: target.value, selection });
         }
-    }, [value, onSelectionChange, onStateChange]);
+    }, [onSelectionChange, onStateChange]);
 
     const handleScroll = React.useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
         const scrollY = e.currentTarget.scrollTop;
@@ -311,8 +371,8 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         const cb = props.onFilesPasted;
         if (!cb) return;
         const files = extractWebAttachmentFilesFromDataTransfer(e.clipboardData);
-        if (files.length > 0) cb(files);
         if (files.length > 0) {
+            cb(files);
             e.preventDefault();
         }
     }, [props.onFilesPasted]);
@@ -359,18 +419,14 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     React.useImperativeHandle(ref, () => ({
         setTextAndSelection: (text: string, selection: { start: number; end: number }) => {
             const nextSelection = clampTextSelection(selection, text.length);
+            liveValueRef.current = text;
             if (textareaRef.current) {
-                // Directly set value and selection on DOM element
                 textareaRef.current.value = text;
                 textareaRef.current.setSelectionRange(nextSelection.start, nextSelection.end);
-
-                // Trigger React's onChange by dispatching an input event
-                const event = new Event('input', { bubbles: true });
-                textareaRef.current.dispatchEvent(event);
+                applyTextareaHeight(textareaRef.current, text.length);
             }
 
-            // Also call callbacks directly for immediate update
-            onChangeText(text);
+            emitChangeText(text);
             if (onStateChange) {
                 onStateChange({ text, selection: nextSelection });
             }
@@ -380,18 +436,21 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         },
         setSelection: (selection: { start: number; end: number }) => {
             if (isComposingRef.current) return;
-            const nextSelection = clampTextSelection(selection, value.length);
+            const liveText = textareaRef.current?.value ?? liveValueRef.current;
+            const nextSelection = clampTextSelection(selection, liveText.length);
             if (textareaRef.current) {
                 textareaRef.current.setSelectionRange(nextSelection.start, nextSelection.end);
             }
 
             if (onStateChange) {
-                onStateChange({ text: value, selection: nextSelection });
+                onStateChange({ text: liveText, selection: nextSelection });
             }
             if (onSelectionChange) {
                 onSelectionChange(nextSelection);
             }
         },
+        getText: () => textareaRef.current?.value ?? liveValueRef.current,
+        flushPendingTextChange,
         focus: () => {
             textareaRef.current?.focus();
         },
@@ -410,13 +469,13 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         },
         getReactNodeTag: () => null,
         getInputElement: () => textareaRef.current,
-    }), [onChangeText, onStateChange, onSelectionChange, value]);
+    }), [applyTextareaHeight, emitChangeText, flushPendingTextChange, onStateChange, onSelectionChange]);
 
     const commonTextareaProps = {
         ref: textareaRef,
         'data-testid': props.testID,
         placeholder,
-        value,
+        defaultValue: value,
         onChange: handleChange,
         onSelect: handleSelect,
         onScroll: handleScroll,
@@ -440,7 +499,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     };
 
     return (
-        <View style={{ width: '100%' }}>
+        <View style={{ width: '100%', position: 'relative' }}>
             <textarea
                 {...commonTextareaProps}
                 rows={1}

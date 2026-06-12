@@ -15,8 +15,8 @@ describe('computeConnectedServiceQuotaSummaryBadges', () => {
       planLabel: null,
       accountLabel: null,
       meters: [
-        { meterId: 'daily', label: 'Daily', used: 20, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'quota' } },
-        { meterId: 'weekly', label: 'Weekly', used: 92, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'quota' } },
+        { meterId: 'daily', label: 'Daily', used: 20, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'usage_limit' } },
+        { meterId: 'weekly', label: 'Weekly', used: 92, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'usage_limit' } },
       ],
     };
 
@@ -155,11 +155,11 @@ describe('computeConnectedServiceQuotaSummaryBadges', () => {
       meters: [
         { meterId: 'unknown', label: 'Unknown', used: null, limit: null, unit: 'unknown', utilizationPct: 99, resetsAt: null, status: 'ok', confidence: 'unknown', details: {} },
         { meterId: 'capacity', label: 'Capacity', used: null, limit: null, unit: 'unknown', utilizationPct: 98, resetsAt: null, status: 'ok', details: { limitCategory: 'capacity' } },
-        { meterId: 'auth', label: 'Auth', used: null, limit: null, unit: 'unknown', utilizationPct: 97, resetsAt: null, status: 'ok', details: { limitCategory: 'auth' } },
-        { meterId: 'plan', label: 'Plan', used: null, limit: null, unit: 'unknown', utilizationPct: 96, resetsAt: null, status: 'ok', details: { limitCategory: 'plan' } },
-        { meterId: 'validation', label: 'Validation', used: null, limit: null, unit: 'unknown', utilizationPct: 95, resetsAt: null, status: 'ok', details: { limitCategory: 'validation' } },
-        { meterId: 'weekly', label: 'Weekly', used: null, limit: null, unit: 'unknown', utilizationPct: 80, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'quota' } },
-        { meterId: 'daily', label: 'Daily', used: null, limit: null, unit: 'unknown', utilizationPct: 70, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'quota' } },
+        { meterId: 'auth', label: 'Auth', used: null, limit: null, unit: 'unknown', utilizationPct: 97, resetsAt: null, status: 'ok', details: { limitCategory: 'auth_invalid' } },
+        { meterId: 'plan', label: 'Plan', used: null, limit: null, unit: 'unknown', utilizationPct: 96, resetsAt: null, status: 'ok', details: { limitCategory: 'plan_invalid' } },
+        { meterId: 'validation', label: 'Validation', used: null, limit: null, unit: 'unknown', utilizationPct: 95, resetsAt: null, status: 'ok', details: { limitCategory: 'validation_failed' } },
+        { meterId: 'weekly', label: 'Weekly', used: null, limit: null, unit: 'unknown', utilizationPct: 80, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'usage_limit' } },
+        { meterId: 'daily', label: 'Daily', used: null, limit: null, unit: 'unknown', utilizationPct: 70, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'usage_limit' } },
       ],
     };
 
@@ -182,8 +182,8 @@ describe('computeConnectedServiceQuotaSummaryBadges', () => {
       planLabel: null,
       accountLabel: null,
       meters: [
-        { meterId: 'weekly', label: 'Weekly', used: 82, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'quota' } },
-        { meterId: 'daily', label: 'Daily', used: 50, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'quota' } },
+        { meterId: 'weekly', label: 'Weekly', used: 82, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'usage_limit' } },
+        { meterId: 'daily', label: 'Daily', used: 50, limit: 100, unit: 'count', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'usage_limit' } },
         { meterId: 'requests', label: 'Requests', used: 99, limit: 100, unit: 'requests', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'rate_limit' } },
         { meterId: 'server_capacity', label: 'Server capacity', used: 100, limit: 100, unit: 'requests', utilizationPct: null, resetsAt: null, status: 'ok', confidence: 'exact', details: { limitCategory: 'capacity' } },
       ],

@@ -13,6 +13,7 @@ import { sanitizeNewSessionAutomationDraft } from '@/sync/domains/automations/au
 import { buildExecutionRunActionDraftInputForUi } from '@/sync/domains/actions/buildExecutionRunActionDraftInputForUi';
 import type { AgentId } from '@/agents/catalog/catalog';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
+import type { HandleCreateSessionOptions } from '@/components/sessions/new/hooks/useCreateNewSession';
 import type { ScmWorkingSnapshot, Machine } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import type { NewSessionCheckoutChipModel } from '@/components/sessions/new/modules/newSessionCheckoutChipModel';
@@ -92,7 +93,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     router: Router;
     sessionPrompt: string;
     setSessionPrompt: React.Dispatch<React.SetStateAction<string>>;
-    handleCreateSession: (opts?: Readonly<{ initialMessage?: 'send' | 'skip'; afterCreated?: (context: Readonly<{ sessionId: string }>) => void | Promise<void> }>) => void;
+    handleCreateSession: (opts?: HandleCreateSessionOptions) => void;
     backendTarget: BackendTargetRefV1;
     agentType: AgentId;
     agentOptionState?: Record<string, unknown> | null;

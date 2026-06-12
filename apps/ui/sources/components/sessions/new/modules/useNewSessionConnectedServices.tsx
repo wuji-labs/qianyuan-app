@@ -98,6 +98,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
     scopeKind: 'spawn',
     serverId: targetServerId,
   });
+  const accountGroupSwitchingEnabled = Boolean(agentCore.connectedServices?.sessionAuthSwitch);
 
   const supportedConnectedServiceIds = React.useMemo<ReadonlyArray<ConnectedServiceId>>(() => {
     return resolveAgentSupportedConnectedServiceIds({
@@ -158,11 +159,13 @@ export function useNewSessionConnectedServices(params: Readonly<{
       supportedConnectedServiceIds,
       connectedServiceProfileOptionsByServiceId,
       accountGroupsFeatureEnabled,
+      accountGroupSwitchingEnabled,
       connectedServiceAccountGroupOptionsByServiceId,
       connectedServicesBindingsByServiceId: optimisticBindingsByServiceId,
       defaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
     });
   }, [
+    accountGroupSwitchingEnabled,
     accountGroupsFeatureEnabled,
     connectedServiceAccountGroupOptionsByServiceId,
     connectedServiceProfileOptionsByServiceId,
@@ -210,6 +213,18 @@ export function useNewSessionConnectedServices(params: Readonly<{
       setBindingForService={setBindingForService}
       defaultProfileIdByServiceId={settings.connectedServicesDefaultProfileByServiceId}
       resolveOptionAvailability={({ serviceId, optionId }) => {
+        const binding = optimisticBindingsByServiceId[serviceId];
+        if (
+          binding?.source === 'connected'
+          && binding.selection === 'group'
+          && optionId === `connected-service:${encodeURIComponent(serviceId)}:group:${encodeURIComponent(binding.groupId)}`
+          && !accountGroupSwitchingEnabled
+        ) {
+          return {
+            disabled: true,
+            subtitle: t('connectedServices.authModal.groupUnsupportedSubtitle'),
+          };
+        }
         const state = authLabel.serviceStatesById[serviceId];
         if (
           state?.warningCode
@@ -232,10 +247,12 @@ export function useNewSessionConnectedServices(params: Readonly<{
           profileId,
         }));
       }}
+      requestClose={requestClose}
       maxHeight={maxHeight}
     />
   ), [
     authLabel,
+    accountGroupSwitchingEnabled,
     connectedServiceProfileOptionsByServiceId,
     connectedServiceAccountGroupOptionsByServiceId,
     optimisticBindingsByServiceId,

@@ -16,8 +16,31 @@ export type ModelOption = Readonly<{
     value: ModelMode;
     label: string;
     description: string;
+    /**
+     * Catalog-declared extended-context variant id (e.g. `claude-sonnet-4-6[1m]`).
+     * Present only when the larger context window is opt-in for this model; the model card
+     * surfaces it as a "1M context" toggle that switches the effective model id between
+     * `value` and this variant through the regular model-override pipeline.
+     */
+    extendedContextModelId?: string;
     modelOptions?: readonly AcpConfigOption[];
 }>;
+
+/**
+ * Resolve the option that owns an effective model id, treating an extended-context variant
+ * id (e.g. `claude-sonnet-4-6[1m]`) as its base option so model-scoped controls stay visible
+ * while the variant is selected.
+ */
+export function findModelOptionForEffectiveModelId(
+    options: readonly ModelOption[],
+    effectiveModelId: string,
+): ModelOption | null {
+    return (
+        options.find((option) => option.value === effectiveModelId)
+        ?? options.find((option) => option.extendedContextModelId === effectiveModelId)
+        ?? null
+    );
+}
 
 export type PreflightModelList = Readonly<{
     availableModels: ReadonlyArray<Readonly<{
@@ -202,6 +225,9 @@ function getStaticModelOptionsForAgentType(agentType: AgentType): readonly Model
             value,
             label: model.name,
             description: typeof model.description === 'string' ? model.description : '',
+            ...(typeof model.extendedContextModelId === 'string' && model.extendedContextModelId.trim()
+                ? { extendedContextModelId: model.extendedContextModelId.trim() }
+                : {}),
             ...(Array.isArray(model.modelOptions) && model.modelOptions.length > 0 ? { modelOptions: model.modelOptions } : {}),
         });
     }

@@ -32,6 +32,11 @@ import {
 } from '@happier-dev/protocol';
 
 import {
+    isConnectedServiceRuntimeCooldownError,
+    resolveConnectedServiceRuntimeCooldownOverridePrompt,
+    resolveConnectedServiceSettingsErrorMessage,
+} from '../errors/connectedServiceSettingsErrors';
+import {
     buildConnectedServiceGroupMemberActions,
     CONNECTED_SERVICE_GROUP_DEFAULT_POLICY,
     formatConnectedServiceGroupMemberSubtitle,
@@ -39,13 +44,24 @@ import {
     readConnectedServiceGroupString,
     resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs,
     resolveConnectedServiceGroupProfileTitle,
+    resolveConnectedServiceGroupRecoveryMode,
     resolveConnectedServiceGroupSoftSwitchRemainingPercent,
+    resolveConnectedServiceGroupSwitchBudget,
     type ConnectedServiceGroupMemberViewModel,
     type ConnectedServiceGroupProfileLike,
 } from '../model/connectedServiceGroupViewModel';
+import { resolveConnectedServiceRuntimeGroupCapability } from '../model/connectedServiceRuntimeFallbackCapability';
 import { resolveConnectedServiceDisplayName } from '../model/resolveConnectedServiceDisplayName';
 
 type GroupStrategy = ConnectedServiceAuthGroupV1['policy']['strategy'];
+type GroupRecoveryMode = ConnectedServiceAuthGroupV1['policy']['recoveryMode'];
+
+function resolveRecoveryModeSubtitle(mode: GroupRecoveryMode): string {
+    if (mode === 'off') return t('connectedServices.detail.groupDetail.recoveryModeOffSubtitle');
+    if (mode === 'wait_until_reset') return t('connectedServices.detail.groupDetail.recoveryModeWaitUntilResetSubtitle');
+    if (mode === 'switch_then_resume') return t('connectedServices.detail.groupDetail.recoveryModeSwitchThenResumeSubtitle');
+    return t('connectedServices.detail.groupDetail.recoveryModeSwitchOrWaitSubtitle');
+}
 
 function formatProbeMinutes(ms: number): string {
     const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -120,6 +136,24 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     const svc = serviceId ? (profile.connectedServicesV2.find((candidate) => candidate.serviceId === serviceId) ?? null) : null;
     const profiles = (svc?.profiles ?? []) as ReadonlyArray<ConnectedServiceGroupProfileLike>;
     const group = groups.find((candidate) => candidate.groupId === groupId) ?? null;
+    const runtimeGroupCapability = React.useMemo(
+        () => serviceId
+            ? resolveConnectedServiceRuntimeGroupCapability(serviceId)
+            : {
+                groupConfigurationSupported: false,
+                runtimeFallbackSupported: false,
+                groupConfigurationSupportingAgentIds: [],
+                runtimeFallbackSupportingAgentIds: [],
+            },
+        [serviceId],
+    );
+    const runtimeGroupFallbackSupported = runtimeGroupCapability.runtimeFallbackSupported;
+    const fallbackControlsEnabled = accountFallbackEnabled && runtimeGroupFallbackSupported;
+    const fallbackDisabledSubtitle = !runtimeGroupFallbackSupported
+        ? t('connectedServices.detail.groupActions.runtimeFallbackUnsupported')
+        : accountFallbackEnabled
+            ? undefined
+            : t('connectedServices.detail.groupActions.accountFallbackDisabled');
 
     const ensureCredentials = () => {
         if (!auth.credentials) {
@@ -163,15 +197,18 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
         });
     }, []);
 
-    const runGroupMutation = async (mutation: () => Promise<ConnectedServiceAuthGroupV1>) => {
+    const runGroupMutation = async (
+        mutation: () => Promise<ConnectedServiceAuthGroupV1>,
+        opts?: Readonly<{ onError?: (error: unknown) => Promise<boolean> }>,
+    ) => {
         try {
             const nextGroup = await mutation();
             upsertGroup(nextGroup);
             await sync.refreshProfile().catch(() => undefined);
             await loadGroups().catch(() => undefined);
         } catch (e: unknown) {
-            const message = e instanceof Error && e.message ? e.message : t('common.error');
-            await Modal.alert(t('common.error'), message);
+            if (await opts?.onError?.(e)) return;
+            await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(e));
         }
     };
 
@@ -197,7 +234,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     };
 
     const handleSetAutoSwitch = async (autoSwitch: boolean) => {
-        if (!serviceId || !group) return;
+        if (!serviceId || !group || !fallbackControlsEnabled) return;
         await runGroupMutation(() => patchConnectedServiceAuthGroupV3(ensureCredentials(), {
             serviceId,
             groupId: group.groupId,
@@ -206,7 +243,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     };
 
     const handleSetStrategy = async (strategy: string) => {
-        if (!serviceId || !group) return;
+        if (!serviceId || !group || !fallbackControlsEnabled) return;
         if (strategy !== 'priority' && strategy !== 'least_limited' && strategy !== 'manual') return;
         await runGroupMutation(() => patchConnectedServiceAuthGroupV3(ensureCredentials(), {
             serviceId,
@@ -216,7 +253,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     };
 
     const handleEditSoftSwitchRemainingPercent = async () => {
-        if (!serviceId || !group) return;
+        if (!serviceId || !group || !fallbackControlsEnabled) return;
         const current = resolveConnectedServiceGroupSoftSwitchRemainingPercent(group);
         const raw = await Modal.prompt(
             t('connectedServices.detail.groupDetail.softSwitchThresholdPromptTitle'),
@@ -245,7 +282,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     };
 
     const handleEditProbeIfSnapshotOlderThan = async () => {
-        if (!serviceId || !group) return;
+        if (!serviceId || !group || !fallbackControlsEnabled) return;
         const currentMinutes = formatProbeMinutes(resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs(group));
         const raw = await Modal.prompt(
             t('connectedServices.detail.groupDetail.staleProbePromptTitle'),
@@ -274,13 +311,34 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     };
 
     const handleSetActiveMember = async (profileId: string) => {
-        if (!serviceId || !group) return;
+        if (!serviceId || !group || !fallbackControlsEnabled) return;
+        const runSetActiveMember = async (overrideRuntimeCooldown: boolean) => {
+            await runGroupMutation(() => setConnectedServiceAuthGroupActiveProfileV3(ensureCredentials(), {
+                serviceId,
+                groupId: group.groupId,
+                profileId,
+                expectedGeneration: group.generation,
+                ...(overrideRuntimeCooldown ? { overrideRuntimeCooldown: true } : {}),
+            }));
+        };
         await runGroupMutation(() => setConnectedServiceAuthGroupActiveProfileV3(ensureCredentials(), {
             serviceId,
             groupId: group.groupId,
             profileId,
             expectedGeneration: group.generation,
-        }));
+        }), {
+            onError: async (error) => {
+                if (!isConnectedServiceRuntimeCooldownError(error)) return false;
+                const prompt = resolveConnectedServiceRuntimeCooldownOverridePrompt(error);
+                const ok = await Modal.confirm(prompt.title, prompt.body, {
+                    confirmText: prompt.confirmText,
+                    cancelText: prompt.cancelText,
+                });
+                if (!ok) return true;
+                await runSetActiveMember(true);
+                return true;
+            },
+        });
     };
 
     const handleSetMemberEnabled = async (profileId: string, enabled: boolean) => {
@@ -391,8 +449,10 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
     const label = group.displayName ?? group.groupId;
     const softSwitchRemainingPercent = resolveConnectedServiceGroupSoftSwitchRemainingPercent(group);
     const staleProbeMinutes = formatProbeMinutes(resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs(group));
-    const autoSwitchSubtitle = !accountFallbackEnabled
-        ? t('connectedServices.detail.groupActions.accountFallbackDisabled')
+    const switchBudget = resolveConnectedServiceGroupSwitchBudget(group);
+    const recoveryMode = resolveConnectedServiceGroupRecoveryMode(group);
+    const autoSwitchSubtitle = fallbackDisabledSubtitle
+        ? fallbackDisabledSubtitle
         : group.policy.autoSwitch
             ? t('connectedServices.detail.groupDetail.autoSwitchEnabledSubtitle')
             : t('connectedServices.detail.groupDetail.autoSwitchDisabledSubtitle');
@@ -496,7 +556,8 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
                                                 groupId: group.groupId,
                                                 activeProfileId: group.activeProfileId,
                                                 member: memberModel,
-                                                accountFallbackEnabled,
+                                                accountFallbackEnabled: fallbackControlsEnabled,
+                                                accountFallbackDisabledSubtitle: fallbackDisabledSubtitle,
                                                 onSetActiveMember: (profileId) => void handleSetActiveMember(profileId),
                                                 onSetMemberEnabled: (targetMember, enabled) => void handleSetMemberEnabled(targetMember.profileId, enabled),
                                                 onEditMemberPriority: (targetMember) => void handleEditMemberPriority(targetMember),
@@ -517,8 +578,8 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
                     title={t('connectedServices.detail.groupDetail.autoSwitchTitle')}
                     subtitle={autoSwitchSubtitle}
                     icon={<Ionicons name="swap-horizontal-outline" size={22} color={theme.colors.accent.blue} />}
-                    disabled={!accountFallbackEnabled}
-                    onPress={accountFallbackEnabled ? () => void handleSetAutoSwitch(!group.policy.autoSwitch) : undefined}
+                    disabled={!fallbackControlsEnabled}
+                    onPress={fallbackControlsEnabled ? () => void handleSetAutoSwitch(!group.policy.autoSwitch) : undefined}
                 />
                 <DropdownMenu
                     open={strategyOpen}
@@ -534,6 +595,7 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
                         showSelectedSubtitle: false,
                         itemProps: {
                             testID: 'connected-services-group-detail:strategy',
+                            disabled: !fallbackControlsEnabled,
                         },
                     }}
                     rowKind="item"
@@ -542,16 +604,35 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
                 <Item
                     testID="connected-services-group-detail:soft-switch-threshold"
                     title={t('connectedServices.detail.groupDetail.softSwitchThresholdTitle')}
-                    subtitle={t('connectedServices.detail.groupDetail.softSwitchThresholdSubtitle', { percent: String(softSwitchRemainingPercent) })}
+                    subtitle={fallbackDisabledSubtitle ?? t('connectedServices.detail.groupDetail.softSwitchThresholdSubtitle', { percent: String(softSwitchRemainingPercent) })}
                     icon={<Ionicons name="speedometer-outline" size={22} color={theme.colors.accent.indigo} />}
-                    onPress={() => void handleEditSoftSwitchRemainingPercent()}
+                    disabled={!fallbackControlsEnabled}
+                    onPress={fallbackControlsEnabled ? () => void handleEditSoftSwitchRemainingPercent() : undefined}
                 />
                 <Item
                     testID="connected-services-group-detail:stale-probe-after"
                     title={t('connectedServices.detail.groupDetail.staleProbeTitle')}
-                    subtitle={t('connectedServices.detail.groupDetail.staleProbeSubtitle', { minutes: staleProbeMinutes })}
+                    subtitle={fallbackDisabledSubtitle ?? t('connectedServices.detail.groupDetail.staleProbeSubtitle', { minutes: staleProbeMinutes })}
                     icon={<Ionicons name="refresh-circle-outline" size={22} color={theme.colors.accent.indigo} />}
-                    onPress={() => void handleEditProbeIfSnapshotOlderThan()}
+                    disabled={!fallbackControlsEnabled}
+                    onPress={fallbackControlsEnabled ? () => void handleEditProbeIfSnapshotOlderThan() : undefined}
+                />
+                <Item
+                    testID="connected-services-group-detail:switch-budget"
+                    title={t('connectedServices.detail.groupDetail.switchBudgetTitle')}
+                    subtitle={t('connectedServices.detail.groupDetail.switchBudgetSubtitle', {
+                        perTurn: String(switchBudget.perTurn),
+                        perHour: String(switchBudget.perSessionHour),
+                    })}
+                    icon={<Ionicons name="repeat-outline" size={22} color={theme.colors.text.secondary} />}
+                    showChevron={false}
+                />
+                <Item
+                    testID="connected-services-group-detail:recovery-mode"
+                    title={t('connectedServices.detail.groupDetail.recoveryModeTitle')}
+                    subtitle={resolveRecoveryModeSubtitle(recoveryMode)}
+                    icon={<Ionicons name="medkit-outline" size={22} color={theme.colors.text.secondary} />}
+                    showChevron={false}
                 />
                 <Item
                     title={t('connectedServices.detail.groupDetail.recoveryPromptTitle')}

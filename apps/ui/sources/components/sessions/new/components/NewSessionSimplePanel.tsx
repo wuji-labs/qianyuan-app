@@ -6,7 +6,7 @@ import { AttachmentFilePicker } from '@/components/sessions/attachments/Attachme
 import { PopoverBoundaryProvider } from '@/components/ui/popover';
 import { t } from '@/text';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
-import type { CreatedSessionFollowUpContext } from '../hooks/useCreateNewSession';
+import type { HandleCreateSessionOptions } from '../hooks/useCreateNewSession';
 import { useNewSessionAttachmentsController } from '@/components/sessions/new/attachments/useNewSessionAttachmentsController';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import {
@@ -28,7 +28,7 @@ export type NewSessionSimplePanelProps = Readonly<{
     containerStyle: ViewStyle;
     sessionPrompt: string;
     setSessionPrompt: (v: string) => void;
-    handleCreateSession: (opts?: Readonly<{ initialMessage?: 'send' | 'skip'; afterCreated?: (context: CreatedSessionFollowUpContext) => void | Promise<void> }>) => void;
+    handleCreateSession: (opts?: HandleCreateSessionOptions) => void;
     canCreate: boolean;
     isCreating: boolean;
     emptyAutocompletePrefixes: React.ComponentProps<typeof AgentInput>['autocompletePrefixes'];

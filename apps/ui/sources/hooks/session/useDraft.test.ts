@@ -3,6 +3,7 @@ import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDraft } from './useDraft';
+import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from '@/components/ui/forms/largeTextInputPolicy';
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 
 
@@ -12,6 +13,7 @@ let isFocused = true;
 let sessionsById: Record<string, { draft: string | null; metadata?: any }>;
 const updateSessionDraftSpy = vi.fn();
 const patchSessionMetadataWithRetrySpy = vi.fn();
+const platformState = vi.hoisted(() => ({ os: 'web' as 'web' | 'ios' | 'android' }));
 
 vi.mock('@react-navigation/native', () => ({
   useIsFocused: () => isFocused,
@@ -21,6 +23,12 @@ vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock(
         {
+                    Platform: {
+                        get OS() {
+                            return platformState.os;
+                        },
+                        select: (value: Record<string, unknown>) => value[platformState.os] ?? value.native ?? value.default ?? value.web,
+                    },
                     AppState: {
                         addEventListener: () => ({ remove: () => {} }),
                     },
@@ -54,6 +62,90 @@ vi.mock('@/sync/sync', () => ({
     patchSessionMetadataWithRetry: (...args: any[]) => patchSessionMetadataWithRetrySpy(...args),
   },
 }));
+
+function installFakeVisibilityDocument() {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const listenersByEvent = new Map<string, Set<() => void>>();
+  let visibilityState: DocumentVisibilityState = 'visible';
+
+  const fakeDocument = {
+    get visibilityState() {
+      return visibilityState;
+    },
+    addEventListener: (eventName: string, listener: () => void) => {
+      const listeners = listenersByEvent.get(eventName) ?? new Set<() => void>();
+      listeners.add(listener);
+      listenersByEvent.set(eventName, listeners);
+    },
+    removeEventListener: (eventName: string, listener: () => void) => {
+      listenersByEvent.get(eventName)?.delete(listener);
+    },
+  };
+
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: fakeDocument,
+  });
+
+  return {
+    dispatch: (eventName: string) => {
+      for (const listener of listenersByEvent.get(eventName) ?? []) {
+        listener();
+      }
+    },
+    setVisibilityState: (nextVisibilityState: DocumentVisibilityState) => {
+      visibilityState = nextVisibilityState;
+    },
+    restore: () => {
+      if (previousDescriptor) {
+        Object.defineProperty(globalThis, 'document', previousDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'document');
+      }
+    },
+  };
+}
+
+function installFakeWindowLifecycleEvents() {
+  const previousAddEventListenerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'addEventListener');
+  const previousRemoveEventListenerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'removeEventListener');
+  const listenersByEvent = new Map<string, Set<() => void>>();
+
+  Object.defineProperty(globalThis, 'addEventListener', {
+    configurable: true,
+    value: (eventName: string, listener: () => void) => {
+      const listeners = listenersByEvent.get(eventName) ?? new Set<() => void>();
+      listeners.add(listener);
+      listenersByEvent.set(eventName, listeners);
+    },
+  });
+  Object.defineProperty(globalThis, 'removeEventListener', {
+    configurable: true,
+    value: (eventName: string, listener: () => void) => {
+      listenersByEvent.get(eventName)?.delete(listener);
+    },
+  });
+
+  return {
+    dispatch: (eventName: string) => {
+      for (const listener of listenersByEvent.get(eventName) ?? []) {
+        listener();
+      }
+    },
+    restore: () => {
+      if (previousAddEventListenerDescriptor) {
+        Object.defineProperty(globalThis, 'addEventListener', previousAddEventListenerDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'addEventListener');
+      }
+      if (previousRemoveEventListenerDescriptor) {
+        Object.defineProperty(globalThis, 'removeEventListener', previousRemoveEventListenerDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'removeEventListener');
+      }
+    },
+  };
+}
 
 type HarnessState = Readonly<{
   sessionId: string;
@@ -131,6 +223,7 @@ async function renderHarness(params: { initialSessionId: string }): Promise<{
 describe('useDraft', () => {
   beforeEach(() => {
     isFocused = true;
+    platformState.os = 'web';
     sessionsById = {
       s1: { draft: 'draft-1', metadata: {} },
       s2: { draft: null, metadata: {} },
@@ -138,6 +231,58 @@ describe('useDraft', () => {
     };
     updateSessionDraftSpy.mockReset();
     patchSessionMetadataWithRetrySpy.mockReset();
+  });
+
+  it('debounces large web draft saves instead of persisting synchronously on the first non-empty transition', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await renderHarness({ initialSessionId: 's2' });
+      updateSessionDraftSpy.mockClear();
+      const largeDraft = `x${'y'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT)}`;
+
+      await act(async () => {
+        harness.getCurrent().setValue(largeDraft);
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(updateSessionDraftSpy).not.toHaveBeenCalledWith('s2', largeDraft);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(updateSessionDraftSpy).toHaveBeenCalledWith('s2', largeDraft);
+      harness.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('debounces large native draft saves instead of persisting synchronously on the first non-empty transition', async () => {
+    platformState.os = 'ios';
+    vi.useFakeTimers();
+    try {
+      const harness = await renderHarness({ initialSessionId: 's2' });
+      updateSessionDraftSpy.mockClear();
+      const largeDraft = `x${'y'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT)}`;
+
+      await act(async () => {
+        harness.getCurrent().setValue(largeDraft);
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(updateSessionDraftSpy).not.toHaveBeenCalledWith('s2', largeDraft);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(updateSessionDraftSpy).toHaveBeenCalledWith('s2', largeDraft);
+      harness.unmount();
+    } finally {
+      vi.useRealTimers();
+      platformState.os = 'web';
+    }
   });
 
   it('clears the composer value when switching to a session with no stored draft', async () => {
@@ -538,6 +683,69 @@ describe('useDraft', () => {
     expect(harness.getCurrent().value).toBe('new draft while send is pending');
     expect(sessionsById.s1?.draft).toBe('new draft while send is pending');
     harness.unmount();
+  });
+
+  it('flushes non-empty web edits when the document is hidden', async () => {
+    const fakeVisibilityDocument = installFakeVisibilityDocument();
+    const harness = await renderHarness({ initialSessionId: 's1' });
+
+    try {
+      expect(harness.getCurrent().value).toBe('draft-1');
+      updateSessionDraftSpy.mockClear();
+
+      await act(async () => {
+        harness.getCurrent().setValue('draft-1 edited before background');
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(sessionsById.s1?.draft).toBe('draft-1');
+
+      fakeVisibilityDocument.setVisibilityState('hidden');
+      await act(async () => {
+        fakeVisibilityDocument.dispatch('visibilitychange');
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(sessionsById.s1?.draft).toBe('draft-1 edited before background');
+      expect(updateSessionDraftSpy).toHaveBeenCalledWith('s1', 'draft-1 edited before background');
+    } finally {
+      harness.unmount();
+      fakeVisibilityDocument.restore();
+    }
+  });
+
+  it('flushes debounced large web edits when the browser window blurs while the document stays visible', async () => {
+    vi.useFakeTimers();
+    const fakeVisibilityDocument = installFakeVisibilityDocument();
+    const fakeWindowLifecycle = installFakeWindowLifecycleEvents();
+    const harness = await renderHarness({ initialSessionId: 's2' });
+
+    try {
+      const largeDraft = `x${'y'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT)}`;
+      updateSessionDraftSpy.mockClear();
+
+      await act(async () => {
+        harness.getCurrent().setValue(largeDraft);
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(updateSessionDraftSpy).not.toHaveBeenCalledWith('s2', largeDraft);
+      expect(sessionsById.s2?.draft).toBeNull();
+
+      fakeVisibilityDocument.setVisibilityState('visible');
+      await act(async () => {
+        fakeWindowLifecycle.dispatch('blur');
+      });
+      await flushHookEffects({ cycles: 1, turns: 1 });
+
+      expect(sessionsById.s2?.draft).toBe(largeDraft);
+      expect(updateSessionDraftSpy).toHaveBeenCalledWith('s2', largeDraft);
+    } finally {
+      harness.unmount();
+      fakeWindowLifecycle.restore();
+      fakeVisibilityDocument.restore();
+      vi.useRealTimers();
+    }
   });
 
   it('does not clear a synchronous draft update before the next render', async () => {

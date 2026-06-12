@@ -200,6 +200,7 @@ describe('apiSocket reconnect semantics', () => {
         reachability.listenersByServerUrl.clear();
         transportFactory.createSyncSocketTransportSpy.mockReset();
         transportFactory.lastController = null;
+        delete process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
         vi.resetModules();
         vi.useRealTimers();
     });
@@ -554,6 +555,41 @@ describe('apiSocket reconnect semantics', () => {
         await expect(
             apiSocket.sessionRPC('session-1', 'send_message', { text: 'hello' }, { timeoutMs: 5 }),
         ).rejects.toThrow('operation has timed out');
+        expect(emitWithAck).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects session RPC when the active socket ack never settles before the timeout', async () => {
+        vi.useFakeTimers();
+        process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS = '0';
+
+        const controller = createTransportController();
+        const emitWithAck = vi.fn(() => new Promise<unknown>(() => {}));
+        transportFactory.createSyncSocketTransportSpy.mockImplementation((params: unknown) => ({
+            socket: createSocketStub(emitWithAck),
+            transport: controller.transport,
+            ...(params as object),
+        }));
+
+        const { apiSocket } = await import('./apiSocket');
+        const endpoint = 'https://server.example.test';
+        apiSocket.initialize({ endpoint, token: 'token-1' }, createSessionEncryptionStub());
+
+        emitReachability(endpoint, {
+            phase: 'online',
+            reason: null,
+            attempt: 1,
+            nextRetryAt: null,
+            lastConnectedAt: Date.now(),
+            lastDisconnectedAt: null,
+            lastErrorMessage: null,
+        });
+        await settleAsyncWork();
+
+        const request = apiSocket.sessionRPC('session-1', 'send_message', { text: 'hello' }, { timeoutMs: 5 });
+        const expectation = expect(request).rejects.toThrow('operation has timed out');
+        await vi.advanceTimersByTimeAsync(6);
+
+        await expectation;
         expect(emitWithAck).toHaveBeenCalledTimes(1);
     });
 

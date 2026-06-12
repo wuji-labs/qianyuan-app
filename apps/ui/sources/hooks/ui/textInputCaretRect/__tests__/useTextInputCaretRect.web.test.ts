@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, standardCleanup } from '@/dev/testkit';
 
+import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from '@/components/ui/forms/largeTextInputPolicy';
 import type { TextInputCaretRectHandle } from '../useTextInputCaretRect.types';
 
 /**
@@ -20,6 +21,7 @@ vi.mock('textarea-caret', () => ({
 function createMockTextarea(overrides?: {
     scrollLeft?: number;
     scrollTop?: number;
+    value?: string;
     boundingRect?: { left: number; top: number; right: number; bottom: number; width: number; height: number };
 }): HTMLTextAreaElement {
     const scrollListeners: Array<EventListenerOrEventListenerObject> = [];
@@ -38,6 +40,7 @@ function createMockTextarea(overrides?: {
         })),
         scrollLeft: overrides?.scrollLeft ?? 0,
         scrollTop: overrides?.scrollTop ?? 0,
+        value: overrides?.value ?? '',
         addEventListener: vi.fn((event: string, handler: EventListenerOrEventListenerObject) => {
             if (event === 'scroll') scrollListeners.push(handler);
         }),
@@ -77,6 +80,7 @@ function createInputRef(handle: TextInputCaretRectHandle | null = createMockHand
 describe('useTextInputCaretRect (web)', () => {
     beforeEach(() => {
         standardCleanup();
+        mockedGetCaretCoordinates.mockClear();
         mockedGetCaretCoordinates.mockReturnValue({ top: 20, left: 30, height: 18 });
     });
 
@@ -89,7 +93,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 5, end: 5 },
-                value: 'hello',
                 enabled: true,
             }),
         );
@@ -111,12 +114,55 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 7, end: 7 },
-                value: 'hello w',
                 enabled: true,
             }),
         );
 
         expect(mockedGetCaretCoordinates).toHaveBeenCalledWith(textarea, 7);
+    });
+
+    it('measures caret position for oversized textarea values when enabled', async () => {
+        const textarea = createMockTextarea();
+        const inputRef = createInputRef(createMockHandle(textarea));
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+        const caretPosition = TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1;
+
+        const hook = await renderHook(() =>
+            useTextInputCaretRect({
+                inputRef,
+                selection: { start: caretPosition, end: caretPosition },
+                enabled: true,
+            }),
+        );
+
+        expect(hook.getCurrent()).toEqual({
+            left: 130,
+            top: 220,
+            height: 18,
+        });
+        expect(mockedGetCaretCoordinates).toHaveBeenCalledWith(textarea, caretPosition);
+    });
+
+    it('measures caret when the DOM textarea is oversized even if React passes a render-safe value projection', async () => {
+        const { useTextInputCaretRect } = await import('../useTextInputCaretRect.web');
+        const caretPosition = TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1;
+        const textarea = createMockTextarea({ value: 'x'.repeat(caretPosition) });
+        const inputRef = createInputRef(createMockHandle(textarea));
+
+        const hook = await renderHook(() =>
+            useTextInputCaretRect({
+                inputRef,
+                selection: { start: caretPosition, end: caretPosition },
+                enabled: true,
+            }),
+        );
+
+        expect(hook.getCurrent()).toEqual({
+            left: 130,
+            top: 220,
+            height: 18,
+        });
+        expect(mockedGetCaretCoordinates).toHaveBeenCalledWith(textarea, caretPosition);
     });
 
     it('returns null when enabled is false', async () => {
@@ -127,7 +173,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 0, end: 0 },
-                value: '',
                 enabled: false,
             }),
         );
@@ -143,7 +188,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 0, end: 0 },
-                value: '',
                 enabled: true,
             }),
         );
@@ -160,7 +204,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 0, end: 0 },
-                value: '',
                 enabled: true,
             }),
         );
@@ -183,7 +226,6 @@ describe('useTextInputCaretRect (web)', () => {
                 useTextInputCaretRect({
                     inputRef,
                     selection: { start: props.start, end: props.start },
-                    value: 'hello world',
                     enabled: true,
                 }),
             { initialProps: { start: 5 } },
@@ -206,7 +248,6 @@ describe('useTextInputCaretRect (web)', () => {
                 useTextInputCaretRect({
                     inputRef,
                     selection: { start: 5, end: 5 },
-                    value: 'hello',
                     enabled: props.enabled,
                 }),
             { initialProps: { enabled: true } },
@@ -228,7 +269,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 0, end: 0 },
-                value: '',
                 enabled: true,
             }),
         );
@@ -248,7 +288,6 @@ describe('useTextInputCaretRect (web)', () => {
                 useTextInputCaretRect({
                     inputRef,
                     selection: { start: 0, end: 0 },
-                    value: '',
                     enabled: props.enabled,
                 }),
             { initialProps: { enabled: true } },
@@ -271,7 +310,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 10, end: 10 },
-                value: 'test text here',
                 enabled: true,
             }),
         );
@@ -293,7 +331,6 @@ describe('useTextInputCaretRect (web)', () => {
             useTextInputCaretRect({
                 inputRef,
                 selection: { start: 0, end: 0 },
-                value: '',
             }),
         );
 

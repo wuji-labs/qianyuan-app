@@ -3,6 +3,8 @@ import type { PermissionModeOverrideForSpawn } from '@/sync/domains/permissions/
 import type {
     BusySteerSendPolicy,
     MessageSendMode,
+    NonSteerablePayloadReason,
+    NonSteerableSendPromptSetting,
     SessionMessageDirectBypassReason,
 } from '@/sync/domains/session/control/submitMode';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -69,8 +71,21 @@ export type SubmitSessionUserMessageOptions = Readonly<{
     metaOverrides?: Record<string, unknown>;
     configuredMode: MessageSendMode;
     busySteerSendPolicy?: BusySteerSendPolicy;
+    /** `sessionPermissionModeApplyTiming` setting for the payload-aware steer gate (lane P). */
+    permissionModeApplyTiming?: 'immediate' | 'next_prompt';
+    /** `sessionNonSteerableSendPrompt` setting; `off` restores the legacy silent behavior. */
+    nonSteerableSendPrompt?: NonSteerableSendPromptSetting;
+    /** Provider-owned classifier output for outgoing config metadata that cannot be steered. */
+    providerNonSteerablePayloadReason?: Extract<NonSteerablePayloadReason, 'provider_config_change_refused'> | null;
     explicitMode?: MessageSendMode;
     forceImmediate?: boolean;
+    /** Lane Q: explicit user choice — apply the message's config delta in-turn and steer. */
+    applyConfigAndSteer?: boolean;
+    /**
+     * Lane X (X3 Case B): explicit user choice — steer the TEXT only; the caller sends this
+     * message with the published current mode and the desired setting applies on the next message.
+     */
+    steerWithoutConfig?: boolean;
     profileId?: string | null;
     localId?: string | null;
     resumeCapabilityOptions: ResumeCapabilityOptions;

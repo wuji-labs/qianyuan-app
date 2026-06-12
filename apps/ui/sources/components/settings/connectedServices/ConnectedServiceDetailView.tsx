@@ -41,7 +41,18 @@ import { ConnectedServiceDetailActionsGroup } from './detail/ConnectedServiceDet
 import { ConnectedServiceDetailGroupsGroup } from './detail/ConnectedServiceDetailGroupsGroup';
 import { ConnectedServiceDetailProfilesGroup } from './detail/ConnectedServiceDetailProfilesGroup';
 import { ConnectedServiceDetailQuotasSection } from './detail/ConnectedServiceDetailQuotasSection';
+import {
+  isConnectedServiceCredentialReferencedByGroupError,
+  isConnectedServiceRuntimeCooldownError,
+  resolveConnectedServiceRuntimeCooldownOverridePrompt,
+  resolveConnectedServiceSettingsErrorMessage,
+} from './errors/connectedServiceSettingsErrors';
+import { resolveConnectedServiceRuntimeGroupCapability } from './model/connectedServiceRuntimeFallbackCapability';
 import { resolveConnectedServiceDisplayName } from './model/resolveConnectedServiceDisplayName';
+import {
+  formatConnectedServiceProfileGroupReferenceLabels,
+  resolveConnectedServiceProfileGroupReferenceLabels,
+} from './model/resolveConnectedServiceProfileGroupReferences';
 import { resolveConnectedServiceOauthAddActionModesForPlatform } from './oauth/resolveConnectedServiceOauthAddActionModesForPlatform';
 import { promptConnectedServiceTokenValue } from './promptConnectedServiceTokenValue';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from './storeConnectedServiceCredentialWithIdentityConfirmation';
@@ -122,6 +133,18 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   const profiles = svc?.profiles ?? [];
   const defaultProfileIdRaw = serviceId ? settings.connectedServicesDefaultProfileByServiceId[serviceId] : undefined;
   const defaultProfileId = typeof defaultProfileIdRaw === 'string' ? defaultProfileIdRaw.trim() : '';
+  const runtimeGroupCapability = React.useMemo(
+    () => serviceId
+      ? resolveConnectedServiceRuntimeGroupCapability(serviceId)
+      : {
+        groupConfigurationSupported: false,
+        runtimeFallbackSupported: false,
+        groupConfigurationSupportingAgentIds: [],
+        runtimeFallbackSupportingAgentIds: [],
+      },
+    [serviceId],
+  );
+  const runtimeGroupFallbackSupported = runtimeGroupCapability.runtimeFallbackSupported;
   const authCredentials = auth.credentials ?? null;
   const groupsRefreshSignal = useConnectedServiceGroupsRefreshSignal();
   const serviceProjectionSignature = React.useMemo(
@@ -135,6 +158,30 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     }
     return auth.credentials;
   };
+
+  const resolveProfileGroupReferenceLabels = React.useCallback((profileId: string) => (
+    accountGroupsEnabled
+      ? resolveConnectedServiceProfileGroupReferenceLabels({
+        profileId,
+        groups: authoritativeGroups,
+        projectedGroups: svc?.groups,
+      })
+      : []
+  ), [accountGroupsEnabled, authoritativeGroups, svc?.groups]);
+
+  const finishDisconnect = React.useCallback(async (
+    profileId: string,
+    opts?: Readonly<{ cleanupGroupReferences?: boolean }>,
+  ) => {
+    const credentials = ensureCredentials();
+    await deleteConnectedServiceCredentialForAccount(credentials, {
+      serviceId: serviceId!,
+      profileId,
+      ...(opts?.cleanupGroupReferences ? { cleanupGroupReferences: true } : {}),
+    });
+    await sync.refreshProfile();
+    invalidateConnectedServiceGroupsRefreshSignal();
+  }, [serviceId]);
 
   const promptProfileId = async (opts?: { defaultValue?: string }) => {
     const res = await Modal.prompt(
@@ -161,23 +208,44 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleDisconnect = async (profileId: string) => {
+    const groupReferenceLabels = resolveProfileGroupReferenceLabels(profileId);
+    const cleanupGroupReferences = groupReferenceLabels.length > 0;
     const ok = await Modal.confirm(
       t('modals.disconnect'),
-      t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId }),
+      cleanupGroupReferences
+        ? t('connectedServices.detail.disconnectGroupCleanupConfirmBody', {
+          service: serviceLabel,
+          profileId,
+          groups: formatConnectedServiceProfileGroupReferenceLabels(groupReferenceLabels),
+        })
+        : t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId }),
       { confirmText: t('modals.disconnect'), cancelText: t('common.cancel') },
     );
     if (!ok) return;
     try {
-      const credentials = ensureCredentials();
-      await deleteConnectedServiceCredentialForAccount(credentials, { serviceId: serviceId!, profileId });
-      await sync.refreshProfile();
-      invalidateConnectedServiceGroupsRefreshSignal();
+      await finishDisconnect(profileId, { cleanupGroupReferences });
     } catch (e: unknown) {
-      const message = e instanceof Error && e.message ? e.message : t('common.error');
-      await Modal.alert(
-        t('common.error'),
-        message,
-      );
+      if (!cleanupGroupReferences && isConnectedServiceCredentialReferencedByGroupError(e)) {
+        const retry = await Modal.confirm(
+          t('connectedServices.detail.errors.disconnectGroupCleanupRetryTitle'),
+          t('connectedServices.detail.errors.disconnectGroupCleanupRetryBody', { service: serviceLabel, profileId }),
+          {
+            confirmText: t('connectedServices.detail.errors.disconnectGroupCleanupRetryConfirm'),
+            cancelText: t('common.cancel'),
+          },
+        );
+        if (retry) {
+          try {
+            await finishDisconnect(profileId, { cleanupGroupReferences: true });
+            return;
+          } catch (retryError: unknown) {
+            await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(retryError));
+            return;
+          }
+        }
+        return;
+      }
+      await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(e));
     }
   };
 
@@ -409,21 +477,30 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     setAuthoritativeGroups((prev) => prev.filter((group) => group.groupId !== groupId));
   }, []);
 
-  const runGroupMutation = async <T,>(mutation: () => Promise<T>, opts?: Readonly<{ onSuccess?: (result: T) => void }>) => {
+  const runGroupMutation = async <T,>(
+    mutation: () => Promise<T>,
+    opts?: Readonly<{
+      onSuccess?: (result: T) => void;
+      onError?: (error: unknown) => Promise<boolean>;
+    }>,
+  ) => {
     try {
       const result = await mutation();
       opts?.onSuccess?.(result);
       await sync.refreshProfile().catch(() => undefined);
       await refreshAuthoritativeGroups().catch(() => undefined);
     } catch (e: unknown) {
-      const message = e instanceof Error && e.message ? e.message : t('common.error');
-      await Modal.alert(t('common.error'), message);
+      if (await opts?.onError?.(e)) return;
+      await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(e));
     }
   };
 
   const runAuthenticatedGroupMutation = async <T,>(
     mutation: (credentials: ReturnType<typeof ensureCredentials>) => Promise<T>,
-    opts?: Readonly<{ onSuccess?: (result: T) => void }>,
+    opts?: Readonly<{
+      onSuccess?: (result: T) => void;
+      onError?: (error: unknown) => Promise<boolean>;
+    }>,
   ) => {
     await runGroupMutation(() => mutation(ensureCredentials()), opts);
   };
@@ -475,7 +552,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleCreateGroup = async () => {
-    if (!serviceId || !accountGroupsEnabled) return;
+    if (!serviceId || !accountGroupsEnabled || !runtimeGroupFallbackSupported) return;
     const res = await Modal.prompt(
       t('connectedServices.detail.groupActions.createTitle'),
       t('connectedServices.detail.groupActions.createSubtitle'),
@@ -529,7 +606,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleSetGroupAutoSwitch = async (groupId: string, autoSwitch: boolean) => {
-    if (!serviceId) return;
+    if (!serviceId || !runtimeGroupFallbackSupported || !accountFallbackEnabled) return;
     const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
     if (!group) return;
     await runAuthenticatedGroupMutation(
@@ -543,7 +620,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleSetGroupStrategy = async (groupId: string, strategy: 'priority' | 'manual') => {
-    if (!serviceId) return;
+    if (!serviceId || !runtimeGroupFallbackSupported || !accountFallbackEnabled) return;
     const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
     if (!group) return;
     await runAuthenticatedGroupMutation(
@@ -588,7 +665,19 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleSetActiveMember = async (groupId: string, profileId: string, expectedGeneration: number) => {
-    if (!serviceId) return;
+    if (!serviceId || !runtimeGroupFallbackSupported || !accountFallbackEnabled) return;
+    const runSetActiveMember = async (overrideRuntimeCooldown: boolean) => {
+      await runAuthenticatedGroupMutation(
+        async (credentials) => setConnectedServiceAuthGroupActiveProfileV3(credentials, {
+          serviceId,
+          groupId,
+          profileId,
+          expectedGeneration,
+          ...(overrideRuntimeCooldown ? { overrideRuntimeCooldown: true } : {}),
+        }),
+        { onSuccess: upsertAuthoritativeGroup },
+      );
+    };
     await runAuthenticatedGroupMutation(
       async (credentials) => setConnectedServiceAuthGroupActiveProfileV3(credentials, {
         serviceId,
@@ -596,7 +685,20 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
         profileId,
         expectedGeneration,
       }),
-      { onSuccess: upsertAuthoritativeGroup },
+      {
+        onSuccess: upsertAuthoritativeGroup,
+        onError: async (error) => {
+          if (!isConnectedServiceRuntimeCooldownError(error)) return false;
+          const prompt = resolveConnectedServiceRuntimeCooldownOverridePrompt(error);
+          const ok = await Modal.confirm(prompt.title, prompt.body, {
+            confirmText: prompt.confirmText,
+            cancelText: prompt.cancelText,
+          });
+          if (!ok) return true;
+          await runSetActiveMember(true);
+          return true;
+        },
+      },
     );
   };
 
@@ -730,6 +832,8 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
           quotasEnabled={quotasEnabled}
           groups={authoritativeGroups}
           accountFallbackEnabled={accountFallbackEnabled}
+          groupConfigurationSupported={runtimeGroupCapability.groupConfigurationSupported}
+          runtimeGroupFallbackSupported={runtimeGroupFallbackSupported}
           onCreateGroup={() => void handleCreateGroup()}
           onOpenGroup={(groupId) => handleOpenGroup(groupId)}
           onSetGroupAutoSwitch={(groupId, autoSwitch) => void handleSetGroupAutoSwitch(groupId, autoSwitch)}

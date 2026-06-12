@@ -1,7 +1,9 @@
 import {
     DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE,
+    DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1,
     DEFAULT_WINDOWS_TERMINAL_WINDOW_NAME,
     SessionPendingQueueDrainModeSchema,
+    UsageLimitRecoverySettingsV1Schema as ProtocolUsageLimitRecoverySettingsV1Schema,
     buildSettingArtifacts,
     defineSettingDefinitions,
 } from '@happier-dev/protocol';
@@ -25,12 +27,8 @@ export const SessionListIdentityDisplaySchema = z.enum(['avatar', 'agentLogo', '
 
 export const SessionMessageSendModeSchema = z.enum(['agent_queue', 'interrupt', 'server_pending']);
 export const SessionBusySteerSendPolicySchema = z.enum(['steer_immediately', 'server_pending']);
-export const UsageLimitRecoverySettingsV1Schema = z.object({
-    v: z.literal(1).default(1),
-    mode: z.enum(['ask', 'auto_wait']).default('ask'),
-    promptMode: z.literal('standard').default('standard'),
-    resumePromptMode: z.enum(['standard', 'off']).default('standard'),
-});
+export const SessionNonSteerableSendPromptSchema = z.enum(['ask', 'queue_silently', 'off']);
+export const UsageLimitRecoverySettingsV1Schema = ProtocolUsageLimitRecoverySettingsV1Schema;
 
 export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
     analyticsOptOut: {
@@ -312,6 +310,13 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
+    sessionNonSteerableSendPrompt: {
+        schema: SessionNonSteerableSendPromptSchema,
+        default: 'ask',
+        description: 'When a busy send cannot be steered into the active turn: ask (Interrupt & send vs Queue), queue silently, or keep the legacy behavior (off)',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
     sessionPendingQueueDrainMode: {
         schema: SessionPendingQueueDrainModeSchema,
         default: DEFAULT_SESSION_PENDING_QUEUE_DRAIN_MODE,
@@ -335,7 +340,7 @@ export const ACCOUNT_CORE_SETTING_DEFINITIONS = defineSettingDefinitions({
     },
     usageLimitRecoverySettingsV1: {
         schema: UsageLimitRecoverySettingsV1Schema,
-        default: { v: 1, mode: 'ask', promptMode: 'standard', resumePromptMode: 'standard' },
+        default: DEFAULT_USAGE_LIMIT_RECOVERY_SETTINGS_V1,
         description: 'Global usage-limit wait/resume preference',
         storageScope: 'account',
         analytics: {

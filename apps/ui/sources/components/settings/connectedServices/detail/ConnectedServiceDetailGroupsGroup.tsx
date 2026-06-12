@@ -33,12 +33,16 @@ import {
 function buildGroupActions(params: Readonly<{
     group: ConnectedServiceGroupViewModel;
     accountFallbackEnabled: boolean;
+    accountFallbackDisabledSubtitle?: string;
     onEditGroupLabel: (group: ConnectedServiceGroupViewModel) => void;
     onSetGroupAutoSwitch: (group: ConnectedServiceGroupViewModel, autoSwitch: boolean) => void;
     onSetGroupStrategy: (group: ConnectedServiceGroupViewModel, strategy: 'priority' | 'manual') => void;
     onDeleteGroup: (group: ConnectedServiceGroupViewModel) => void;
 }>): ItemAction[] {
     const group = params.group;
+    const fallbackDisabledSubtitle = params.accountFallbackEnabled
+        ? undefined
+        : params.accountFallbackDisabledSubtitle ?? t('connectedServices.detail.groupActions.accountFallbackDisabled');
     return [
         {
             id: `connected-services-group:${group.groupId}:action:edit`,
@@ -54,9 +58,7 @@ function buildGroupActions(params: Readonly<{
             title: group.policy.autoSwitch
                 ? t('connectedServices.detail.groupActions.disableFallback')
                 : t('connectedServices.detail.groupActions.enableFallback'),
-            subtitle: params.accountFallbackEnabled
-                ? undefined
-                : t('connectedServices.detail.groupActions.accountFallbackDisabled'),
+            subtitle: fallbackDisabledSubtitle,
             icon: group.policy.autoSwitch ? 'pause-circle-outline' : 'swap-horizontal-outline',
             disabled: !params.accountFallbackEnabled,
             onPress: () => params.onSetGroupAutoSwitch(group, !group.policy.autoSwitch),
@@ -68,7 +70,9 @@ function buildGroupActions(params: Readonly<{
             title: group.policy.strategy === 'manual'
                 ? t('connectedServices.detail.groupActions.usePriorityStrategy')
                 : t('connectedServices.detail.groupActions.useManualStrategy'),
+            subtitle: fallbackDisabledSubtitle,
             icon: group.policy.strategy === 'manual' ? 'list-outline' : 'hand-left-outline',
+            disabled: !params.accountFallbackEnabled,
             onPress: () => params.onSetGroupStrategy(group, group.policy.strategy === 'manual' ? 'priority' : 'manual'),
         },
         {
@@ -91,6 +95,8 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
     quotasEnabled: boolean;
     groups: unknown;
     accountFallbackEnabled: boolean;
+    groupConfigurationSupported: boolean;
+    runtimeGroupFallbackSupported: boolean;
     onCreateGroup: () => void;
     onOpenGroup: (groupId: string) => void;
     onSetGroupAutoSwitch: (groupId: string, autoSwitch: boolean) => void;
@@ -105,6 +111,12 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
     const { theme } = useUnistyles();
     const groupModels = React.useMemo(() => parseConnectedServiceGroupViewModels(props.groups), [props.groups]);
     const [openMembersGroupId, setOpenMembersGroupId] = React.useState<string | null>(null);
+    const fallbackControlsEnabled = props.accountFallbackEnabled && props.runtimeGroupFallbackSupported;
+    const fallbackDisabledSubtitle = !props.runtimeGroupFallbackSupported
+        ? t('connectedServices.detail.groupActions.runtimeFallbackUnsupported')
+        : props.accountFallbackEnabled
+            ? undefined
+            : t('connectedServices.detail.groupActions.accountFallbackDisabled');
 
     return (
         <>
@@ -139,7 +151,8 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                                     overflowTriggerTestID={`connected-services-group:${group.groupId}:actions`}
                                     actions={buildGroupActions({
                                         group,
-                                        accountFallbackEnabled: props.accountFallbackEnabled,
+                                        accountFallbackEnabled: fallbackControlsEnabled,
+                                        accountFallbackDisabledSubtitle: fallbackDisabledSubtitle,
                                         onEditGroupLabel: (target) => props.onOpenGroup(target.groupId),
                                         onSetGroupAutoSwitch: (target, autoSwitch) => props.onSetGroupAutoSwitch(target.groupId, autoSwitch),
                                         onSetGroupStrategy: (target, strategy) => props.onSetGroupStrategy(target.groupId, strategy),
@@ -208,7 +221,8 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                                                 groupId: group.groupId,
                                                 activeProfileId: group.activeProfileId,
                                                 member,
-                                                accountFallbackEnabled: props.accountFallbackEnabled,
+                                                accountFallbackEnabled: fallbackControlsEnabled,
+                                                accountFallbackDisabledSubtitle: fallbackDisabledSubtitle,
                                                 onSetActiveMember: (profileId) => props.onSetActiveMember(group.groupId, profileId, group.generation),
                                                 onSetMemberEnabled: (targetMember, enabled) => props.onSetMemberEnabled(group.groupId, targetMember.profileId, enabled),
                                                 onEditMemberPriority: (targetMember) => props.onEditMemberPriority(group.groupId, targetMember.profileId, targetMember.priority),
@@ -284,9 +298,12 @@ export const ConnectedServiceDetailGroupsGroup = React.memo(function ConnectedSe
                 <Item
                     testID="connected-services-action:create-group"
                     title={t('connectedServices.detail.groupActions.createTitle')}
-                    subtitle={t('connectedServices.detail.groupActions.createSubtitle')}
+                    subtitle={props.groupConfigurationSupported
+                        ? t('connectedServices.detail.groupActions.createSubtitle')
+                        : t('connectedServices.detail.groupActions.runtimeFallbackUnsupported')}
                     icon={<Ionicons name="add-circle-outline" size={22} color={theme.colors.accent.blue} />}
-                    onPress={props.onCreateGroup}
+                    disabled={!props.groupConfigurationSupported}
+                    onPress={props.groupConfigurationSupported ? props.onCreateGroup : undefined}
                 />
             </ItemGroup>
         </>

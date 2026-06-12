@@ -211,4 +211,139 @@ describe('apiConnectedServiceAuthGroupsV3', () => {
             expect.objectContaining({ method: 'DELETE' }),
         );
     });
+
+    it('preserves runtime-cooldown error metadata and sends explicit active-profile override', async () => {
+        mockServerConfig();
+        const resetAtMs = Date.UTC(2026, 5, 8, 17, 52, 18);
+        let activeProfileRequestCount = 0;
+        const fetchMock = vi.fn(async (input: unknown) => {
+            const url = String(input);
+            if (url === 'https://api.example.test/health' || url === 'https://api.example.test/v1/auth/ping') {
+                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            if (url === 'https://api.example.test/v3/connect/openai-codex/groups/primary/active-profile') {
+                activeProfileRequestCount += 1;
+            }
+            if (activeProfileRequestCount === 1) {
+                return {
+                    ok: false,
+                    status: 409,
+                    json: async () => ({
+                        error: 'connect_group_profile_runtime_cooldown',
+                        resetAtMs,
+                    }),
+                };
+            }
+            return { ok: true, status: 200, json: async () => createGroupResponse() };
+        });
+        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+        const { setConnectedServiceAuthGroupActiveProfileV3 } = await import('./apiConnectedServiceAuthGroupsV3');
+
+        await expect(setConnectedServiceAuthGroupActiveProfileV3(credentials, {
+            serviceId: 'openai-codex',
+            groupId: 'primary',
+            profileId: 'backup',
+            expectedGeneration: 2,
+        })).rejects.toMatchObject({
+            name: 'ConnectedServiceApiError',
+            code: 'connect_group_profile_runtime_cooldown',
+            status: 409,
+            resetAtMs,
+        });
+
+        await expect(setConnectedServiceAuthGroupActiveProfileV3(credentials, {
+            serviceId: 'openai-codex',
+            groupId: 'primary',
+            profileId: 'backup',
+            expectedGeneration: 2,
+            overrideRuntimeCooldown: true,
+        })).resolves.toEqual(expect.objectContaining({ groupId: 'primary' }));
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            'https://api.example.test/v3/connect/openai-codex/groups/primary/active-profile',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({
+                    profileId: 'backup',
+                    expectedGeneration: 2,
+                    overrideRuntimeCooldown: true,
+                }),
+            }),
+        );
+    });
+
+    it('omits the json content-type header on body-less delete requests', async () => {
+        // Sending `Content-Type: application/json` without a body makes Fastify reject the
+        // request with FST_ERR_CTP_EMPTY_JSON_BODY before it reaches the route handler
+        // (observed live as member/group deletes failing with 500s).
+        mockServerConfig();
+        const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+            const url = String(input);
+            if (url === 'https://api.example.test/health' || url === 'https://api.example.test/v1/auth/ping') {
+                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            return { ok: true, status: 200, json: async () => createGroupResponse() };
+        });
+        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+        const {
+            deleteConnectedServiceAuthGroupV3,
+            removeConnectedServiceAuthGroupMemberV3,
+        } = await import('./apiConnectedServiceAuthGroupsV3');
+
+        await removeConnectedServiceAuthGroupMemberV3(credentials, {
+            serviceId: 'openai-codex',
+            groupId: 'primary',
+            profileId: 'backup',
+            expectedGeneration: 4,
+        });
+        await deleteConnectedServiceAuthGroupV3(credentials, {
+            serviceId: 'openai-codex',
+            groupId: 'primary',
+        });
+
+        const deleteCalls = fetchMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'DELETE');
+        expect(deleteCalls).toHaveLength(2);
+        for (const call of deleteCalls) {
+            const headers = new Headers((call[1] as RequestInit).headers);
+            expect(headers.get('content-type')).toBeNull();
+            expect(headers.get('authorization')).toBe('Bearer t');
+        }
+    });
+
+    it('maps 500 group failures to a retryable structured settings error instead of a raw transport message', async () => {
+        mockServerConfig();
+        const fetchMock = vi.fn(async (input: unknown) => {
+            const url = String(input);
+            if (url === 'https://api.example.test/health' || url === 'https://api.example.test/v1/auth/ping') {
+                return { ok: true, status: 200, json: async () => ({ ok: true }) };
+            }
+            return {
+                ok: false,
+                status: 500,
+                json: async () => ({
+                    statusCode: 500,
+                    code: 'FST_ERR_RESPONSE_SERIALIZATION',
+                    error: 'Internal Server Error',
+                    message: "Response doesn't match the schema",
+                }),
+            };
+        });
+        vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+        const { removeConnectedServiceAuthGroupMemberV3 } = await import('./apiConnectedServiceAuthGroupsV3');
+
+        await expect(removeConnectedServiceAuthGroupMemberV3(credentials, {
+            serviceId: 'claude-subscription',
+            groupId: 'claude',
+            profileId: 'leeroy_new_setuptoken',
+            expectedGeneration: 51,
+        })).rejects.toMatchObject({
+            name: 'ConnectedServiceApiError',
+            canTryAgain: true,
+            code: 'connect_group_request_failed',
+            status: 500,
+        });
+    });
 });

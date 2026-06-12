@@ -18,7 +18,36 @@ export type ConnectedServiceGroupMemberViewModel = Readonly<{
     priority: number;
     cooldownUntilMs: number | null;
     exhaustedUntilMs: number | null;
+    quotaExhaustedUntilMs: number | null;
+    rateLimitedUntilMs: number | null;
+    capacityLimitedUntilMs: number | null;
+    authInvalidUntilMs: number | null;
+    planUnavailableUntilMs: number | null;
+    validationBlockedUntilMs: number | null;
+    lastObservedAtMs: number | null;
     lastFailureKind: string | null;
+    readiness: ConnectedServiceGroupMemberReadiness;
+    blocker: ConnectedServiceGroupMemberBlocker | null;
+}>;
+
+export type ConnectedServiceGroupMemberBlockerKind =
+    | 'quota_exhausted'
+    | 'rate_limited'
+    | 'capacity_limited'
+    | 'auth_invalid'
+    | 'plan_unavailable'
+    | 'validation_blocked'
+    | 'exhausted'
+    | 'cooldown';
+
+export type ConnectedServiceGroupMemberReadiness =
+    | 'ready'
+    | 'disabled'
+    | ConnectedServiceGroupMemberBlockerKind;
+
+export type ConnectedServiceGroupMemberBlocker = Readonly<{
+    kind: ConnectedServiceGroupMemberBlockerKind;
+    untilMs: number;
 }>;
 
 export type ConnectedServiceGroupViewModel = Readonly<{
@@ -111,14 +140,68 @@ export function normalizeConnectedServiceGroupMember(value: unknown): ConnectedS
     const profileId = readConnectedServiceGroupString(raw.profileId);
     if (!profileId) return null;
     const state = readRecord(raw.state) ?? {};
+    const enabled = raw.enabled !== false;
+    const cooldownUntilMs = readNumber(state.cooldownUntilMs);
+    const exhaustedUntilMs = readNumber(state.exhaustedUntilMs);
+    const quotaExhaustedUntilMs = readNumber(state.quotaExhaustedUntilMs);
+    const rateLimitedUntilMs = readNumber(state.rateLimitedUntilMs);
+    const capacityLimitedUntilMs = readNumber(state.capacityLimitedUntilMs);
+    const authInvalidUntilMs = readNumber(state.authInvalidUntilMs);
+    const planUnavailableUntilMs = readNumber(state.planUnavailableUntilMs);
+    const validationBlockedUntilMs = readNumber(state.validationBlockedUntilMs);
+    const blocker = resolveConnectedServiceGroupMemberBlocker({
+        authInvalidUntilMs,
+        planUnavailableUntilMs,
+        validationBlockedUntilMs,
+        quotaExhaustedUntilMs,
+        rateLimitedUntilMs,
+        capacityLimitedUntilMs,
+        exhaustedUntilMs,
+        cooldownUntilMs,
+    });
     return {
         profileId,
-        enabled: raw.enabled !== false,
+        enabled,
         priority: readNumber(raw.priority) ?? 100,
-        cooldownUntilMs: readNumber(state.cooldownUntilMs),
-        exhaustedUntilMs: readNumber(state.exhaustedUntilMs),
+        cooldownUntilMs,
+        exhaustedUntilMs,
+        quotaExhaustedUntilMs,
+        rateLimitedUntilMs,
+        capacityLimitedUntilMs,
+        authInvalidUntilMs,
+        planUnavailableUntilMs,
+        validationBlockedUntilMs,
+        lastObservedAtMs: readNumber(state.lastObservedAtMs),
         lastFailureKind: readConnectedServiceGroupString(state.lastFailureKind) || null,
+        readiness: !enabled ? 'disabled' : blocker?.kind ?? 'ready',
+        blocker,
     };
+}
+
+function resolveConnectedServiceGroupMemberBlocker(params: Readonly<{
+    authInvalidUntilMs: number | null;
+    planUnavailableUntilMs: number | null;
+    validationBlockedUntilMs: number | null;
+    quotaExhaustedUntilMs: number | null;
+    rateLimitedUntilMs: number | null;
+    capacityLimitedUntilMs: number | null;
+    exhaustedUntilMs: number | null;
+    cooldownUntilMs: number | null;
+}>): ConnectedServiceGroupMemberBlocker | null {
+    const nowMs = Date.now();
+    if (isFutureLimiter(params.authInvalidUntilMs, nowMs)) return { kind: 'auth_invalid', untilMs: params.authInvalidUntilMs };
+    if (isFutureLimiter(params.planUnavailableUntilMs, nowMs)) return { kind: 'plan_unavailable', untilMs: params.planUnavailableUntilMs };
+    if (isFutureLimiter(params.validationBlockedUntilMs, nowMs)) return { kind: 'validation_blocked', untilMs: params.validationBlockedUntilMs };
+    if (isFutureLimiter(params.quotaExhaustedUntilMs, nowMs)) return { kind: 'quota_exhausted', untilMs: params.quotaExhaustedUntilMs };
+    if (isFutureLimiter(params.rateLimitedUntilMs, nowMs)) return { kind: 'rate_limited', untilMs: params.rateLimitedUntilMs };
+    if (isFutureLimiter(params.capacityLimitedUntilMs, nowMs)) return { kind: 'capacity_limited', untilMs: params.capacityLimitedUntilMs };
+    if (isFutureLimiter(params.exhaustedUntilMs, nowMs)) return { kind: 'exhausted', untilMs: params.exhaustedUntilMs };
+    if (isFutureLimiter(params.cooldownUntilMs, nowMs)) return { kind: 'cooldown', untilMs: params.cooldownUntilMs };
+    return null;
+}
+
+function isFutureLimiter(value: number | null, nowMs: number): value is number {
+    return value !== null && value > nowMs;
 }
 
 function readMembers(value: unknown): ConnectedServiceGroupMemberViewModel[] {
@@ -291,21 +374,37 @@ export function formatConnectedServiceGroupMemberSubtitle(
         member.profileId === activeProfileId ? t('connectedServices.detail.groups.memberActive') : null,
         member.enabled ? t('connectedServices.detail.groups.memberEnabled') : t('connectedServices.detail.groups.memberDisabled'),
         t('connectedServices.detail.groups.memberPriority', { priority: member.priority }),
-        member.exhaustedUntilMs !== null
-            ? t('connectedServices.detail.groups.memberExhaustedUntil', {
-                time: new Date(member.exhaustedUntilMs).toLocaleString(),
-            })
-            : null,
-        member.cooldownUntilMs !== null
-            ? t('connectedServices.detail.groups.cooldown', {
-                time: new Date(member.cooldownUntilMs).toLocaleString(),
-            })
-            : null,
+        formatConnectedServiceGroupMemberBlocker(member.blocker),
         member.lastFailureKind
             ? t('connectedServices.detail.groups.memberLastFailure', { reason: member.lastFailureKind })
             : null,
     ];
     return parts.filter(Boolean).join(' • ');
+}
+
+function formatConnectedServiceGroupMemberBlocker(
+    blocker: ConnectedServiceGroupMemberBlocker | null,
+): string | null {
+    if (!blocker) return null;
+    const time = new Date(blocker.untilMs).toLocaleString();
+    switch (blocker.kind) {
+        case 'auth_invalid':
+            return t('connectedServices.detail.groups.memberAuthInvalidUntil', { time });
+        case 'plan_unavailable':
+            return t('connectedServices.detail.groups.memberPlanUnavailableUntil', { time });
+        case 'validation_blocked':
+            return t('connectedServices.detail.groups.memberValidationBlockedUntil', { time });
+        case 'quota_exhausted':
+            return t('connectedServices.detail.groups.memberQuotaExhaustedUntil', { time });
+        case 'rate_limited':
+            return t('connectedServices.detail.groups.memberRateLimitedUntil', { time });
+        case 'capacity_limited':
+            return t('connectedServices.detail.groups.memberCapacityLimitedUntil', { time });
+        case 'exhausted':
+            return t('connectedServices.detail.groups.memberExhaustedUntil', { time });
+        case 'cooldown':
+            return t('connectedServices.detail.groups.cooldown', { time });
+    }
 }
 
 export function resolveConnectedServiceGroupProfileTitle(params: Readonly<{
@@ -344,11 +443,37 @@ export function resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs(group: Co
         : CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.probeIfSnapshotOlderThanMs;
 }
 
+export function resolveConnectedServiceGroupSwitchBudget(group: ConnectedServiceAuthGroupV1): Readonly<{
+    perTurn: number;
+    perSessionHour: number;
+}> {
+    const perTurn = group.policy.maxSwitchesPerTurn;
+    const perSessionHour = group.policy.maxSwitchesPerSessionHour;
+    return {
+        perTurn: typeof perTurn === 'number' && Number.isFinite(perTurn)
+            ? perTurn
+            : CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.maxSwitchesPerTurn,
+        perSessionHour: typeof perSessionHour === 'number' && Number.isFinite(perSessionHour)
+            ? perSessionHour
+            : CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.maxSwitchesPerSessionHour,
+    };
+}
+
+export function resolveConnectedServiceGroupRecoveryMode(
+    group: ConnectedServiceAuthGroupV1,
+): ConnectedServiceAuthGroupPolicyV1['recoveryMode'] {
+    const value = group.policy.recoveryMode;
+    return value === 'off' || value === 'wait_until_reset' || value === 'switch_then_resume' || value === 'switch_or_wait'
+        ? value
+        : CONNECTED_SERVICE_GROUP_DEFAULT_POLICY.recoveryMode;
+}
+
 export function buildConnectedServiceGroupMemberActions(params: Readonly<{
     groupId: string;
     activeProfileId: string | null | undefined;
     member: ConnectedServiceGroupMemberViewModel;
     accountFallbackEnabled: boolean;
+    accountFallbackDisabledSubtitle?: string;
     onSetActiveMember: (profileId: string) => void;
     onSetMemberEnabled: (member: ConnectedServiceGroupMemberViewModel, enabled: boolean) => void;
     onEditMemberPriority: (member: ConnectedServiceGroupMemberViewModel) => void;
@@ -356,6 +481,7 @@ export function buildConnectedServiceGroupMemberActions(params: Readonly<{
 }>): ItemAction[] {
     const { groupId, member } = params;
     const isActive = member.profileId === params.activeProfileId;
+    const canSetActive = !isActive && params.accountFallbackEnabled;
     return [
         {
             id: `connected-services-group:${groupId}:member:${member.profileId}:action:set-active`,
@@ -363,11 +489,13 @@ export function buildConnectedServiceGroupMemberActions(params: Readonly<{
                 ? t('connectedServices.detail.groupActions.activeMember')
                 : t('connectedServices.detail.groupActions.makeActive'),
             subtitle: !isActive && !params.accountFallbackEnabled
-                ? t('connectedServices.detail.groupActions.accountFallbackDisabled')
+                ? params.accountFallbackDisabledSubtitle ?? t('connectedServices.detail.groupActions.accountFallbackDisabled')
                 : undefined,
             icon: isActive ? 'radio-button-on-outline' : 'radio-button-off-outline',
-            disabled: isActive || !params.accountFallbackEnabled,
-            onPress: () => params.onSetActiveMember(member.profileId),
+            disabled: !canSetActive,
+            onPress: canSetActive
+                ? () => params.onSetActiveMember(member.profileId)
+                : undefined,
         },
         {
             id: member.enabled

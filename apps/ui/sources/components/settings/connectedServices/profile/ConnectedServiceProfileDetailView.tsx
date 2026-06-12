@@ -20,7 +20,15 @@ import { buildConnectedServiceCredentialRecord, ConnectedServiceIdSchema, type C
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 
 import { ConnectedServiceQuotaCard } from '../ConnectedServiceQuotaCard';
+import {
+  isConnectedServiceCredentialReferencedByGroupError,
+  resolveConnectedServiceSettingsErrorMessage,
+} from '../errors/connectedServiceSettingsErrors';
 import { resolveConnectedServiceDisplayName } from '../model/resolveConnectedServiceDisplayName';
+import {
+  formatConnectedServiceProfileGroupReferenceLabels,
+  resolveConnectedServiceProfileGroupReferenceLabels,
+} from '../model/resolveConnectedServiceProfileGroupReferences';
 import { promptConnectedServiceTokenValue } from '../promptConnectedServiceTokenValue';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from '../storeConnectedServiceCredentialWithIdentityConfirmation';
@@ -42,6 +50,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
 
   const connectedServicesEnabled = useFeatureEnabled('connectedServices');
   const quotasEnabled = useFeatureEnabled('connectedServices.quotas');
+  const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
 
   const rawServiceId = asStringParam((params as Record<string, unknown>).serviceId).trim();
   const parsedServiceId = ConnectedServiceIdSchema.safeParse(rawServiceId);
@@ -119,16 +128,60 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
   };
 
   const handleDisconnect = async () => {
+    const groupReferenceLabels = accountGroupsEnabled
+      ? resolveConnectedServiceProfileGroupReferenceLabels({
+        profileId,
+        projectedGroups: svc.groups,
+      })
+      : [];
+    const cleanupGroupReferences = groupReferenceLabels.length > 0;
     const ok = await Modal.confirm(
       t('modals.disconnect'),
-      t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId }),
+      cleanupGroupReferences
+        ? t('connectedServices.detail.disconnectGroupCleanupConfirmBody', {
+          service: serviceLabel,
+          profileId,
+          groups: formatConnectedServiceProfileGroupReferenceLabels(groupReferenceLabels),
+        })
+        : t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId }),
       { confirmText: t('modals.disconnect'), cancelText: t('common.cancel') },
     );
     if (!ok) return;
-    const credentials = ensureCredentials();
-    await deleteConnectedServiceCredentialForAccount(credentials, { serviceId, profileId });
-    await sync.refreshProfile();
-    router.back();
+    const disconnect = async (cleanup: boolean) => {
+      const credentials = ensureCredentials();
+      await deleteConnectedServiceCredentialForAccount(credentials, {
+        serviceId,
+        profileId,
+        ...(cleanup ? { cleanupGroupReferences: true } : {}),
+      });
+      await sync.refreshProfile();
+      router.back();
+    };
+    try {
+      await disconnect(cleanupGroupReferences);
+    } catch (error: unknown) {
+      if (!cleanupGroupReferences && isConnectedServiceCredentialReferencedByGroupError(error)) {
+        const retry = await Modal.confirm(
+          t('connectedServices.detail.errors.disconnectGroupCleanupRetryTitle'),
+          t('connectedServices.detail.errors.disconnectGroupCleanupRetryBody', { service: serviceLabel, profileId }),
+          {
+            confirmText: t('connectedServices.detail.errors.disconnectGroupCleanupRetryConfirm'),
+            cancelText: t('common.cancel'),
+          },
+        );
+        if (retry) {
+          try {
+            await disconnect(true);
+            return;
+          } catch (retryError: unknown) {
+            await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(retryError));
+            return;
+          }
+        }
+        return;
+      }
+      await Modal.alert(t('common.error'), resolveConnectedServiceSettingsErrorMessage(error));
+    }
   };
 
   const handleSetDefault = async () => {

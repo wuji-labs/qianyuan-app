@@ -8,6 +8,7 @@ import { resolveScopedSessionCryptoContext } from '@/sync/runtime/orchestration/
 import { resolveServerScopedSessionContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedSessionContext';
 import type { ResolvedServerSessionRpcContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedSessionContext';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
 
 import type { SocketRpcResult } from './serverScopedRpcTypes';
 
@@ -38,20 +39,21 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
     decryptEncryptionKey: (value) => params.context.encryption.decryptEncryptionKey(value),
   });
 
-  const socket = await createEphemeralServerSocketClient({
-    serverUrl: params.context.targetServerUrl,
-    token: params.context.token,
-    timeoutMs: params.context.timeoutMs,
-  });
-  try {
-    if (cryptoContext.encryptionMode === 'plain') {
-      const result = (await socket
-        .timeout(params.context.timeoutMs)
-        .emitWithAck(SOCKET_RPC_EVENTS.CALL, {
-          method: `${params.sessionId}:${params.method}`,
-          params: params.payload,
-          timeoutMs: params.context.timeoutMs,
-        })) as SocketRpcResult;
+    const socket = await createEphemeralServerSocketClient({
+        serverUrl: params.context.targetServerUrl,
+        token: params.context.token,
+        timeoutMs: params.context.timeoutMs,
+    });
+    try {
+        if (cryptoContext.encryptionMode === 'plain') {
+            const result = (await raceSocketIoAckTimeout(
+                socket.timeout(params.context.timeoutMs).emitWithAck(SOCKET_RPC_EVENTS.CALL, {
+                    method: `${params.sessionId}:${params.method}`,
+                    params: params.payload,
+                    timeoutMs: params.context.timeoutMs,
+                }) as Promise<SocketRpcResult>,
+                params.context.timeoutMs,
+            )) as SocketRpcResult;
 
       if (result.ok) return result.result as R;
 
@@ -77,13 +79,14 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
       });
     }
 
-    const result = (await socket
-      .timeout(params.context.timeoutMs)
-      .emitWithAck(SOCKET_RPC_EVENTS.CALL, {
+    const result = (await raceSocketIoAckTimeout(
+      socket.timeout(params.context.timeoutMs).emitWithAck(SOCKET_RPC_EVENTS.CALL, {
         method: `${params.sessionId}:${params.method}`,
         params: await sessionEncryption.encryptRaw(params.payload),
         timeoutMs: params.context.timeoutMs,
-      })) as SocketRpcResult;
+      }) as Promise<SocketRpcResult>,
+      params.context.timeoutMs,
+    )) as SocketRpcResult;
 
     if (result.ok) {
       return (await sessionEncryption.decryptRaw(result.result)) as R;

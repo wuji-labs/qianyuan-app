@@ -1,5 +1,6 @@
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import type { UpdateMetadataAck } from '@/sync/domains/session/metadata/updateSessionMetadataWithRetry';
+import { raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
 
 import { createEphemeralServerSocketClient } from './createEphemeralServerSocketClient';
 import { resolvePreferredServerIdForSessionId } from './resolvePreferredServerIdForSessionId';
@@ -25,7 +26,7 @@ export async function emitSessionMetadataUpdateWithServerScope(params: Readonly<
     };
 
     if (context.scope === 'active') {
-        return await apiSocket.emitWithAck<UpdateMetadataAck>('update-metadata', payload);
+        return await apiSocket.emitWithAck<UpdateMetadataAck>('update-metadata', payload, { timeoutMs: context.timeoutMs });
     }
 
     const socket = await createEphemeralServerSocketClient({
@@ -34,7 +35,10 @@ export async function emitSessionMetadataUpdateWithServerScope(params: Readonly<
         timeoutMs: context.timeoutMs,
     });
     try {
-        return await socket.timeout(context.timeoutMs).emitWithAck('update-metadata', payload) as UpdateMetadataAck;
+        return await raceSocketIoAckTimeout(
+            socket.timeout(context.timeoutMs).emitWithAck('update-metadata', payload) as Promise<UpdateMetadataAck>,
+            context.timeoutMs,
+        );
     } finally {
         socket.disconnect();
     }

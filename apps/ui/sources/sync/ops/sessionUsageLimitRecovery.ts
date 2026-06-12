@@ -34,19 +34,21 @@ export type SessionUsageLimitRecoveryOperationResult =
 type SessionUsageLimitRecoveryOperationDiagnostics =
     NonNullable<SessionUsageLimitRecoveryOperationResultV1['diagnostics']>;
 
+// Ok-result statuses producible by `mapProtocolUsageLimitRecoveryOkStatus`.
+// Exhausted/inactive/rate-limited outcomes always arrive as typed failures.
 type SessionUsageLimitRecoveryOperationStatus =
     | 'ready'
     | 'waiting'
     | 'resumed'
-    | 'exhausted'
-    | 'inactive'
-    | 'cancelled'
-    | 'rate_limited';
+    | 'cancelled';
 
 type UsageLimitRecoveryPayload = Readonly<{
     sessionId: string;
     issueFingerprint?: string | null;
     rememberPreference?: boolean;
+    resumePromptMode?: 'standard' | 'off' | 'custom';
+    operation?: 'check_now' | 'switch_account_now';
+    provider?: string;
 }>;
 
 type UsageLimitRecoveryOperationOptions = Readonly<{
@@ -54,13 +56,58 @@ type UsageLimitRecoveryOperationOptions = Readonly<{
     refreshMachineTargets?: () => Promise<void>;
 }>;
 
+type UsageLimitRecoveryResumePromptMode = 'standard' | 'off' | 'custom';
+
 const STALE_ACTIVE_SESSION_RPC_FALLBACK_ERRORS = new Set<string>([
     RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
     RPC_ERROR_CODES.METHOD_NOT_FOUND,
     'session_rpc_failed',
     'unsupported',
     'unsupported_session_runtime_method',
+    'session_usage_limit_recovery_inert_waiting',
+    'operation has timed out',
 ]);
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function readString(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function readNestedRecoveryRecord(response: unknown): Record<string, unknown> | null {
+    const raw = readRecord(response);
+    if (!raw) return null;
+
+    const recovery = readRecord(raw.recovery);
+    if (recovery) return recovery;
+
+    const result = readRecord(raw.result);
+    return readRecord(result?.recovery);
+}
+
+function isNullishTiming(value: unknown): boolean {
+    return value === null || value === undefined;
+}
+
+function isInertWaitingRecoveryResponse(response: unknown): boolean {
+    const raw = readRecord(response);
+    const recovery = readNestedRecoveryRecord(response);
+    if (!raw || !recovery) return false;
+
+    const status = readString(raw.status) ?? readString(recovery.status);
+    if (status !== 'waiting') return false;
+    if (recovery.maxAttempts !== 0) return false;
+    if (!isNullishTiming(recovery.resetAtMs) || !isNullishTiming(recovery.nextCheckAtMs)) return false;
+
+    return typeof raw.retryAfterMs !== 'number'
+        && typeof recovery.retryAfterMs !== 'number';
+}
 
 function mapProtocolUsageLimitRecoveryOkStatus(
     status: SessionUsageLimitRecoveryOperationResultV1['status'],
@@ -88,6 +135,15 @@ function readUsageLimitRecoveryOperationResult(
     response: unknown,
     sessionId: string,
 ): SessionUsageLimitRecoveryOperationResult {
+    if (isInertWaitingRecoveryResponse(response)) {
+        return {
+            ok: false,
+            status: 'unsupported',
+            error: 'session_usage_limit_recovery_inert_waiting',
+            errorCode: 'session_usage_limit_recovery_inert_waiting',
+        };
+    }
+
     const result = normalizeSessionUsageLimitRecoveryOperationResultV1(response, { sessionId });
     if (result.ok) {
         const status = mapProtocolUsageLimitRecoveryOkStatus(result.status);
@@ -233,7 +289,11 @@ async function runUsageLimitRecoveryRpcWithMachineFallback(
 
 export function sessionUsageLimitWaitResumeEnable(
     sessionId: string,
-    request?: Readonly<{ issueFingerprint?: string | null; rememberPreference?: boolean }>,
+    request?: Readonly<{
+        issueFingerprint?: string | null;
+        rememberPreference?: boolean;
+        resumePromptMode?: 'standard' | 'off' | 'custom' | null;
+    }>,
     opts?: UsageLimitRecoveryOperationOptions,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const payload = {
@@ -244,6 +304,9 @@ export function sessionUsageLimitWaitResumeEnable(
                 ? { issueFingerprint: null }
                 : {}),
         ...(request?.rememberPreference === true ? { rememberPreference: true } : {}),
+        ...(request?.resumePromptMode === 'standard' || request?.resumePromptMode === 'off' || request?.resumePromptMode === 'custom'
+            ? { resumePromptMode: request.resumePromptMode }
+            : {}),
     };
     if (isInactiveSession(sessionId)) {
         return runUsageLimitRecoveryMachineRpc(
@@ -286,12 +349,18 @@ export function sessionUsageLimitWaitResumeCancel(
 
 export async function sessionUsageLimitCheckNow(
     sessionId: string,
-    opts?: UsageLimitRecoveryOperationOptions & Readonly<{ provider?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions & Readonly<{
+        provider?: string | null;
+        resumePromptMode?: UsageLimitRecoveryResumePromptMode | null;
+    }>,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const provider = typeof opts?.provider === 'string' ? opts.provider.trim() : '';
     const payload = {
         sessionId,
         ...(provider.length > 0 ? { provider } : {}),
+        ...(opts?.resumePromptMode === 'standard' || opts?.resumePromptMode === 'off' || opts?.resumePromptMode === 'custom'
+            ? { resumePromptMode: opts.resumePromptMode }
+            : {}),
     };
     if (isInactiveSession(sessionId)) {
         const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
@@ -322,16 +391,41 @@ export async function sessionUsageLimitCheckNow(
 
 export async function sessionUsageLimitSwitchAccountNow(
     sessionId: string,
-    opts?: UsageLimitRecoveryOperationOptions & Readonly<{ provider?: string | null }>,
+    opts?: UsageLimitRecoveryOperationOptions & Readonly<{
+        provider?: string | null;
+        resumePromptMode?: UsageLimitRecoveryResumePromptMode | null;
+    }>,
 ): Promise<SessionUsageLimitRecoveryOperationResult> {
     const provider = typeof opts?.provider === 'string' ? opts.provider.trim() : '';
     const payload = {
         sessionId,
         ...(provider.length > 0 ? { provider } : {}),
+        ...(opts?.resumePromptMode === 'standard' || opts?.resumePromptMode === 'off' || opts?.resumePromptMode === 'custom'
+            ? { resumePromptMode: opts.resumePromptMode }
+            : {}),
         operation: 'switch_account_now' as const,
     };
-    return await runUsageLimitRecoveryMachineRpc(
+    if (isInactiveSession(sessionId)) {
+        const target = await resolveUsageLimitRecoveryMachineControlTarget(sessionId, opts);
+        if (!target) {
+            return await runUsageLimitRecoveryRpc(
+                sessionId,
+                SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
+                payload,
+                opts,
+            );
+        }
+        return await runUsageLimitRecoveryMachineRpc(
+            sessionId,
+            RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+            payload,
+            opts,
+            target,
+        );
+    }
+    return await runUsageLimitRecoveryRpcWithMachineFallback(
         sessionId,
+        SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
         RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
         payload,
         opts,

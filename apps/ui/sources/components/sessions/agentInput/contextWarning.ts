@@ -42,7 +42,9 @@ export function getContextUsageState(
     if (safeContextWindowTokens === null) return null;
     const safeContextSize = Number.isFinite(contextSize) ? Math.max(0, contextSize) : 0;
     const warningWindowTokens = toContextWarningWindowTokens(safeContextWindowTokens);
-    const usedRatio = safeContextSize / safeContextWindowTokens;
+    // A stale window can undercount the real maximum (e.g. 1M enabled provider-side); usage can
+    // then exceed it. Never report >100% — raw token counts stay honest for detail copy.
+    const usedRatio = Math.min(1, safeContextSize / safeContextWindowTokens);
     const usedPercentage = usedRatio * 100;
     const warningPercentageUsed = (safeContextSize / warningWindowTokens) * 100;
     const remainingWarningPercentage = Math.max(0, Math.min(100, 100 - warningPercentageUsed));

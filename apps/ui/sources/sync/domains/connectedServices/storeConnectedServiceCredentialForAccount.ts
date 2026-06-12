@@ -51,7 +51,7 @@ export async function storeConnectedServiceCredentialForAccount(
 
 export async function deleteConnectedServiceCredentialForAccount(
   credentials: AuthCredentials,
-  params: Readonly<{ serviceId: ConnectedServiceId; profileId: string }>,
+  params: Readonly<{ serviceId: ConnectedServiceId; profileId: string; cleanupGroupReferences?: boolean }>,
 ): Promise<void> {
   const mode = await fetchAccountEncryptionMode(credentials);
   if (mode.mode === 'plain') {

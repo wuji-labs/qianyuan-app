@@ -1035,6 +1035,17 @@ describe('settings', () => {
             expect((parsed as any).transcriptTurnToolCallsGroupShowBackground).toBeUndefined();
         });
 
+        it('preserves consecutive tool-call grouping across schema migrations', () => {
+            expect((settingsParse({
+                schemaVersion: 8,
+                transcriptTurnToolCallsGroupStrategy: 'consecutive_tools',
+            }) as any).transcriptTurnToolCallsGroupStrategy).toBe('consecutive_tools');
+
+            expect((settingsParse({
+                transcriptTurnToolCallsGroupStrategy: 'consecutive_tools',
+            }) as any).transcriptTurnToolCallsGroupStrategy).toBe('consecutive_tools');
+        });
+
         it('migrates the legacy transcript timestamp toggle to the display mode setting', () => {
             expect((settingsParse({ transcriptMessageTimestampsEnabled: true }) as any).transcriptMessageTimestampDisplayMode).toBe('always');
             expect((settingsParse({ transcriptMessageTimestampsEnabled: false }) as any).transcriptMessageTimestampDisplayMode).toBe('hover_web_hidden_mobile');

@@ -28,8 +28,6 @@ export type UseTextInputCaretRectInput = Readonly<{
     inputRef: React.RefObject<TextInputCaretRectHandle | null>;
     /** Web-only: the current selection (rendered cursor index in the value). Native ignores. */
     selection?: { start: number; end: number };
-    /** Web-only: the textarea value (for scroll-aware repositioning). Native ignores. */
-    value?: string;
     /** When false, the hook returns null and releases native/web tracking. */
     enabled?: boolean;
 }>;

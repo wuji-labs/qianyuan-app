@@ -43,6 +43,7 @@ describe('sessionUsageLimitRecovery', () => {
         const response = await sessionUsageLimitWaitResumeEnable('session-1', {
             issueFingerprint: 'usage-limit:codex:turn-1:1:no-reset',
             rememberPreference: true,
+            resumePromptMode: 'off',
         });
 
         expect(resolvePreferredServerIdForSessionIdMock).toHaveBeenCalledWith('session-1');
@@ -54,9 +55,27 @@ describe('sessionUsageLimitRecovery', () => {
                 sessionId: 'session-1',
                 issueFingerprint: 'usage-limit:codex:turn-1:1:no-reset',
                 rememberPreference: true,
+                resumePromptMode: 'off',
             },
         });
         expect(response).toEqual({ ok: true, status: 'waiting' });
+    });
+
+    it('forwards the custom resume prompt mode through the wait-resume enable payload', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        sessionRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, recovery: { status: 'waiting' } });
+
+        const { sessionUsageLimitWaitResumeEnable } = await import('./sessionUsageLimitRecovery');
+        await sessionUsageLimitWaitResumeEnable('session-1', {
+            resumePromptMode: 'custom',
+        });
+
+        expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
+            payload: expect.objectContaining({
+                sessionId: 'session-1',
+                resumePromptMode: 'custom',
+            }),
+        }));
     });
 
     it('cancels wait-resume and checks current availability through usage-limit RPC methods', async () => {
@@ -237,7 +256,7 @@ describe('sessionUsageLimitRecovery', () => {
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(3);
     });
 
-    it('switches usage-limit account recovery through the daemon-owned machine control', async () => {
+    it('falls back from inert active wait-resume success to daemon recovery when a real machine result is available', async () => {
         resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
         storageState.current = {
             sessions: {
@@ -253,25 +272,114 @@ describe('sessionUsageLimitRecovery', () => {
                 'machine-1': { id: 'machine-1', active: true },
             },
         };
-        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'waiting' });
+        sessionRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            recovery: {
+                status: 'waiting',
+                resetAtMs: null,
+                nextCheckAtMs: null,
+                maxAttempts: 0,
+            },
+        });
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            status: 'waiting',
+            sessionId: 'session-1',
+            retryAfterMs: 30_000,
+        });
+
+        const { sessionUsageLimitWaitResumeEnable } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitWaitResumeEnable('session-1', {
+            issueFingerprint: 'usage-limit:codex:turn-1:1:no-reset',
+            rememberPreference: false,
+            resumePromptMode: 'standard',
+        })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+            retryAfterMs: 30_000,
+        });
+
+        const payload = {
+            sessionId: 'session-1',
+            issueFingerprint: 'usage-limit:codex:turn-1:1:no-reset',
+            resumePromptMode: 'standard',
+        };
+        expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ payload }));
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ payload }));
+    });
+
+    it('surfaces inert inactive wait-resume success as unsupported instead of waiting', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: false,
+                    metadata: { machineId: 'machine-1', path: '/repo' },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({
+            ok: true,
+            recovery: {
+                status: 'waiting',
+                resetAtMs: null,
+                nextCheckAtMs: null,
+                maxAttempts: 0,
+            },
+        });
+
+        const { sessionUsageLimitWaitResumeEnable } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitWaitResumeEnable('session-1')).resolves.toEqual({
+            ok: false,
+            status: 'unsupported',
+            error: 'session_usage_limit_recovery_inert_waiting',
+            errorCode: 'session_usage_limit_recovery_inert_waiting',
+        });
+    });
+
+    it('routes active switch-account recovery through session RPC before daemon fallback', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: true,
+                    metadata: {
+                        machineId: 'machine-1',
+                        path: '/repo',
+                    },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        sessionRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'switch_observed', sessionId: 'session-1' });
 
         const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
-        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: ' codex ', serverId: 'server-route' })).resolves.toEqual({
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', {
+            provider: ' codex ',
+            resumePromptMode: 'off',
+            serverId: 'server-route',
+        })).resolves.toEqual({
             ok: true,
             status: 'waiting',
         });
 
-        expect(sessionRpcWithServerScopeMock).not.toHaveBeenCalled();
-        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith({
-            machineId: 'machine-1',
+        expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith({
+            sessionId: 'session-1',
             serverId: 'server-route',
-            method: RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+            method: SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW,
             payload: {
                 sessionId: 'session-1',
                 provider: 'codex',
                 operation: 'switch_account_now',
+                resumePromptMode: 'off',
             },
         });
+        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
     });
 
     it('normalizes daemon-wrapped switch-account recovery success results', async () => {
@@ -508,6 +616,68 @@ describe('sessionUsageLimitRecovery', () => {
             payload: { sessionId: 'session-1' },
         });
         expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
+    });
+
+    it('retries switch-account through daemon machine RPC when stale active session RPC is method-not-found', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: true,
+                    metadata: {
+                        machineId: 'machine-1',
+                        path: '/repo',
+                    },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        sessionRpcWithServerScopeMock.mockRejectedValueOnce(
+            Object.assign(new Error('Method not found'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }),
+        );
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'switch_observed', sessionId: 'session-1' });
+
+        const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: ' codex ' })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+        });
+
+        const payload = { sessionId: 'session-1', provider: 'codex', operation: 'switch_account_now' as const };
+        expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ payload }));
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ payload }));
+    });
+
+    it('retries switch-account through daemon machine RPC when stale active session RPC times out', async () => {
+        resolvePreferredServerIdForSessionIdMock.mockReturnValue('server-owned');
+        storageState.current = {
+            sessions: {
+                'session-1': {
+                    active: true,
+                    metadata: {
+                        machineId: 'machine-1',
+                        path: '/repo',
+                    },
+                },
+            },
+            machines: {
+                'machine-1': { id: 'machine-1', active: true },
+            },
+        };
+        sessionRpcWithServerScopeMock.mockRejectedValueOnce(new Error('operation has timed out'));
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: true, status: 'switch_observed', sessionId: 'session-1' });
+
+        const { sessionUsageLimitSwitchAccountNow } = await import('./sessionUsageLimitRecovery');
+        await expect(sessionUsageLimitSwitchAccountNow('session-1', { provider: ' codex ' })).resolves.toEqual({
+            ok: true,
+            status: 'waiting',
+        });
+
+        const payload = { sessionId: 'session-1', provider: 'codex', operation: 'switch_account_now' as const };
+        expect(sessionRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ payload }));
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({ payload }));
     });
 
     it('forwards check-now provider hints to active session and daemon fallback RPCs', async () => {

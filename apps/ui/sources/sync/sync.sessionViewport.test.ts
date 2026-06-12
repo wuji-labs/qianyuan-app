@@ -258,7 +258,7 @@ describe('sync session viewport', () => {
         });
     });
 
-    it('treats pinned viewport reports as live-tail intent even when restore intent is requested', async () => {
+    it('preserves observed viewport intent when a passive pinned observation still requests restore', async () => {
         const { sync } = await import('./sync');
 
         sync.onSessionViewportChange('session-1', {
@@ -277,6 +277,36 @@ describe('sync session viewport', () => {
             isPinned: true,
             offsetY: 0,
             shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        expect(sync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            offsetY: 420,
+            source: 'observed',
+            anchor: validViewportAnchor,
+        });
+    });
+
+    it('treats pinned viewport reports as live-tail intent when restore is not requested', async () => {
+        const { sync } = await import('./sync');
+
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+        expect(sync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            source: 'observed',
+            anchor: validViewportAnchor,
+        });
+
+        sync.onSessionViewportChange('session-1', {
+            isPinned: true,
+            offsetY: 0,
+            shouldRestoreViewport: false,
             anchor: validViewportAnchor,
         });
 

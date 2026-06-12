@@ -76,6 +76,7 @@ export const ConnectedServiceQuotaCard = React.memo(function ConnectedServiceQuo
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  const snapshotRef = React.useRef<ConnectedServiceQuotaSnapshotV1 | null>(null);
   const loadPromiseRef = React.useRef<Promise<ConnectedServiceQuotaSnapshotV1 | null> | null>(null);
   const refreshAndReloadPromisesRef = React.useRef<Map<string, QuotaCardRefreshAndReloadInFlight>>(new Map());
   const lastAutomaticLoadScopeRef = React.useRef<QuotaCardLoadScope | null>(null);
@@ -93,6 +94,11 @@ export const ConnectedServiceQuotaCard = React.memo(function ConnectedServiceQuo
   const isCurrentLoadScope = React.useCallback((scope: QuotaCardLoadScope): boolean => (
     isSameQuotaCardLoadScope(currentLoadScopeRef.current, scope)
   ), []);
+  const commitSnapshot = React.useCallback((nextSnapshot: ConnectedServiceQuotaSnapshotV1 | null) => {
+    snapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    onSnapshotRef.current?.(nextSnapshot);
+  }, []);
   const resolveAccountMode = useCredentialScopedAccountModeResolver({
     credentials,
     credentialScope: automaticLoadScope?.credentialScopeKey ?? '',
@@ -123,26 +129,25 @@ export const ConnectedServiceQuotaCard = React.memo(function ConnectedServiceQuo
         });
         const fallback = sealed ? openConnectedServiceQuotaSnapshot(credentials, sealed.sealed) : null;
         if (!isCurrentLoadScope(loadScope)) return null;
-        setSnapshot(fallback);
-        onSnapshotRef.current?.(fallback);
+        commitSnapshot(fallback);
         return fallback;
       }
       if (!isCurrentLoadScope(loadScope)) return null;
-      setSnapshot(opened);
-      onSnapshotRef.current?.(opened);
+      commitSnapshot(opened);
       return opened;
     } catch (e) {
       if (!isCurrentLoadScope(loadScope)) return null;
       setError(sanitizeEndpointErrorMessage(e) ?? t('common.error'));
-      setSnapshot(null);
-      onSnapshotRef.current?.(null);
+      if (!snapshotRef.current) {
+        commitSnapshot(null);
+      }
       return null;
     } finally {
       if (isCurrentLoadScope(loadScope)) {
         setLoading(false);
       }
     }
-  }, [automaticLoadScope, credentials, props.serviceId, props.profileId, isCurrentLoadScope, resolveAccountMode]);
+  }, [automaticLoadScope, credentials, props.serviceId, props.profileId, isCurrentLoadScope, resolveAccountMode, commitSnapshot]);
 
   const loadTracked = React.useCallback(() => {
     const promise = load();
@@ -153,23 +158,21 @@ export const ConnectedServiceQuotaCard = React.memo(function ConnectedServiceQuo
   React.useEffect(() => {
     if (!automaticLoadScope) {
       if (lastAutomaticLoadScopeRef.current) {
-        setSnapshot(null);
+        commitSnapshot(null);
         setError(null);
         setLoading(false);
-        onSnapshotRef.current?.(null);
       }
       lastAutomaticLoadScopeRef.current = null;
       return;
     }
     if (isSameQuotaCardLoadScope(lastAutomaticLoadScopeRef.current, automaticLoadScope)) return;
     if (lastAutomaticLoadScopeRef.current) {
-      setSnapshot(null);
+      commitSnapshot(null);
       setError(null);
-      onSnapshotRef.current?.(null);
     }
     lastAutomaticLoadScopeRef.current = automaticLoadScope;
     void loadTracked();
-  }, [automaticLoadScope, loadTracked]);
+  }, [automaticLoadScope, loadTracked, commitSnapshot]);
 
   const requestRefreshAndReload = React.useCallback(async () => {
     if (!credentials || !automaticLoadScope) return;

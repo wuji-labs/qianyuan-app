@@ -1,7 +1,7 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { ResumeSessionOptions } from '@/sync/ops';
 import type { ResumeCapabilityOptions } from '@/agents/runtime/resumeCapabilities';
-import { canResumeSessionWithOptions, getAgentVendorResumeId } from '@/agents/runtime/resumeCapabilities';
+import { canContinueSessionWithFreshSpawn, canResumeSessionWithOptions, getAgentVendorResumeId } from '@/agents/runtime/resumeCapabilities';
 import { deriveAcpBackendIdFromFlavor } from '@/agents/runtime/acpFlavor';
 import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/catalog/catalog';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
@@ -62,7 +62,12 @@ export function buildResumeSessionBaseOptionsFromSession(opts: {
 
     // Note: vendor resume IDs can be missing even for otherwise-resumable sessions.
     // Wake/resume still needs to work (e.g. pending-queue wake) and should attach the vendor id only when present.
-    if (!canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions)) return null;
+    // A provider session that never started (no vendor resume id persisted) is still
+    // continuable by a fresh spawn against the same Happier session (QA A-F5).
+    if (
+        !canResumeSessionWithOptions(session.metadata, resumeCapabilityOptions)
+        && !canContinueSessionWithFreshSpawn(session.metadata, resumeCapabilityOptions)
+    ) return null;
 
     if (configuredAcpBackendId !== null) {
         return {

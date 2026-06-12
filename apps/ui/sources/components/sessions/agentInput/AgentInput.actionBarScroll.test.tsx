@@ -170,6 +170,8 @@ function mockCommonDeps() {
     }));
 
     vi.doMock('@/sync/domains/models/modelOptions', () => ({
+        findModelOptionForEffectiveModelId: (options: readonly any[], id: string) =>
+            (options ?? []).find((o: any) => o.value === id) ?? (options ?? []).find((o: any) => o.extendedContextModelId === id) ?? null,
         getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
         supportsFreeformModelSelectionForSession: () => false,
     }));

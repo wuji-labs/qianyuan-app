@@ -4,6 +4,7 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { createReviewCommentsActionChip } from '@/components/sessions/agentInput/definitions/createReviewCommentsActionChip';
 import { createAttachmentActionChip } from '@/components/sessions/agentInput/sessionActions/createAttachmentActionChip';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
+import type { AgentInputSendOptions } from '@/components/sessions/agentInput/agentInputSendOptions';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import { openAttachmentFilePickerFiles, openAttachmentFilePickerImages } from '@/components/sessions/attachments/attachmentFilePickerActions';
 import { attachRecoverableAttachmentDrafts } from '@/components/sessions/attachments/recoverableAttachmentDrafts';
@@ -17,7 +18,7 @@ import { nativeReadClipboardImageAttachment } from '@/utils/files/nativeClipboar
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { followUpSpawnedSessionWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/followUpSpawnedSession';
-import type { CreatedSessionFollowUpContext } from '@/components/sessions/new/hooks/useCreateNewSession';
+import type { HandleCreateSessionOptions } from '@/components/sessions/new/hooks/useCreateNewSession';
 import { buildReviewCommentsOutboundMessage } from '@/sync/domains/input/reviewComments/buildReviewCommentsOutboundMessage';
 import {
     filterReviewCommentDraftsIncludedInPrompt,
@@ -33,12 +34,9 @@ import {
 } from './newSessionAttachmentDraftStore';
 import { resolveNewSessionReviewCommentsScope } from './resolveNewSessionReviewCommentsScope';
 
-type HandleCreateSession = (
-    opts?: Readonly<{
-        initialMessage?: 'send' | 'skip';
-        afterCreated?: (context: CreatedSessionFollowUpContext) => void | Promise<void>;
-    }>,
-) => void;
+type NewSessionAgentInputSendOptions = AgentInputSendOptions;
+
+type HandleCreateSession = (opts?: HandleCreateSessionOptions) => void;
 
 export function useNewSessionAttachmentsController(params: Readonly<{
     flowId?: string | null;
@@ -60,7 +58,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
     addWebFiles: ReturnType<typeof useAttachmentDraftManager>['addWebFiles'];
     addPickedAttachments: ReturnType<typeof useAttachmentDraftManager>['addPickedAttachments'];
     extraActionChips: readonly AgentInputExtraActionChip[];
-    handleSend: () => void;
+    handleSend: (options?: NewSessionAgentInputSendOptions) => void;
 }> {
     const attachmentsUploadsEnabled = useFeatureEnabled('attachments.uploads');
     const reviewCommentsFeatureEnabled = useFeatureEnabled('files.reviewComments');
@@ -218,8 +216,9 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         updateReviewCommentDraft,
     ]);
 
-    const handleSend = React.useCallback(() => {
-        const submit = (opts?: Readonly<{ initialMessage?: 'send' | 'skip'; afterCreated?: (context: CreatedSessionFollowUpContext) => void | Promise<void> }>) => {
+    const handleSend = React.useCallback((options?: NewSessionAgentInputSendOptions) => {
+        const promptText = options?.inputTextOverride ?? String(params.sessionPrompt ?? '');
+        const submit = (opts?: HandleCreateSessionOptions) => {
             blurActiveElementOnWeb();
             deferOnWeb(() => {
                 params.handleCreateSession(opts);
@@ -228,11 +227,11 @@ export function useNewSessionAttachmentsController(params: Readonly<{
 
         const hasAttachments = attachmentsUploadsEnabled && draftsSnapshotRef.current.length > 0;
         if (!hasAttachments && !hasReviewCommentDrafts) {
-            submit();
+            submit(options?.inputTextOverride ? { inputTextOverride: options.inputTextOverride } : undefined);
             return;
         }
 
-        const initialPrompt = String(params.sessionPrompt ?? '');
+        const initialPrompt = promptText;
         submit({
             initialMessage: 'skip',
             afterCreated: async ({ sessionId, effectiveSpawnServerId, launchAttempt }) => {

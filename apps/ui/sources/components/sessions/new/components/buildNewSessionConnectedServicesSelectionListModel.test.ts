@@ -342,7 +342,7 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
         expect(model.selectedOptionId).toBe(createNativeServiceOptionId('anthropic'));
     });
 
-    it('selects native auth when a stored group default is not ready', () => {
+    it('keeps a stored group default visible and disabled when it is not ready', () => {
         const model = buildModel({
             bindingsByServiceId: {
                 anthropic: {
@@ -363,7 +363,14 @@ describe('buildNewSessionConnectedServicesSelectionListModel', () => {
             },
         });
 
-        expect(model.selectedOptionId).toBe(createNativeServiceOptionId('anthropic'));
+        const groupOptionId = createConnectedServiceGroupOptionId('anthropic', 'primary');
+        const groupOption = firstStaticSection(model).options.find((option) => option.id === groupOptionId);
+
+        expect(model.selectedOptionId).toBe(groupOptionId);
+        expect(groupOption).toEqual(expect.objectContaining({
+            disabled: true,
+            subtitle: 'connectedServices.authModal.groupExhaustedSubtitle',
+        }));
     });
 
     it('marks switch options unavailable when continuity validation disables them', () => {

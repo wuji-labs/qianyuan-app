@@ -2,6 +2,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { serverFetch } from '@/sync/http/client';
 import { HappyError } from '@/utils/errors/errors';
 import { backoff } from '@/utils/timing/time';
+import { createConnectedServiceApiError } from './connectedServiceApiError';
 
 import {
     ConnectedServiceAuthGroupListResponseV1Schema,
@@ -26,12 +27,6 @@ type ConnectedServiceAuthGroupPatchInput = ConnectedServiceAuthGroupPatchRequest
 type ConnectedServiceAuthGroupMemberCreateInput = ConnectedServiceAuthGroupMemberCreateRequestV1;
 type ConnectedServiceAuthGroupMemberPatchInput = ConnectedServiceAuthGroupMemberPatchRequestV1;
 
-function extractErrorCode(json: unknown): string | null {
-    if (!json || typeof json !== 'object') return null;
-    const obj = json as Record<string, unknown>;
-    return typeof obj.error === 'string' ? obj.error : null;
-}
-
 async function fetchAuthGroupEnvelope(
     credentials: AuthCredentials,
     path: string,
@@ -47,7 +42,9 @@ async function fetchAuthGroupEnvelope(
                 method: init.method,
                 headers: {
                     Authorization: `Bearer ${credentials.token}`,
-                    'Content-Type': 'application/json',
+                    // Only declare a JSON body when one is actually sent: Fastify rejects
+                    // body-less requests that carry a JSON content-type (FST_ERR_CTP_EMPTY_JSON_BODY).
+                    ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
                 },
                 ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
             },
@@ -56,11 +53,10 @@ async function fetchAuthGroupEnvelope(
 
         const json = await response.json().catch(() => null);
         if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                const message = extractErrorCode(json) ?? 'connect_group_request_failed';
-                throw new HappyError(message, false, { status: response.status, kind: 'server' });
-            }
-            throw new Error(`Failed connected-service group request: ${response.status}`);
+            throw createConnectedServiceApiError(json, {
+                status: response.status,
+                fallbackCode: 'connect_group_request_failed',
+            });
         }
 
         const parsed = ConnectedServiceAuthGroupResponseV1Schema.safeParse(json);
@@ -117,11 +113,10 @@ export async function listConnectedServiceAuthGroupsV3(
 
         const json = await response.json().catch(() => null);
         if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                const message = extractErrorCode(json) ?? 'connect_group_request_failed';
-                throw new HappyError(message, false, { status: response.status, kind: 'server' });
-            }
-            throw new Error(`Failed connected-service group request: ${response.status}`);
+            throw createConnectedServiceApiError(json, {
+                status: response.status,
+                fallbackCode: 'connect_group_request_failed',
+            });
         }
 
         const parsed = ConnectedServiceAuthGroupListResponseV1Schema.safeParse(json);
@@ -158,7 +153,6 @@ export async function deleteConnectedServiceAuthGroupV3(
                 method: 'DELETE',
                 headers: {
                     Authorization: `Bearer ${credentials.token}`,
-                    'Content-Type': 'application/json',
                 },
             },
             { includeAuth: false },
@@ -167,11 +161,10 @@ export async function deleteConnectedServiceAuthGroupV3(
         if (response.status === 404) return false;
         if (!response.ok) {
             const json = await response.json().catch(() => null);
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                const message = extractErrorCode(json) ?? 'connect_group_request_failed';
-                throw new HappyError(message, false, { status: response.status, kind: 'server' });
-            }
-            throw new Error(`Failed connected-service group request: ${response.status}`);
+            throw createConnectedServiceApiError(json, {
+                status: response.status,
+                fallbackCode: 'connect_group_request_failed',
+            });
         }
         return true;
     });
@@ -233,6 +226,7 @@ export async function setConnectedServiceAuthGroupActiveProfileV3(
         groupId: string;
         profileId: string;
         expectedGeneration: number;
+        overrideRuntimeCooldown?: boolean;
     }>,
 ): Promise<ConnectedServiceAuthGroupV1> {
     return await fetchAuthGroupEnvelope(
@@ -243,6 +237,7 @@ export async function setConnectedServiceAuthGroupActiveProfileV3(
             body: {
                 profileId: params.profileId,
                 expectedGeneration: params.expectedGeneration,
+                ...(params.overrideRuntimeCooldown ? { overrideRuntimeCooldown: true } : {}),
             },
         },
     );

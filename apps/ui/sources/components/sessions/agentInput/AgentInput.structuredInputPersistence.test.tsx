@@ -15,7 +15,7 @@ type MockMultiTextInputProps = Readonly<{
     value?: string;
     onChangeText?: (text: string) => void;
     onStateChange?: (state: MockTextInputState) => void;
-    onKeyPress?: (event: { key: string; shiftKey?: boolean }) => boolean;
+    onKeyPress?: (event: { key: string; shiftKey?: boolean; inputState?: MockTextInputState }) => boolean;
 }> & Record<string, unknown>;
 
 const autocompleteMockState = vi.hoisted(() => ({
@@ -30,6 +30,12 @@ const autocompleteMockState = vi.hoisted(() => ({
         }>;
     }>,
     selected: -1,
+    respectQuery: false,
+    lastQuery: null as string | null,
+}));
+
+const multiTextInputMockState = vi.hoisted(() => ({
+    liveText: null as string | null,
 }));
 
 installAgentInputCommonModuleMocks({
@@ -149,6 +155,8 @@ vi.mock('@/agents/catalog/catalog', () => ({
 }));
 
 vi.mock('@/sync/domains/models/modelOptions', () => ({
+    findModelOptionForEffectiveModelId: (options: readonly any[], id: string) =>
+        (options ?? []).find((o: any) => o.value === id) ?? (options ?? []).find((o: any) => o.extendedContextModelId === id) ?? null,
     getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
     supportsFreeformModelSelectionForSession: () => false,
 }));
@@ -169,15 +177,24 @@ vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
 }));
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => {
+    const readLiveText = (props: MockMultiTextInputProps): string => multiTextInputMockState.liveText ?? (typeof props.value === 'string' ? props.value : '');
     const MultiTextInput = React.forwardRef((props: MockMultiTextInputProps, ref) => {
         React.useImperativeHandle(ref, () => ({
             setTextAndSelection: (text: string, selection: MockSelection) => {
+                multiTextInputMockState.liveText = text;
                 props.onChangeText?.(text);
                 props.onStateChange?.({ text, selection });
             },
             setSelection: (selection: MockSelection) => {
-                const text = typeof props.value === 'string' ? props.value : '';
+                const text = readLiveText(props);
                 props.onStateChange?.({ text, selection });
+            },
+            getText: () => readLiveText(props),
+            flushPendingTextChange: () => {
+                const text = readLiveText(props);
+                props.onChangeText?.(text);
+                props.onStateChange?.({ text, selection: { start: text.length, end: text.length } });
+                return text;
             },
             focus: () => {},
             blur: () => {},
@@ -235,7 +252,13 @@ vi.mock('@/components/autocomplete/useActiveWord', () => ({
 }));
 
 vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: () => [autocompleteMockState.suggestions, autocompleteMockState.selected, () => {}, () => {}],
+    useActiveSuggestions: (query: string | null) => {
+        autocompleteMockState.lastQuery = query;
+        const suggestions = !autocompleteMockState.respectQuery || query !== null
+            ? autocompleteMockState.suggestions
+            : [];
+        return [suggestions, autocompleteMockState.selected, () => {}, () => {}];
+    },
 }));
 
 vi.mock('@/components/autocomplete/applySuggestion', () => ({
@@ -280,6 +303,9 @@ describe('AgentInput structured input persistence', () => {
         vi.clearAllMocks();
         autocompleteMockState.suggestions = [];
         autocompleteMockState.selected = -1;
+        autocompleteMockState.respectQuery = false;
+        autocompleteMockState.lastQuery = null;
+        multiTextInputMockState.liveText = null;
     });
 
     it('reconciles controlled structured mentions when the external value changes', async () => {
@@ -372,6 +398,7 @@ describe('AgentInput structured input persistence', () => {
         await screen.pressByTestIdAsync('session-composer-send');
 
         expect(onSend).toHaveBeenCalledWith({
+            inputTextOverride: 'Ask $review',
             structuredInputMetaOverrides: {
                 happierStructuredInputV1: {
                     v: 1,
@@ -382,6 +409,127 @@ describe('AgentInput structured input persistence', () => {
                 },
             },
         });
+        await screen.unmount();
+    });
+
+    it('keeps autocomplete available for large live input text without pushing the full text into render state', async () => {
+        autocompleteMockState.suggestions = [{
+            key: 'slash-run',
+            text: '/run',
+            label: 'Run',
+        }];
+        autocompleteMockState.selected = 0;
+        autocompleteMockState.respectQuery = true;
+        const { AgentInput } = await import('./AgentInput');
+        const onSend = vi.fn();
+        const onChangeText = vi.fn();
+        const liveText = `${'x'.repeat(210_000)} /r`;
+        multiTextInputMockState.liveText = liveText;
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: '',
+            onChangeText,
+            placeholder: 'p',
+            onSend,
+            autocompletePrefixes: ['/'],
+            autocompleteSuggestions: async () => autocompleteMockState.suggestions,
+            sessionId: 'session-a',
+            metadata: null,
+            disabled: false,
+            showAbortButton: false,
+        }));
+
+        const input = findMultiTextInput(screen);
+        await act(async () => {
+            input.props.onFocus?.();
+            input.props.onStateChange?.({
+                text: liveText,
+                selection: { start: liveText.length, end: liveText.length },
+            });
+        });
+
+        expect(autocompleteMockState.lastQuery).toBe('/r');
+
+        await act(async () => {
+            expect(input.props.onKeyPress?.({
+                key: 'Enter',
+                inputState: {
+                    text: liveText,
+                    selection: { start: liveText.length, end: liveText.length },
+                },
+            })).toBe(true);
+        });
+
+        expect(onSend).not.toHaveBeenCalled();
+        expect(onChangeText).toHaveBeenLastCalledWith(`${'x'.repeat(210_000)} /run`);
+        await screen.unmount();
+    });
+
+    it('sends the flushed live input text when controlled props have not caught up', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const onSend = vi.fn();
+        const onChangeText = vi.fn();
+        const liveText = 'x'.repeat(210_000);
+        multiTextInputMockState.liveText = liveText;
+        const screen = await renderScreen(React.createElement(AgentInput, {
+            value: '',
+            onChangeText,
+            placeholder: 'p',
+            onSend,
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            sessionId: 'session-a',
+            metadata: null,
+            disabled: false,
+            showAbortButton: false,
+        }));
+
+        const input = findMultiTextInput(screen);
+        await act(async () => {
+            expect(input.props.onKeyPress?.({
+                key: 'Enter',
+                inputState: {
+                    text: liveText,
+                    selection: { start: liveText.length, end: liveText.length },
+                },
+            })).toBe(true);
+        });
+
+        expect(onChangeText).toHaveBeenCalledWith(liveText);
+        expect(onSend).toHaveBeenCalledWith({ inputTextOverride: liveText });
+        await screen.unmount();
+    });
+
+    it('resets stale live input text when the session identity changes and the controlled value is unchanged', async () => {
+        const { AgentInput } = await import('./AgentInput');
+        const onSend = vi.fn();
+        const onChangeText = vi.fn();
+        const liveText = 'stale large prompt';
+        const render = (sessionId: string) => React.createElement(AgentInput, {
+            value: '',
+            onChangeText,
+            placeholder: 'p',
+            onSend,
+            autocompletePrefixes: [],
+            autocompleteSuggestions: async () => [],
+            sessionId,
+            metadata: null,
+            disabled: false,
+            showAbortButton: false,
+        });
+        const screen = await renderScreen(render('session-a'));
+        multiTextInputMockState.liveText = liveText;
+
+        await act(async () => {
+            screen.tree.update(render('session-b'));
+        });
+
+        const input = findMultiTextInput(screen);
+        await act(async () => {
+            expect(input.props.onKeyPress?.({ key: 'Enter' })).toBe(false);
+        });
+
+        expect(onChangeText).toHaveBeenLastCalledWith('');
+        expect(onSend).not.toHaveBeenCalled();
         await screen.unmount();
     });
 });

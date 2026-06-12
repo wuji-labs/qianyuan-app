@@ -34,10 +34,11 @@ export type ConnectedServicesAccountGroupOption = Readonly<{
   generation?: number;
   enabledMemberCount: number;
   autoSwitch: boolean;
-  status: 'ready' | 'exhausted' | 'needs_members';
+  status: ConnectedServicesAccountGroupReadiness;
 }>;
 
 export type ConnectedServicesAccountGroupOptionsByServiceId = Readonly<Record<string, ConnectedServicesAccountGroupOption[]>>;
+export type ConnectedServicesAccountGroupReadiness = 'ready' | 'exhausted' | 'needs_members' | 'switching' | 'error' | 'unknown';
 
 type NewSessionConnectedServicesAgentConnectedServices = Readonly<{
   supportedServiceIds?: ReadonlyArray<ConnectedServiceId>;
@@ -190,12 +191,17 @@ function readGroupAutoSwitch(rawGroup: Record<string, unknown>): boolean {
   return readBoolean((policy as { autoSwitch?: unknown }).autoSwitch);
 }
 
-function readGroupStatus(rawGroup: Record<string, unknown>): 'ready' | 'exhausted' {
+function readGroupStatus(rawGroup: Record<string, unknown>): Exclude<ConnectedServicesAccountGroupReadiness, 'needs_members'> {
   const state = rawGroup.state;
   const stateStatus = state && typeof state === 'object' && !Array.isArray(state)
     ? readString((state as { status?: unknown }).status)
     : '';
-  return (stateStatus || readString(rawGroup.status)) === 'exhausted' ? 'exhausted' : 'ready';
+  const status = stateStatus || readString(rawGroup.status);
+  if (status === 'exhausted') return 'exhausted';
+  if (status === 'switching') return 'switching';
+  if (status === 'error') return 'error';
+  if (status === 'unknown') return 'unknown';
+  return 'ready';
 }
 
 export function buildConnectedServiceAccountGroupOptionsByServiceId(params: Readonly<{
@@ -271,6 +277,7 @@ export function buildConnectedServicesBindingsPayload(params: Readonly<{
   supportedConnectedServiceIds: ReadonlyArray<ConnectedServiceId>;
   connectedServiceProfileOptionsByServiceId: ConnectedServicesProfileOptionsByServiceId;
   accountGroupsFeatureEnabled?: boolean;
+  accountGroupSwitchingEnabled?: boolean;
   connectedServiceAccountGroupOptionsByServiceId?: ConnectedServicesAccountGroupOptionsByServiceId;
   connectedServicesBindingsByServiceId: Readonly<Record<string, ConnectedServicesServiceBinding | undefined>>;
   defaultProfileByServiceId: Record<string, string | undefined>;
@@ -293,7 +300,7 @@ export function buildConnectedServicesBindingsPayload(params: Readonly<{
       }
       const connectedProfileIds = connected.map((o) => o.profileId);
       if (binding?.selection === 'group') {
-        if (params.accountGroupsFeatureEnabled === false) {
+        if (params.accountGroupsFeatureEnabled === false || params.accountGroupSwitchingEnabled === false) {
           bindingsByServiceId[serviceId] = { source: 'native' };
           continue;
         }

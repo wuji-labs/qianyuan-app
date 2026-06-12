@@ -23,7 +23,7 @@ import {
     subscribeServerReachabilityState,
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
-import { isSocketIoAckTimeoutError } from '@/sync/runtime/socketIoAckTimeout';
+import { isSocketIoAckTimeoutError, raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
 
 const STATIC_EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS =
     process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
@@ -414,10 +414,11 @@ class ApiSocket {
         }
         const timeoutMs = opts?.timeoutMs;
         try {
-            if (typeof timeoutMs === 'number' && timeoutMs > 0) {
-                return await this.socket.timeout(timeoutMs).emitWithAck(event, data) as T;
-            }
-            return await this.socket.emitWithAck(event, data) as T;
+            const ackPromise =
+                typeof timeoutMs === 'number' && timeoutMs > 0
+                    ? this.socket.timeout(timeoutMs).emitWithAck(event, data) as Promise<T>
+                    : this.socket.emitWithAck(event, data) as Promise<T>;
+            return await raceSocketIoAckTimeout(ackPromise, timeoutMs);
         } catch (error) {
             throw await this.coerceAckTimeoutAuthError(error);
         }

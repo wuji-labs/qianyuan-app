@@ -71,6 +71,7 @@ describe('sessionRpcWithServerScope', () => {
     listServerProfilesSpy.mockReset();
     getActiveServerSnapshotSpy.mockReset();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     resetScopedSessionDataKeyCacheForTests();
   });
 
@@ -417,6 +418,62 @@ describe('sessionRpcWithServerScope', () => {
       params: { value: 3 },
       timeoutMs: 5000,
     });
+    expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a scoped session RPC when the socket ack never settles before the timeout', async () => {
+    vi.useFakeTimers();
+
+    getActiveServerSnapshotSpy.mockReturnValue({
+      serverId: 'server-a',
+      serverUrl: 'https://server-a.example.test',
+      kind: 'custom',
+      generation: 1,
+    });
+    listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' }]);
+    getCredentialsSpy.mockResolvedValue({ token: 'token-b', secret: 'secret-b' });
+
+    createEncryptionSpy.mockResolvedValue({
+      decryptEncryptionKey: vi.fn(async () => null),
+      initializeSessions: vi.fn(async () => {}),
+      getSessionEncryption: vi.fn(() => null),
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          session: {
+            ...sessionListByIdFixture,
+            encryptionMode: 'plain',
+            dataEncryptionKey: null,
+          },
+        }),
+      })),
+    );
+
+    const emitWithAck = vi.fn(() => new Promise<unknown>(() => {}));
+    const fakeSocket = {
+      timeout: vi.fn(() => ({ emitWithAck })),
+      emit: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    createEphemeralSocketSpy.mockResolvedValueOnce(fakeSocket);
+
+    const { sessionRpcWithServerScope } = await import('./serverScopedSessionRpc');
+    const request = sessionRpcWithServerScope({
+      sessionId: 'session-1',
+      method: 'method-test',
+      payload: { value: 7 },
+      serverId: 'server-b',
+      timeoutMs: 5,
+    });
+    const expectation = expect(request).rejects.toThrow('operation has timed out');
+
+    await vi.advanceTimersByTimeAsync(6);
+
+    await expectation;
     expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
   });
 });

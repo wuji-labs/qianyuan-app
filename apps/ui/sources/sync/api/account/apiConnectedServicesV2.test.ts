@@ -127,6 +127,30 @@ describe('apiConnectedServicesV2', () => {
     expect((init.headers as Headers).get('Content-Type')).toBeNull();
   });
 
+  it('sends the cleanup flag when deleting a credential that should be removed from auth groups', async () => {
+    mockServerConfig();
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'https://api.example.test/health') {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ success: true }) };
+    });
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
+
+    const { deleteConnectedServiceCredential } = await import('./apiConnectedServicesV2');
+    await deleteConnectedServiceCredential(credentials, {
+      serviceId: 'claude-subscription',
+      profileId: 'work',
+      cleanupGroupReferences: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.test/v2/connect/claude-subscription/profiles/work/credential?cleanupGroupReferences=true',
+      expect.objectContaining({ method: 'DELETE', headers: expect.any(Headers) }),
+    );
+  });
+
   it('posts OAuth exchange params to the proxy endpoint and returns bundle', async () => {
     mockServerConfig();
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {

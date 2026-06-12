@@ -39,6 +39,8 @@ export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
 export interface MultiTextInputHandle {
     setTextAndSelection: (text: string, selection: { start: number; end: number }) => void;
     setSelection: (selection: { start: number; end: number }) => void;
+    getText: () => string;
+    flushPendingTextChange: () => string;
     focus: () => void;
     blur: () => void;
 
@@ -277,6 +279,8 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
                 onSelectionChange(nextSelection);
             }
         },
+        getText: () => latestNativeTextRef.current,
+        flushPendingTextChange: () => latestNativeTextRef.current,
         focus: () => {
             inputRef.current?.focus();
         },

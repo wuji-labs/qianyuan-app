@@ -24,6 +24,7 @@ import {
 } from '@/sync/domains/scope/serverAccountScope';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useAgentInputComposerDraftGarbageCollection } from './useAgentInputComposerDraftGarbageCollection';
+import { useWebLifecycleFlush } from './useWebLifecycleFlush';
 
 export type SessionAgentInputComposerPersistence = Readonly<{
     expanded: boolean;
@@ -361,24 +362,11 @@ export function useSessionAgentInputComposerPersistence({
         };
     }, [flushPendingStructuredInput, flushPendingUiState, scope]);
 
-    React.useEffect(() => {
-        if (typeof document === 'undefined') return undefined;
-
-        const flushForHiddenDocument = () => {
-            flushPendingUiState(scope);
-            flushPendingStructuredInput(scope);
-        };
-        const handleVisibilityChange = () => {
-            if (document.visibilityState === 'hidden') {
-                flushForHiddenDocument();
-            }
-        };
-
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => {
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-        };
+    const flushForWebLifecycle = React.useCallback(() => {
+        flushPendingUiState(scope);
+        flushPendingStructuredInput(scope);
     }, [flushPendingStructuredInput, flushPendingUiState, scope]);
+    useWebLifecycleFlush(true, flushForWebLifecycle);
 
     React.useEffect(() => {
         return () => {

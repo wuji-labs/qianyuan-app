@@ -8,6 +8,7 @@ import type { ResumeCapabilityOptions } from '@/agents/runtime/resumeCapabilitie
 import type { TranslationKey } from '@/text';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { NonSteerablePayloadReason } from '@/sync/domains/session/control/submitMode';
 import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 import { CODEX_UI_BEHAVIOR_OVERRIDE } from '@/agents/providers/codex/uiBehavior';
 import { CLAUDE_UI_BEHAVIOR_OVERRIDE } from '@/agents/providers/claude/uiBehavior';
@@ -18,6 +19,7 @@ import { CUSTOM_ACP_UI_BEHAVIOR_OVERRIDE } from '@/agents/providers/customAcp/ui
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput';
 
 type CapabilityResults = Partial<Record<CapabilityId, CapabilityDetectResult>>;
+export type SessionComposerNonSteerablePayloadReason = Extract<NonSteerablePayloadReason, 'provider_config_change_refused'>;
 
 export type AgentExperimentSwitches = Readonly<Record<string, boolean>>;
 
@@ -146,6 +148,12 @@ export type AgentUiBehavior = Readonly<{
             configOptionOverrides: AcpConfigOptionOverridesV1 | null | undefined;
             metaOverrides?: Record<string, unknown>;
         }) => Record<string, unknown> | undefined;
+        getNonSteerablePayloadReason?: (opts: {
+            agentId: AgentId;
+            session: Session | null | undefined;
+            configOptionOverrides: AcpConfigOptionOverridesV1 | null | undefined;
+            metaOverrides?: Record<string, unknown>;
+        }) => SessionComposerNonSteerablePayloadReason | null;
     }>;
     sessionSubagents?: Readonly<{
         renderLaunchCards?: (ctx: {
@@ -388,6 +396,23 @@ export function buildSessionComposerNextMessageMetaOverridesFromUiState(opts: {
     if (!fn) return opts.metaOverrides;
     return fn({
         agentId: opts.agentId,
+        configOptionOverrides: opts.configOptionOverrides,
+        metaOverrides: opts.metaOverrides,
+    });
+}
+
+export function getSessionComposerNonSteerablePayloadReasonFromUiState(opts: {
+    agentId: AgentId | null | undefined;
+    session: Session | null | undefined;
+    configOptionOverrides: AcpConfigOptionOverridesV1 | null | undefined;
+    metaOverrides?: Record<string, unknown>;
+}): SessionComposerNonSteerablePayloadReason | null {
+    if (!opts.agentId) return null;
+    const fn = AGENTS_UI_BEHAVIOR[opts.agentId]?.sessionComposer?.getNonSteerablePayloadReason;
+    if (!fn) return null;
+    return fn({
+        agentId: opts.agentId,
+        session: opts.session,
         configOptionOverrides: opts.configOptionOverrides,
         metaOverrides: opts.metaOverrides,
     });

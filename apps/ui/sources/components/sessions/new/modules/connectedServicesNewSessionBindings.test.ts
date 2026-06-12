@@ -155,6 +155,36 @@ describe('buildConnectedServicesBindingsPayload', () => {
 
         expect(payload).toBeNull();
     });
+
+    it('degrades a group binding to native when the target runtime cannot switch account groups', () => {
+        const payload = buildConnectedServicesBindingsPayload({
+            supportedConnectedServiceIds: ['openai-codex'],
+            connectedServiceProfileOptionsByServiceId: profileOptionsByServiceId,
+            accountGroupsFeatureEnabled: true,
+            accountGroupSwitchingEnabled: false,
+            connectedServiceAccountGroupOptionsByServiceId: {
+                'openai-codex': [{
+                    groupId: 'codex-main',
+                    label: 'Codex main',
+                    activeProfileId: 'work',
+                    enabledMemberCount: 2,
+                    autoSwitch: true,
+                    status: 'ready',
+                }],
+            },
+            connectedServicesBindingsByServiceId: {
+                'openai-codex': {
+                    source: 'connected',
+                    selection: 'group',
+                    groupId: 'codex-main',
+                    profileId: 'work',
+                },
+            },
+            defaultProfileByServiceId: {},
+        });
+
+        expect(payload).toBeNull();
+    });
 });
 
 describe('buildConnectedServiceProfileOptionsByServiceId', () => {

@@ -249,6 +249,35 @@ function applyAlreadyLoadedReplayProjectionPatch(params: Readonly<{
 }>): void {
     if (!params.session) return;
 
+    const patch = buildMessageSessionProjectionPatch({
+        session: params.session,
+        updateData: params.updateData,
+        rawMessage: params.rawMessage,
+        messageSeq: params.messageSeq,
+        updateType: 'new-message',
+    });
+
+    if (!hasSessionProjectionPatch(patch)) return;
+
+    params.applySessions([{
+        ...params.session,
+        ...patch,
+    }]);
+}
+
+type SessionProjectionPatch = Partial<Pick<Session, 'seq' | 'updatedAt' | 'meaningfulActivityAt'>>;
+
+function hasSessionProjectionPatch(patch: SessionProjectionPatch): boolean {
+    return Object.keys(patch).length > 0;
+}
+
+function buildMessageSessionProjectionPatch(params: Readonly<{
+    session: Session;
+    updateData: any;
+    rawMessage: ApiMessage | undefined;
+    messageSeq: number | null;
+    updateType: 'new-message' | 'message-updated';
+}>): SessionProjectionPatch {
     const currentSeq = params.session.seq ?? 0;
     const nextSessionSeq = computeNextSessionSeqFromUpdate({
         currentSessionSeq: currentSeq,
@@ -263,18 +292,20 @@ function applyAlreadyLoadedReplayProjectionPatch(params: Readonly<{
     const currentMeaningfulActivityAt = finiteNumber(params.session.meaningfulActivityAt);
 
     const advancesSeq = nextSessionSeq > currentSeq;
-    const advancesUpdatedAt = updateCreatedAt !== null && updateCreatedAt > currentUpdatedAt;
     const advancesMeaningfulActivityAt = nextMeaningfulActivityAt !== null
         && (currentMeaningfulActivityAt === null || nextMeaningfulActivityAt > currentMeaningfulActivityAt);
+    // Loaded message edits can arrive for every streaming content update. When they only advance the
+    // socket event timestamp, the transcript apply below is sufficient and a session projection update
+    // just adds session-list churn.
+    const advancesUpdatedAt = updateCreatedAt !== null
+        && updateCreatedAt > currentUpdatedAt
+        && (params.updateType === 'new-message' || advancesSeq || advancesMeaningfulActivityAt);
 
-    if (!advancesSeq && !advancesUpdatedAt && !advancesMeaningfulActivityAt) return;
-
-    params.applySessions([{
-        ...params.session,
+    return {
         ...(advancesSeq ? { seq: nextSessionSeq } : {}),
         ...(advancesUpdatedAt ? { updatedAt: updateCreatedAt } : {}),
         ...(advancesMeaningfulActivityAt ? { meaningfulActivityAt: nextMeaningfulActivityAt } : {}),
-    }]);
+    };
 }
 
 async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSocketUpdateParams & {
@@ -478,21 +509,14 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
                     lifecycleEvent,
                     latestTurnStatus,
                 });
-                const nextSessionSeq = computeNextSessionSeqFromUpdate({
-                    currentSessionSeq: sessionForApply.seq ?? 0,
-                    updateType: 'new-message',
-                    containerSeq: updateData.seq,
-                    messageSeq: (body as any).message?.seq,
+                const sessionProjectionPatch = buildMessageSessionProjectionPatch({
+                    session: sessionForApply,
+                    updateData,
+                    rawMessage,
+                    messageSeq: typeof normalizedSeq === 'number' ? normalizedSeq : null,
+                    updateType,
                 });
-
-                const nextSession = {
-                    ...sessionForApply,
-                    updatedAt: updateData.createdAt,
-                    meaningfulActivityAt:
-                        typeof rawMessage?.createdAt === 'number' && Number.isFinite(rawMessage.createdAt)
-                            ? rawMessage.createdAt
-                            : updateData.createdAt,
-                    seq: nextSessionSeq,
+                const lifecyclePatch: Partial<Session> = {
                     ...(inferLifecycle && isTaskComplete ? { thinking: false } : {}),
                     ...(inferLifecycle && isTaskStarted && shouldApplyLifecycleStatus ? { thinking: true } : {}),
                     ...(shouldApplyLifecycleStatus ? {
@@ -500,25 +524,32 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
                         latestTurnStatusObservedAt: lifecycleEvent?.createdAt ?? updateData.createdAt,
                     } : {}),
                 };
-                const applySession = () => applySessions([
-                    {
-                        ...sessionForApply,
-                        ...nextSession,
-                    },
-                ]);
-                if (telemetryFields) {
-                    syncPerformanceTelemetry.measure(
-                        'sync.sessions.socket.message.applySession',
+                const nextSessionPatch: Partial<Session> = {
+                    ...sessionProjectionPatch,
+                    ...lifecyclePatch,
+                };
+
+                if (Object.keys(nextSessionPatch).length > 0) {
+                    const applySession = () => applySessions([
                         {
-                            ...telemetryFields,
-                            sessions: 1,
-                            taskStarted: isTaskStarted ? 1 : 0,
-                            taskComplete: isTaskComplete ? 1 : 0,
+                            ...sessionForApply,
+                            ...nextSessionPatch,
                         },
-                        applySession,
-                    );
-                } else {
-                    applySession();
+                    ]);
+                    if (telemetryFields) {
+                        syncPerformanceTelemetry.measure(
+                            'sync.sessions.socket.message.applySession',
+                            {
+                                ...telemetryFields,
+                                sessions: 1,
+                                taskStarted: isTaskStarted ? 1 : 0,
+                                taskComplete: isTaskComplete ? 1 : 0,
+                            },
+                            applySession,
+                        );
+                    } else {
+                        applySession();
+                    }
                 }
             } else {
                 fetchSessions();

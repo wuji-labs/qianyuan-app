@@ -78,6 +78,7 @@ import type { StoreGet, StoreSet } from './_shared';
 import { areStoredSessionsEqual } from './areStoredSessionsEqual';
 import { applyAgentStateUpdateToSessionMessages } from './messages';
 import type { SessionMessages } from './messages';
+import { persistSessionModelData } from './sessionModelPersistence';
 import { persistSessionPermissionData } from './sessionPermissionPersistence';
 import { resolveMergedSessionPermissionMode } from './resolveMergedSessionPermissionMode';
 import {
@@ -1358,11 +1359,13 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             // Don't store empty strings, convert to null
             const normalizedDraft = draft?.trim() ? draft : null;
 
-            // Collect all drafts for persistence
-            const allDrafts: Record<string, string> = {};
+            // Preserve drafts for sessions that have not been materialized into this store slice yet.
+            const allDrafts: Record<string, string> = { ...sessionDrafts };
             Object.entries(state.sessions).forEach(([id, sess]) => {
-                if (sess.draft) {
+                if (sess.draft?.trim()) {
                     allDrafts[id] = sess.draft;
+                } else {
+                    delete allDrafts[id];
                 }
             });
             if (normalizedDraft) {
@@ -1690,7 +1693,10 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 }
             };
 
-            const persisted = persistSessionPermissionData(updatedSessions, sessionLocalStateScope);
+            const persisted = persistSessionPermissionData(updatedSessions, sessionLocalStateScope, {
+                modes: sessionPermissionModes,
+                updatedAts: sessionPermissionModeUpdatedAts,
+            });
             if (persisted) {
                 sessionPermissionModes = persisted.modes;
                 sessionPermissionModeUpdatedAts = persisted.updatedAts;
@@ -1725,22 +1731,14 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
 	                }
 	            };
 
-            // Collect all model modes for persistence (only non-default values to save space)
-            const allModes: Record<string, SessionModelMode> = {};
-            const allUpdatedAts: Record<string, number> = {};
-            Object.entries(updatedSessions).forEach(([id, sess]) => {
-                if (sess.modelMode && sess.modelMode !== 'default') {
-                    allModes[id] = sess.modelMode;
-                }
-                if (typeof (sess as any).modelModeUpdatedAt === 'number') {
-                    allUpdatedAts[id] = (sess as any).modelModeUpdatedAt;
-                }
+            const persisted = persistSessionModelData(updatedSessions, sessionLocalStateScope, {
+                modes: sessionModelModes,
+                updatedAts: sessionModelModeUpdatedAts,
             });
-
-            saveSessionModelModes(allModes, sessionLocalStateScope);
-            saveSessionModelModeUpdatedAts(allUpdatedAts, sessionLocalStateScope);
-            sessionModelModes = allModes as any;
-            sessionModelModeUpdatedAts = allUpdatedAts;
+            if (persisted) {
+                sessionModelModes = persisted.modes;
+                sessionModelModeUpdatedAts = persisted.updatedAts;
+            }
 
             // No need to rebuild sessionListViewData since model mode doesn't affect the list display
             return {

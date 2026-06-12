@@ -39,7 +39,7 @@ import { InstallableDepInstaller, type InstallableDepInstallerProps } from '@/co
 import { Text } from '@/components/ui/text/Text';
 import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import type { CreatedSessionFollowUpContext } from '../hooks/useCreateNewSession';
+import type { HandleCreateSessionOptions } from '../hooks/useCreateNewSession';
 import { buildNewSessionProfileSelectionPopover } from '@/components/sessions/new/components/buildNewSessionProfileSelectionPopover';
 import { NewSessionProfilesBrowserContent } from '@/components/sessions/new/components/NewSessionProfilesBrowserContent';
 import type { AcpConfigOptionOverridesV1 } from '@happier-dev/protocol';
@@ -158,7 +158,7 @@ export interface NewSessionWizardMachineProps {
 export interface NewSessionWizardFooterProps {
     sessionPrompt: string;
     setSessionPrompt: (v: string) => void;
-    handleCreateSession: (opts?: Readonly<{ initialMessage?: 'send' | 'skip'; afterCreated?: (context: CreatedSessionFollowUpContext) => void | Promise<void> }>) => void;
+    handleCreateSession: (opts?: HandleCreateSessionOptions) => void;
     canCreate: boolean;
     isCreating: boolean;
     submitAccessibilityLabel?: React.ComponentProps<typeof AgentInput>['submitAccessibilityLabel'];

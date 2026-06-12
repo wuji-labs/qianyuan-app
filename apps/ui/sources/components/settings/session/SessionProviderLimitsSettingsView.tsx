@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { TextInput } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSettingMutable } from '@/sync/domains/state/storage';
@@ -23,11 +24,42 @@ export const SessionProviderLimitsSettingsView = React.memo(function SessionProv
     const [openUsageLimitRecoveryResumePromptMenu, setOpenUsageLimitRecoveryResumePromptMenu] = React.useState(false);
     const [openProviderUsageGaugeWindowMenu, setOpenProviderUsageGaugeWindowMenu] = React.useState(false);
     const usageLimitRecoveryMode = usageLimitRecoverySettingsV1?.mode === 'auto_wait' ? 'auto_wait' : 'ask';
-    const usageLimitRecoveryResumePromptMode = usageLimitRecoverySettingsV1?.resumePromptMode === 'off' ? 'off' : 'standard';
+    const usageLimitRecoveryResumePromptMode =
+        usageLimitRecoverySettingsV1?.resumePromptMode === 'off' || usageLimitRecoverySettingsV1?.resumePromptMode === 'custom'
+            ? usageLimitRecoverySettingsV1.resumePromptMode
+            : 'standard';
+    const usageLimitRecoveryCustomResumePrompt = usageLimitRecoverySettingsV1?.customResumePrompt ?? '';
+    const [customResumePromptDraft, setCustomResumePromptDraft] = React.useState(usageLimitRecoveryCustomResumePrompt);
+    React.useEffect(() => {
+        setCustomResumePromptDraft(usageLimitRecoveryCustomResumePrompt);
+    }, [usageLimitRecoveryCustomResumePrompt]);
     const usageLimitRecoveryModeRef = React.useRef<'ask' | 'auto_wait'>(usageLimitRecoveryMode);
-    const usageLimitRecoveryResumePromptModeRef = React.useRef<'standard' | 'off'>(usageLimitRecoveryResumePromptMode);
+    const usageLimitRecoveryResumePromptModeRef = React.useRef<'standard' | 'off' | 'custom'>(usageLimitRecoveryResumePromptMode);
+    const usageLimitRecoveryCustomResumePromptRef = React.useRef(usageLimitRecoveryCustomResumePrompt);
     usageLimitRecoveryModeRef.current = usageLimitRecoveryMode;
     usageLimitRecoveryResumePromptModeRef.current = usageLimitRecoveryResumePromptMode;
+    usageLimitRecoveryCustomResumePromptRef.current = usageLimitRecoveryCustomResumePrompt;
+    const writeUsageLimitRecoverySettings = React.useCallback((next: Readonly<{
+        mode: 'ask' | 'auto_wait';
+        resumePromptMode: 'standard' | 'off' | 'custom';
+        customResumePrompt: string;
+    }>) => {
+        const customResumePrompt = next.customResumePrompt.trim().slice(0, 2000);
+        setUsageLimitRecoverySettingsV1({
+            v: 1,
+            mode: next.mode,
+            promptMode: 'standard',
+            resumePromptMode: next.resumePromptMode,
+            ...(customResumePrompt.length > 0 ? { customResumePrompt } : {}),
+        });
+    }, [setUsageLimitRecoverySettingsV1]);
+    const commitCustomResumePromptDraft = React.useCallback((draft: string) => {
+        writeUsageLimitRecoverySettings({
+            mode: usageLimitRecoveryModeRef.current,
+            resumePromptMode: usageLimitRecoveryResumePromptModeRef.current,
+            customResumePrompt: draft,
+        });
+    }, [writeUsageLimitRecoverySettings]);
     const providerUsageGaugeVisible = sessionProviderUsageGaugeMode !== 'hidden';
     const providerUsageGaugeWindowMode =
         sessionProviderUsageGaugeWindowMode === 'daily'
@@ -43,6 +75,7 @@ export const SessionProviderLimitsSettingsView = React.memo(function SessionProv
     ];
     const resumePromptOptions = [
         { id: 'standard', title: t('settingsSession.usageLimitRecovery.resumePromptStandardTitle'), subtitle: t('settingsSession.usageLimitRecovery.resumePromptStandardSubtitle') },
+        { id: 'custom', title: t('settingsSession.usageLimitRecovery.resumePromptCustomTitle'), subtitle: t('settingsSession.usageLimitRecovery.resumePromptCustomSubtitle') },
         { id: 'off', title: t('settingsSession.usageLimitRecovery.resumePromptOffTitle'), subtitle: t('settingsSession.usageLimitRecovery.resumePromptOffSubtitle') },
     ];
     const providerUsageGaugeWindowOptions = [
@@ -82,7 +115,11 @@ export const SessionProviderLimitsSettingsView = React.memo(function SessionProv
                         onSelect={(id) => {
                             if (id !== 'ask' && id !== 'auto_wait') return;
                             usageLimitRecoveryModeRef.current = id;
-                            setUsageLimitRecoverySettingsV1({ v: 1, mode: id, promptMode: 'standard', resumePromptMode: usageLimitRecoveryResumePromptModeRef.current });
+                            writeUsageLimitRecoverySettings({
+                                mode: id,
+                                resumePromptMode: usageLimitRecoveryResumePromptModeRef.current,
+                                customResumePrompt: usageLimitRecoveryCustomResumePromptRef.current,
+                            });
                             setOpenUsageLimitRecoveryMenu(false);
                         }}
                     />
@@ -101,19 +138,48 @@ export const SessionProviderLimitsSettingsView = React.memo(function SessionProv
                             title: t('settingsSession.usageLimitRecovery.resumePromptTitle'),
                             subtitle: usageLimitRecoveryResumePromptMode === 'off'
                                 ? t('settingsSession.usageLimitRecovery.resumePromptOffSelectedSubtitle')
-                                : t('settingsSession.usageLimitRecovery.resumePromptStandardSelectedSubtitle'),
+                                : usageLimitRecoveryResumePromptMode === 'custom'
+                                    ? t('settingsSession.usageLimitRecovery.resumePromptCustomSelectedSubtitle')
+                                    : t('settingsSession.usageLimitRecovery.resumePromptStandardSelectedSubtitle'),
                             icon: <Ionicons name="chatbubble-ellipses-outline" size={29} color={theme.colors.accent.indigo} />,
                             showSelectedSubtitle: false,
                             itemProps: { testID: 'settings-session-usageLimitRecovery-resumePrompt-trigger' },
                         }}
                         items={resumePromptOptions}
                         onSelect={(id) => {
-                            if (id !== 'standard' && id !== 'off') return;
+                            if (id !== 'standard' && id !== 'off' && id !== 'custom') return;
                             usageLimitRecoveryResumePromptModeRef.current = id;
-                            setUsageLimitRecoverySettingsV1({ v: 1, mode: usageLimitRecoveryModeRef.current, promptMode: 'standard', resumePromptMode: id });
+                            writeUsageLimitRecoverySettings({
+                                mode: usageLimitRecoveryModeRef.current,
+                                resumePromptMode: id,
+                                customResumePrompt: usageLimitRecoveryCustomResumePromptRef.current,
+                            });
                             setOpenUsageLimitRecoveryResumePromptMenu(false);
                         }}
                     />
+                    {usageLimitRecoveryResumePromptMode === 'custom' ? (
+                        <Item
+                            testID="settings-session-usageLimitRecovery-customResumePrompt"
+                            title={t('settingsSession.usageLimitRecovery.customResumePromptTitle')}
+                            subtitle={(
+                                <TextInput
+                                    testID="settings-session-usageLimitRecovery-customResumePrompt-input"
+                                    value={customResumePromptDraft}
+                                    onChangeText={setCustomResumePromptDraft}
+                                    onBlur={() => commitCustomResumePromptDraft(customResumePromptDraft)}
+                                    onSubmitEditing={() => commitCustomResumePromptDraft(customResumePromptDraft)}
+                                    placeholder={t('settingsSession.usageLimitRecovery.customResumePromptPlaceholder')}
+                                    placeholderTextColor={theme.colors.input.placeholder}
+                                    maxLength={2000}
+                                    style={{ color: theme.colors.input.text }}
+                                />
+                            )}
+                            subtitleLines={0}
+                            icon={<Ionicons name="create-outline" size={29} color={theme.colors.accent.indigo} />}
+                            mode="info"
+                            showChevron={false}
+                        />
+                    ) : null}
                 </ItemGroup>
             ) : null}
 

@@ -192,6 +192,104 @@ describe('context warning window resolution', () => {
             } as any,
         })).toBe(190_000);
     });
+
+    it('resolves the 1M window for an always-1M Claude model reported with its BASE id (Unified adoption)', () => {
+        expect(resolveContextWindowTokens({
+            agentId: 'claude',
+            metadata: {
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'claude',
+                    updatedAt: 1,
+                    currentModelId: 'claude-fable-5',
+                    availableModels: [],
+                },
+            } as any,
+        })).toBe(1_000_000);
+    });
+
+    it('bumps a stale Claude default window when observed usage exceeds it (incident: 733k > 200k)', () => {
+        expect(resolveContextWindowTokens({
+            agentId: 'claude',
+            metadata: null,
+            usageData: {
+                inputTokens: 700_000,
+                outputTokens: 250,
+                cacheCreation: 3_000,
+                cacheRead: 30_000,
+                contextSize: 733_000,
+            },
+        } as any)).toBe(1_000_000);
+    });
+
+    it('keeps the Claude default window when observed usage fits', () => {
+        expect(resolveContextWindowTokens({
+            agentId: 'claude',
+            metadata: null,
+            usageData: {
+                inputTokens: 100_000,
+                outputTokens: 250,
+                cacheCreation: 0,
+                cacheRead: 50_000,
+                contextSize: 150_000,
+            },
+        } as any)).toBe(200_000);
+    });
+
+    it('bumps a stale Claude session-models window when observed usage exceeds it', () => {
+        expect(resolveContextWindowTokens({
+            agentId: 'claude',
+            metadata: {
+                sessionModelsV1: {
+                    v: 1,
+                    provider: 'claude',
+                    updatedAt: 1,
+                    currentModelId: 'claude-sonnet-4-6',
+                    availableModels: [
+                        {
+                            id: 'claude-sonnet-4-6',
+                            name: 'Sonnet 4.6',
+                            contextWindowTokens: 200_000,
+                        },
+                    ],
+                },
+            } as any,
+            usageData: {
+                inputTokens: 700_000,
+                outputTokens: 250,
+                cacheCreation: 3_000,
+                cacheRead: 30_000,
+                contextSize: 733_000,
+            },
+        } as any)).toBe(1_000_000);
+    });
+
+    it('does not apply the Claude window ladder to non-Claude providers', () => {
+        expect(resolveContextWindowTokens({
+            agentId: 'codex',
+            metadata: null,
+            usageData: {
+                inputTokens: 300_000,
+                outputTokens: 250,
+                cacheCreation: 0,
+                cacheRead: 0,
+                contextSize: 300_000,
+                contextWindowTokens: 258_400,
+            },
+        } as any)).toBe(258_400);
+    });
+});
+
+describe('getContextUsageState overflow guard', () => {
+    it('never reports more than 100% usage even when used tokens exceed a stale window', () => {
+        const usageState = getContextUsageState(733_000, true, 200_000);
+        expect(usageState?.usedPercentage).toBe(100);
+        expect(usageState?.usedRatio).toBe(1);
+        expect(usageState?.severity).toBe('critical');
+        // Raw token counts stay honest for the "used/total" detail copy.
+        expect(usageState?.usedTokens).toBe(733_000);
+        expect(usageState?.contextWindowTokens).toBe(200_000);
+    });
 });
 
 describe('getContextWarning', () => {

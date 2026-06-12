@@ -43,6 +43,12 @@ function resolveSubmitDecision(opts: SubmitSessionUserMessageOptions): SessionMe
         session: opts.session,
         nowMs: opts.nowMs,
         forceImmediate: opts.forceImmediate,
+        text: opts.text,
+        permissionModeApplyTiming: opts.permissionModeApplyTiming,
+        nonSteerableSendPrompt: opts.nonSteerableSendPrompt,
+        providerNonSteerablePayloadReason: opts.providerNonSteerablePayloadReason,
+        applyConfigAndSteer: opts.applyConfigAndSteer,
+        steerWithoutConfig: opts.steerWithoutConfig,
     });
 }
 

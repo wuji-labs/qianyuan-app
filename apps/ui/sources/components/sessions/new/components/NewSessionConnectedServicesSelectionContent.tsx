@@ -35,6 +35,7 @@ export type NewSessionConnectedServicesSelectionContentProps = Readonly<{
     }>) => ConnectedServicesSelectionOptionAvailability;
     onReconnectProfile?: (serviceId: string, profileId: string) => void;
     onOpenSettings: () => void;
+    requestClose?: () => void;
     maxHeight: number;
 }>;
 
@@ -136,8 +137,12 @@ export function NewSessionConnectedServicesSelectionContent(props: NewSessionCon
                 maxHeight={props.maxHeight}
                 heightBehavior={resolvePopoverSelectionListHeightBehavior()}
                 keyboardHintsEnabled={false}
-                onRequestClose={() => {}}
-                onSelect={() => {}}
+                onRequestClose={() => {
+                    props.requestClose?.();
+                }}
+                onSelect={() => {
+                    props.requestClose?.();
+                }}
             />
         </View>
     );
