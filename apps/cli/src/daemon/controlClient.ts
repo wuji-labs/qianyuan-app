@@ -333,6 +333,20 @@ export async function notifyDaemonConnectedServiceTurnLifecycle(
   }, options);
 }
 
+/**
+ * QAE-1: propagates a user "Stop waiting" (wait-resume cancel) to the daemon so
+ * its durable recovery wait state (runtime-auth recovery + inactive usage-limit
+ * stores) is cancelled too. Best-effort local control call.
+ */
+export async function notifyDaemonConnectedServiceUsageLimitWaitResumeCancel(
+  body: Readonly<{ sessionId: string }>,
+  options: DaemonControlRequestOptions = {},
+): Promise<{ error?: string } | any> {
+  return await daemonPost('/connected-service-usage-limit/wait-resume-cancel', {
+    sessionId: body.sessionId,
+  }, options);
+}
+
 export async function notifyDaemonConnectedServiceQuotaSnapshot(
   body: Readonly<{
     sessionId: string;

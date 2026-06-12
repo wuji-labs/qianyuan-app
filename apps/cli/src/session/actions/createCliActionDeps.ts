@@ -111,6 +111,16 @@ export type CancelInactiveSessionUsageLimitRecoveryCheck = (input: Readonly<{
   sessionId: string;
 }>) => void;
 
+/**
+ * QAE-1: cancels the daemon RUNTIME-AUTH recovery intents for a session when the
+ * user cancels wait-resume. Without this, a durable `waiting` runtime-auth intent
+ * (group-exhausted/profile-pinned reset wait) stays armed after "Stop waiting"
+ * and resumes the session involuntarily at the provider reset time.
+ */
+export type CancelConnectedServiceRuntimeAuthRecovery = (input: Readonly<{
+  sessionId: string;
+}>) => Promise<unknown> | unknown;
+
 export type NotifyConnectedServiceRuntimeAuthFailure = NotifyRuntimeAuthFailure;
 
 export type RetryTemporaryThrottleNow = (input: Readonly<{
@@ -510,6 +520,7 @@ export function createCliActionDeps(params: Readonly<{
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
+  cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
 }>): ActionExecutorDeps {
@@ -1316,6 +1327,14 @@ export function createCliActionDeps(params: Readonly<{
         : null;
       if (rawResult?.ok === true) {
         params.cancelInactiveSessionUsageLimitRecoveryCheck?.({ sessionId });
+        // QAE-1: also clear the daemon runtime-auth recovery store — a waiting
+        // intent left armed here resumes the session involuntarily at reset.
+        // Best-effort: store-cancel failures must not fail the user cancel.
+        try {
+          await params.cancelConnectedServiceRuntimeAuthRecovery?.({ sessionId });
+        } catch {
+          // non-fatal; the wiring owner logs its own failures
+        }
       }
       return result;
     },

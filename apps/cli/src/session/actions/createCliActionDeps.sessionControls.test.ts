@@ -1066,6 +1066,70 @@ describe('createCliActionDeps session controls', () => {
     });
   });
 
+  // QAE-1: the routed daemon-side cancel must clear the daemon runtime-auth
+  // recovery store too, not only the inactive usage-limit check — an armed
+  // runtime-auth waiting intent resumes the session involuntarily at reset.
+  it('cancels the daemon runtime-auth recovery intent when wait-resume is cancelled', async () => {
+    const cancelConnectedServiceRuntimeAuthRecovery = vi.fn();
+    mocks.resolveSessionTransportContext.mockResolvedValueOnce({
+      ok: true as const,
+      sessionId: 'sess_inactive',
+      rawSession: {
+        active: false,
+        path: '/repo',
+        machineId: 'machine-local',
+        metadata: {
+          machineId: 'machine-local',
+          sessionUsageLimitRecoveryV1: {
+            v: 1,
+            status: 'waiting',
+            issueFingerprint: 'usage-limit:sess_inactive:reset',
+            armedAtMs: 1,
+            resetAtMs: 2,
+            nextCheckAtMs: 2,
+            attemptCount: 0,
+            maxAttempts: 3,
+            lastProbeError: null,
+            selectedAuth: { kind: 'native', serviceId: 'claude-subscription' },
+          },
+          agentRuntimeDescriptorV1: { v: 1, providerId: 'claude' },
+        },
+      },
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(3),
+        encryptionVariant: 'legacy' as const,
+      },
+      mode: 'plain' as const,
+    });
+    const deps = createCliActionDeps({
+      token: 'token',
+      credentials: createCredentials(),
+      sessionId: 'sess_inactive',
+      ctx: {
+        encryptionKey: new Uint8Array(32).fill(1),
+        encryptionVariant: 'legacy',
+      },
+      mode: 'plain',
+      rawSession: { metadata: {} },
+      cancelConnectedServiceRuntimeAuthRecovery,
+    } as Parameters<typeof createCliActionDeps>[0] & Readonly<{
+      cancelConnectedServiceRuntimeAuthRecovery: ReturnType<typeof vi.fn>;
+    }>);
+
+    await expect(deps.sessionUsageLimitWaitResumeCancel?.({
+      sessionId: 'sess_inactive',
+      issueFingerprint: null,
+    })).resolves.toMatchObject({
+      ok: true,
+      status: 'cancelled',
+      sessionId: 'sess_inactive',
+    });
+
+    expect(cancelConnectedServiceRuntimeAuthRecovery).toHaveBeenCalledWith({
+      sessionId: 'sess_inactive',
+    });
+  });
+
   it('fails usage-limit recovery actions closed when the feature is disabled for the target server', async () => {
     mocks.resolveCliFeatureDecisionForServer.mockResolvedValue({ decision: { state: 'disabled' } });
     const deps = createCliActionDeps({

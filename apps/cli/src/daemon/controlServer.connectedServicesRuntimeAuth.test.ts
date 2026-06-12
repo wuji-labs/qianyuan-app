@@ -1696,6 +1696,78 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
     }
   });
 
+  // QAE-1: user "Stop waiting" must clear the daemon-side durable recovery wait
+  // state regardless of provider runtime controls; runners notify this endpoint.
+  it('dispatches usage-limit wait-resume cancels to the daemon recovery owner', async () => {
+    const handleConnectedServiceUsageLimitWaitResumeCancel = vi.fn(async () => ({ ok: true }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceUsageLimitWaitResumeCancel,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-usage-limit/wait-resume-cancel',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: { sessionId: 'sess_1' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        ok: true,
+        result: { ok: true },
+      });
+      expect(handleConnectedServiceUsageLimitWaitResumeCancel).toHaveBeenCalledWith({
+        sessionId: 'sess_1',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 501 for usage-limit wait-resume cancels when no daemon handler is wired', async () => {
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-usage-limit/wait-resume-cancel',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: { sessionId: 'sess_1' },
+      });
+      expect(response.statusCode).toBe(501);
+      expect(response.json()).toEqual({
+        ok: false,
+        errorCode: 'connected_service_usage_limit_wait_resume_cancel_handler_unavailable',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('dispatches Codex ChatGPT refresh bridge requests to the daemon handler', async () => {
     const handleCodexChatGptAuthTokensRefresh = vi.fn(async () => ({
       accessToken: 'fresh-access',

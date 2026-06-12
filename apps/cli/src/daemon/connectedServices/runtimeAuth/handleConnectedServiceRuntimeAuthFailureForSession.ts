@@ -381,7 +381,31 @@ function maybeRestartAfterRuntimeGroupSwitch(input: Readonly<{
   });
 }
 
-async function maybeContinueAfterHotAppliedRuntimeGeneration(input: Readonly<{
+function resolveRuntimeGroupSwitchContinuationContext(
+  result: ConnectedServiceAuthGroupSwitchResult,
+): Readonly<{
+  action: 'hot_applied' | 'restart_requested';
+  activeProfileId: string | null;
+  generation: number;
+}> | null {
+  if (result.status === 'observed_generation') {
+    return { action: 'hot_applied', activeProfileId: result.activeProfileId, generation: result.generation };
+  }
+  if (result.status !== 'switched') return null;
+  if (result.mode === 'hot_apply') {
+    return { action: 'hot_applied', activeProfileId: result.activeProfileId, generation: result.generation };
+  }
+  // QA-F 2026-06-12 (session cmqb2ikma): a `spawn_next_turn` switch requests a live
+  // restart-resume; arm a PENDING continuation (`restart_requested`) so the post-respawn
+  // session-report resolver can drive the resume prompt / original replay. Without this the
+  // respawned session resumes its provider context and then idles forever.
+  if (result.mode === 'spawn_next_turn') {
+    return { action: 'restart_requested', activeProfileId: result.activeProfileId, generation: result.generation };
+  }
+  return null;
+}
+
+async function maybeContinueAfterRuntimeGroupSwitch(input: Readonly<{
   tracked: TrackedSession;
   sessionId: string;
   selection: Extract<RuntimeRecoverySelection, Readonly<{ kind: 'group' }>>;
@@ -389,13 +413,10 @@ async function maybeContinueAfterHotAppliedRuntimeGeneration(input: Readonly<{
   continueAfterRuntimeAuthSwitch?: RuntimeAuthSwitchContinuation | null;
 }>): Promise<void> {
   if (!input.continueAfterRuntimeAuthSwitch) return;
-  if (
-    input.result.status !== 'observed_generation'
-    && !(input.result.status === 'switched' && input.result.mode === 'hot_apply')
-  ) {
-    return;
-  }
-  const activeProfileId = normalizeSessionId(input.result.activeProfileId);
+  const continuationContext = resolveRuntimeGroupSwitchContinuationContext(input.result);
+  if (!continuationContext) return;
+  const { action } = continuationContext;
+  const activeProfileId = normalizeSessionId(continuationContext.activeProfileId);
   if (!activeProfileId) return;
 
   const serviceId = input.selection.serviceId as ConnectedServiceId;
@@ -416,16 +437,16 @@ async function maybeContinueAfterHotAppliedRuntimeGeneration(input: Readonly<{
     tracked: input.tracked,
     sessionId: input.sessionId,
     attemptId: buildConnectedServiceSwitchContinuationAttemptId({
-      action: 'hot_applied',
+      action,
       serviceIds,
       normalizedBindings,
       expectedGroupGenerationByServiceId: {
-        [serviceId]: input.result.generation,
+        [serviceId]: continuationContext.generation,
       },
     }),
     normalizedBindings,
     serviceIds,
-    action: 'hot_applied',
+    action,
     switchReason: 'automatic_runtime_failure',
   });
 }
@@ -857,7 +878,7 @@ export async function handleConnectedServiceRuntimeAuthFailureForSession(input: 
         restartSession: input.restartSession ?? null,
         onRestartFailure: input.onRuntimeAuthRestartFailure ?? null,
       });
-      await maybeContinueAfterHotAppliedRuntimeGeneration({
+      await maybeContinueAfterRuntimeGroupSwitch({
         tracked,
         sessionId: input.sessionId,
         selection,

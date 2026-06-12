@@ -172,6 +172,15 @@ export function registerSessionControlHandlers(
     getSessionMetadata?: (() => Metadata | null) | null;
     updateSessionMetadata?: ((handler: (metadata: Metadata) => Metadata) => Promise<void> | void) | null;
     sessionRuntimeControls?: SessionRuntimeControls | null;
+    /**
+     * QAE-1: propagates a SUCCESSFUL user wait-resume cancel to the daemon-side
+     * durable recovery owners (runtime-auth recovery + inactive usage-limit
+     * stores). Provider runtime controls and the local metadata fallback only
+     * clear session-side state; without this propagation a daemon `waiting`
+     * intent stays armed and resumes the session involuntarily at reset time.
+     * Best-effort: notifier failures never fail the cancel itself.
+     */
+    notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{ sessionId: string }>) => Promise<unknown> | unknown) | null;
   }>,
 ): void {
   let usageLimitRecoveryFeatureEnabledPromise: Promise<boolean> | null = null;
@@ -287,6 +296,23 @@ export function registerSessionControlHandlers(
     if (!await usageLimitRecoveryFeatureEnabled()) {
       return usageLimitRecoveryFeatureDisabledResult({ sessionId: request.sessionId });
     }
+    // QAE-1: every SUCCESSFUL cancel must also reach the daemon recovery owners,
+    // regardless of which path (provider runtime control or metadata fallback)
+    // handled it — otherwise the daemon's durable waiting intent stays armed and
+    // resumes the session involuntarily at the provider reset time.
+    const propagateCancelToDaemon = async (
+      result: SessionUsageLimitRecoveryOperationResultV1,
+    ): Promise<SessionUsageLimitRecoveryOperationResultV1> => {
+      if (result.ok !== true || typeof opts.notifyUsageLimitWaitResumeCancelled !== 'function') {
+        return result;
+      }
+      try {
+        await opts.notifyUsageLimitWaitResumeCancelled({ sessionId: request.sessionId });
+      } catch {
+        // Best-effort: daemon-side cancel propagation must not fail the user cancel.
+      }
+      return result;
+    };
     if (typeof opts.sessionRuntimeControls?.cancelUsageLimitWaitResume !== 'function') {
       if (typeof opts.updateSessionMetadata !== 'function') {
         return normalizeUsageLimitRecoveryOperationResult(
@@ -306,16 +332,16 @@ export function registerSessionControlHandlers(
           status: 'cancelled',
         });
       });
-      return normalizeUsageLimitRecoveryOperationResult({
+      return await propagateCancelToDaemon(normalizeUsageLimitRecoveryOperationResult({
         ok: true,
         status: 'cancelled',
         ...(cancelledIssueFingerprint ? { issueFingerprint: cancelledIssueFingerprint } : {}),
-      }, request.sessionId);
+      }, request.sessionId));
     }
-    return normalizeUsageLimitRecoveryOperationResult(
+    return await propagateCancelToDaemon(normalizeUsageLimitRecoveryOperationResult(
       await opts.sessionRuntimeControls.cancelUsageLimitWaitResume(request),
       request.sessionId,
-    );
+    ));
   });
 
   rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_CHECK_NOW, async (raw: unknown) => {

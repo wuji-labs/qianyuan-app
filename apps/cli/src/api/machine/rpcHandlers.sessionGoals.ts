@@ -15,6 +15,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readCredentials, type Credentials } from '@/persistence';
 import {
   createCliActionDeps,
+  type CancelConnectedServiceRuntimeAuthRecovery,
   type CancelInactiveSessionUsageLimitRecoveryCheck,
   type NotifyConnectedServiceRuntimeAuthFailure,
   type ResumeInactiveSessionWhenUsageLimitReady,
@@ -48,6 +49,7 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
+  cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
 }>;
@@ -334,6 +336,9 @@ async function executeResolvedUsageLimitRecoveryControl(params: Readonly<{
       : {}),
     ...(params.deps?.cancelInactiveSessionUsageLimitRecoveryCheck
       ? { cancelInactiveSessionUsageLimitRecoveryCheck: params.deps.cancelInactiveSessionUsageLimitRecoveryCheck }
+      : {}),
+    ...(params.deps?.cancelConnectedServiceRuntimeAuthRecovery
+      ? { cancelConnectedServiceRuntimeAuthRecovery: params.deps.cancelConnectedServiceRuntimeAuthRecovery }
       : {}),
     ...(params.deps?.notifyConnectedServiceRuntimeAuthFailure
       ? { notifyConnectedServiceRuntimeAuthFailure: params.deps.notifyConnectedServiceRuntimeAuthFailure }

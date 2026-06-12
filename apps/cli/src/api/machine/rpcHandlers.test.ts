@@ -91,6 +91,7 @@ vi.mock('@/configuration', () => ({
     happyHomeDir: '/tmp/happier-test-home',
     logsDir: '/tmp',
     daemonStateFile: '/tmp/happier-test-home/daemon.state.json',
+    daemonReattachCatchUpConcurrency: 0,
     isDaemonProcess: false,
     replaySeedMaxChars: 50_000,
     replaySeedCandidateLimit: 500,

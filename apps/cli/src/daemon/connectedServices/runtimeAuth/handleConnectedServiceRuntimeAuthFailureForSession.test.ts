@@ -2710,6 +2710,94 @@ describe('handleConnectedServiceRuntimeAuthFailureForSession', () => {
     });
   });
 
+  it('arms continuation as restart_requested when runtime recovery switches a group account for the next turn', async () => {
+    // QA-F 2026-06-12 (session cmqb2ikma): a reactive usage-limit switch that lands as
+    // `switched` + `spawn_next_turn` requests a live restart-resume but never armed the
+    // continuation attempt — the respawned session resumed its provider context and then sat
+    // idle forever (no continuation prompt, no original-prompt replay). The restart path must
+    // arm a pending continuation (action `restart_requested`) so the post-respawn webhook
+    // resolver can drive the resume prompt.
+    const restartSession = vi.fn(async () => {});
+    const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
+    const switchAfterClassifiedFailure = vi.fn(async () => ({
+      status: 'switched' as const,
+      activeProfileId: 'backup',
+      generation: 2,
+      mode: 'spawn_next_turn' as const,
+    }));
+
+    await expect(handleConnectedServiceRuntimeAuthFailureForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+        },
+      }],
+      switchCoordinator: { switchAfterClassifiedFailure },
+      restartSession,
+      continueAfterRuntimeAuthSwitch,
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: {
+        kind: 'usage_limit',
+        limitCategory: 'usage_limit',
+        serviceId: 'openai-codex',
+        profileId: 'primary',
+        groupId: 'main',
+        resetsAtMs: null,
+        retryAfterMs: 30_000,
+        quotaScope: 'account',
+        providerLimitId: 'weekly',
+        action: null,
+        planType: null,
+        rateLimits: null,
+        source: 'structured_provider_error',
+      },
+    })).resolves.toMatchObject({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'backup',
+        generation: 2,
+        mode: 'spawn_next_turn',
+      },
+    });
+
+    expect(restartSession).toHaveBeenCalledOnce();
+    expect(continueAfterRuntimeAuthSwitch).toHaveBeenCalledWith({
+      tracked: expect.objectContaining({ happySessionId: 'sess_1' }),
+      sessionId: 'sess_1',
+      attemptId: 'connected-service-auth-switch|restart_requested|openai-codex:group:main:backup:2',
+      normalizedBindings: {
+        v: 1,
+        bindingsByServiceId: {
+          'openai-codex': {
+            source: 'connected',
+            selection: 'group',
+            groupId: 'main',
+            profileId: 'backup',
+          },
+        },
+      },
+      serviceIds: new Set(['openai-codex']),
+      action: 'restart_requested',
+      switchReason: 'automatic_runtime_failure',
+    });
+  });
+
   it('does not re-continue a stale-profile replay when the same target is already pending provider proof', async () => {
     const continueAfterRuntimeAuthSwitch = vi.fn(async () => {});
     const switchAfterClassifiedFailure = vi.fn(async () => ({

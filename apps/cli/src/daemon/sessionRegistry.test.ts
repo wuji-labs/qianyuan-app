@@ -104,6 +104,66 @@ describe('sessionRegistry', () => {
     await expect(removeSessionMarker(99999)).resolves.toBeUndefined();
   });
 
+  it('refreshSessionMarkerRespawn rewrites the respawn descriptor from updated spawn options and preserves marker identity fields', async () => {
+    const { listSessionMarkers, refreshSessionMarkerRespawn, writeSessionMarker } = await import('./sessionRegistry');
+    const { buildSessionRunnerRespawnDescriptorV1FromSpawnOptions } = await import('./processSupervision/sessionRunnerRespawnDescriptor');
+
+    const previousBindings = {
+      v: 1,
+      bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'profile', profileId: 'old-profile' } },
+    };
+    const processCommandHash = 'b'.repeat(64);
+    const previousRespawn = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions({
+      directory: '/tmp/work',
+      connectedServices: previousBindings,
+    });
+    expect(previousRespawn).not.toBeNull();
+    await writeSessionMarker({
+      pid: 7777,
+      happySessionId: 'sess-switch',
+      startedBy: 'daemon',
+      cwd: '/tmp/work',
+      processCommandHash,
+      metadata: { path: '/tmp/work' },
+      respawn: previousRespawn!,
+    });
+
+    // Hot-applied auth switch updates tracked spawn options in memory; the
+    // durable marker must follow or the next daemon restores stale bindings
+    // and treats real switch requests as 'unchanged'.
+    const updatedBindings = {
+      v: 1,
+      bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'profile', profileId: 'new-profile' } },
+    };
+    await refreshSessionMarkerRespawn({
+      pid: 7777,
+      spawnOptions: {
+        directory: '/tmp/work',
+        connectedServices: updatedBindings,
+        connectedServicesUpdatedAt: 1234,
+      },
+    });
+
+    const markers = await listSessionMarkers();
+    expect(markers).toHaveLength(1);
+    const marker = markers[0]!;
+    expect(marker.happySessionId).toBe('sess-switch');
+    expect(marker.processCommandHash).toBe(processCommandHash);
+    expect(marker.metadata).toEqual({ path: '/tmp/work' });
+    expect((marker.respawn as { connectedServices?: unknown } | undefined)?.connectedServices).toEqual(updatedBindings);
+  });
+
+  it('refreshSessionMarkerRespawn is a no-op when no marker exists for the pid', async () => {
+    const { listSessionMarkers, refreshSessionMarkerRespawn } = await import('./sessionRegistry');
+
+    await refreshSessionMarkerRespawn({
+      pid: 8888,
+      spawnOptions: { directory: '/tmp/none' },
+    });
+
+    await expect(listSessionMarkers()).resolves.toHaveLength(0);
+  });
+
   it('writes valid JSON payload shape to disk', async () => {
     const { configuration } = await import('@/configuration');
     const { writeSessionMarker } = await import('./sessionRegistry');

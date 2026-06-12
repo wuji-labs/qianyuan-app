@@ -60,6 +60,7 @@ import { registerMachineSessionGoalRpcHandlers } from './rpcHandlers.sessionGoal
 import { registerMachineServerWorkRpcHandlers } from './rpcHandlers.serverWork';
 import type { DaemonServerWorkScheduler } from '@/daemon/serverWork';
 import type {
+  CancelConnectedServiceRuntimeAuthRecovery,
   CancelInactiveSessionUsageLimitRecoveryCheck,
   NotifyConnectedServiceRuntimeAuthFailure,
   ResumeInactiveSessionWhenUsageLimitReady,
@@ -184,6 +185,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
+  cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
   notifyConnectedServiceRuntimeAuthFailure?: NotifyConnectedServiceRuntimeAuthFailure;
   retryTemporaryThrottleNow?: RetryTemporaryThrottleNow;
 }>;
@@ -609,6 +611,9 @@ export function registerMachineRpcHandlers(params: Readonly<{
         : {}),
       ...(params.deps?.cancelInactiveSessionUsageLimitRecoveryCheck
         ? { cancelInactiveSessionUsageLimitRecoveryCheck: params.deps.cancelInactiveSessionUsageLimitRecoveryCheck }
+        : {}),
+      ...(params.deps?.cancelConnectedServiceRuntimeAuthRecovery
+        ? { cancelConnectedServiceRuntimeAuthRecovery: params.deps.cancelConnectedServiceRuntimeAuthRecovery }
         : {}),
       ...(params.deps?.notifyConnectedServiceRuntimeAuthFailure
         ? { notifyConnectedServiceRuntimeAuthFailure: params.deps.notifyConnectedServiceRuntimeAuthFailure }

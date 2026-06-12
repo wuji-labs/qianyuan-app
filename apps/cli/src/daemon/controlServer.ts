@@ -236,6 +236,7 @@ export function createDaemonControlApp({
   controlToken,
   handleConnectedServiceRuntimeAuthFailure,
   handleConnectedServiceTurnLifecycle,
+  handleConnectedServiceUsageLimitWaitResumeCancel,
   handleSessionConnectedServiceAuthSwitch,
   handleConnectedServiceQuotaSnapshot,
   handleCodexChatGptAuthTokensRefresh,
@@ -265,6 +266,11 @@ export function createDaemonControlApp({
     sessionId: string;
     event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
     terminalStatus?: 'completed' | 'failed';
+  }>) => Promise<unknown>;
+  // QAE-1: user "Stop waiting" propagation — cancels the daemon-side durable
+  // recovery wait state (runtime-auth recovery + inactive usage-limit stores).
+  handleConnectedServiceUsageLimitWaitResumeCancel?: (input: Readonly<{
+    sessionId: string;
   }>) => Promise<unknown>;
   handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
   handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
@@ -762,6 +768,38 @@ export function createDaemonControlApp({
       sessionId: request.body.sessionId,
       event: request.body.event,
       ...(request.body.terminalStatus ? { terminalStatus: request.body.terminalStatus } : {}),
+    });
+    return { ok: true as const, result };
+  });
+
+  typed.post('/connected-service-usage-limit/wait-resume-cancel', {
+    schema: {
+      body: z.object({
+        sessionId: z.string().min(1),
+      }),
+      response: {
+        200: z.object({
+          ok: z.literal(true),
+          result: z.unknown(),
+        }),
+        401: authSchema401,
+        501: z.object({
+          ok: z.literal(false),
+          errorCode: z.literal('connected_service_usage_limit_wait_resume_cancel_handler_unavailable'),
+        }),
+      },
+    },
+    preHandler: requireAuth,
+  }, async (request, reply) => {
+    if (!handleConnectedServiceUsageLimitWaitResumeCancel) {
+      reply.code(501);
+      return {
+        ok: false as const,
+        errorCode: 'connected_service_usage_limit_wait_resume_cancel_handler_unavailable' as const,
+      };
+    }
+    const result = await handleConnectedServiceUsageLimitWaitResumeCancel({
+      sessionId: request.body.sessionId,
     });
     return { ok: true as const, result };
   });
@@ -1278,6 +1316,7 @@ export function startDaemonControlServer({
   controlToken,
   handleConnectedServiceRuntimeAuthFailure,
   handleConnectedServiceTurnLifecycle,
+  handleConnectedServiceUsageLimitWaitResumeCancel,
   handleSessionConnectedServiceAuthSwitch,
   handleConnectedServiceQuotaSnapshot,
   handleCodexChatGptAuthTokensRefresh,
@@ -1305,6 +1344,11 @@ export function startDaemonControlServer({
     event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled';
     terminalStatus?: 'completed' | 'failed';
   }>) => Promise<unknown>;
+  // QAE-1: user "Stop waiting" propagation — cancels the daemon-side durable
+  // recovery wait state (runtime-auth recovery + inactive usage-limit stores).
+  handleConnectedServiceUsageLimitWaitResumeCancel?: (input: Readonly<{
+    sessionId: string;
+  }>) => Promise<unknown>;
   handleSessionConnectedServiceAuthSwitch?: (input: Readonly<SessionConnectedServiceAuthSwitchRpcParams>) => Promise<unknown>;
   handleConnectedServiceQuotaSnapshot?: (input: Readonly<{
     sessionId: string;
@@ -1329,6 +1373,7 @@ export function startDaemonControlServer({
       controlToken,
       handleConnectedServiceRuntimeAuthFailure,
       handleConnectedServiceTurnLifecycle,
+      handleConnectedServiceUsageLimitWaitResumeCancel,
       handleSessionConnectedServiceAuthSwitch,
       handleConnectedServiceQuotaSnapshot,
       handleCodexChatGptAuthTokensRefresh,

@@ -343,6 +343,100 @@ describe('registerSessionHandlers session controls', () => {
     expect(cancelUsageLimitWaitResume).not.toHaveBeenCalled();
   });
 
+  // QAE-1: "Stop waiting" must reach the daemon recovery schedulers (runtime-auth
+  // recovery store) regardless of whether the provider registers a cancel runtime
+  // control. The session-side handler propagates every SUCCESSFUL cancel through
+  // the injected daemon notifier; a daemon-side waiting intent left armed after a
+  // user cancel resumes the session involuntarily at the provider reset time.
+  it('propagates successful wait-resume cancels to the daemon recovery owner (runtime-control path)', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const cancelUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'cancelled' } }));
+    const notifyUsageLimitWaitResumeCancelled = vi.fn(async () => ({ ok: true }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        cancelUsageLimitWaitResume,
+      },
+      notifyUsageLimitWaitResumeCancelled,
+    });
+
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+    }))).toMatchObject({ ok: true, status: 'cancelled' });
+    expect(notifyUsageLimitWaitResumeCancelled).toHaveBeenCalledWith({ sessionId: 'sess_1' });
+  });
+
+  it('propagates successful wait-resume cancels to the daemon recovery owner (no provider runtime control)', async () => {
+    const { handlers, registrar } = createRegistrar();
+    let metadata: Metadata = {
+      path: process.cwd(),
+      host: 'test-host',
+      homeDir: '/tmp',
+      happyHomeDir: '/tmp/.happier',
+      happyLibDir: '/tmp/.happier/lib',
+      happyToolsDir: '/tmp/.happier/tools',
+      sessionUsageLimitRecoveryV1: {
+        v: 1,
+        status: 'waiting',
+        issueFingerprint: 'usage-limit:sess_1:reset',
+        armedAtMs: 1,
+        resetAtMs: null,
+        nextCheckAtMs: null,
+        attemptCount: 0,
+        maxAttempts: 0,
+        lastProbeError: null,
+        resumePromptMode: 'standard',
+        selectedAuth: { kind: 'native' },
+      },
+    } as Metadata;
+    const updateSessionMetadata = vi.fn(async (handler: (metadata: Metadata) => Metadata) => {
+      metadata = handler(metadata);
+    });
+    const notifyUsageLimitWaitResumeCancelled = vi.fn(async () => ({ ok: true }));
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      getSessionMetadata: () => metadata,
+      updateSessionMetadata,
+      notifyUsageLimitWaitResumeCancelled,
+    });
+
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+    }))).toMatchObject({ ok: true, status: 'cancelled' });
+    expect(notifyUsageLimitWaitResumeCancelled).toHaveBeenCalledWith({ sessionId: 'sess_1' });
+  });
+
+  it('does not propagate failed wait-resume cancels and survives notifier failures', async () => {
+    const { handlers, registrar } = createRegistrar();
+    const cancelUsageLimitWaitResume = vi.fn(async () => ({
+      ok: false,
+      errorCode: 'usage_limit_issue_unavailable',
+      error: 'usage_limit_issue_unavailable',
+    }));
+    const notifyUsageLimitWaitResumeCancelled = vi.fn(async () => {
+      throw new Error('daemon unreachable');
+    });
+
+    registerSessionHandlers(registrar, process.cwd(), {
+      sessionRuntimeControls: {
+        cancelUsageLimitWaitResume,
+      },
+      notifyUsageLimitWaitResumeCancelled,
+    });
+
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+    }))).toMatchObject({ ok: false });
+    expect(notifyUsageLimitWaitResumeCancelled).not.toHaveBeenCalled();
+
+    // Successful cancel must not fail when the daemon notifier throws (best-effort).
+    cancelUsageLimitWaitResume.mockResolvedValueOnce({ ok: true, recovery: { status: 'cancelled' } } as never);
+    expect(parseUsageLimitResult(await handlers.get(SESSION_RPC_METHODS.SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL)?.({
+      sessionId: 'sess_1',
+    }))).toMatchObject({ ok: true, status: 'cancelled' });
+    expect(notifyUsageLimitWaitResumeCancelled).toHaveBeenCalledWith({ sessionId: 'sess_1' });
+  });
+
   it('rejects non-boolean rememberPreference values before dispatching runtime controls', async () => {
     const { handlers, registrar } = createRegistrar();
     const enableUsageLimitWaitResume = vi.fn(async () => ({ ok: true, recovery: { status: 'waiting' } }));

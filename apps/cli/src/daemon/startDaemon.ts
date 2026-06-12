@@ -125,6 +125,7 @@ import {
   resolveWindowsTerminalWindowName,
 } from './platform/windows/windowsHostedSessionRuntime';
 import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
+import { refreshSessionMarkerRespawn } from './sessionRegistry';
 import { buildHappySessionControlArgs } from './sessionSpawnArgs';
 import { serializeDaemonInitialGoalForEnv, HAPPIER_DAEMON_INITIAL_GOAL_ENV_KEY } from '@/agent/runtime/sessionInitialGoal';
 import { resolveExistingSessionAttachContext } from './sessionEncryption/resolveExistingSessionAttachContext';
@@ -3516,6 +3517,18 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               });
             },
             registerHotApplyTargets: (switchTracked) => {
+              // Hot-apply keeps the runner alive, so no webhook will rewrite the durable
+              // session marker — refresh it here or a daemon restart restores the
+              // pre-switch bindings and treats real switch requests as 'unchanged'.
+              if (switchTracked.spawnOptions) {
+                void refreshSessionMarkerRespawn({
+                  pid: switchTracked.pid,
+                  spawnOptions: switchTracked.spawnOptions,
+                  encryptionMaterial: credentials.encryption,
+                }).catch((error) => {
+                  logger.debug('[DAEMON RUN] Failed to refresh session marker after hot-applied auth switch', error);
+                });
+              }
               const materializationIdentity = readConnectedServiceMaterializationIdentityV1(
                 switchTracked.spawnOptions?.connectedServiceMaterializationIdentityV1,
               );
@@ -4170,6 +4183,35 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           usageLimitRecovery: inactiveUsageLimitRecoveryScheduler,
         });
 
+        // QAE-1: single daemon-side owner for a user "Stop waiting" (wait-resume
+        // cancel). It must clear BOTH durable recovery stores (runtime-auth
+        // recovery + inactive usage-limit) and superseded report-outbox /
+        // pending-continuation state — a `waiting` intent left armed in either
+        // store resumes the session involuntarily at the provider reset time.
+        const cancelConnectedServiceUsageLimitWaitResumeForSession = async (
+          input: Readonly<{ sessionId: string }>,
+        ): Promise<Readonly<{ ok: true }>> => {
+          const { sessionId } = input;
+          inactiveUsageLimitRecoveryCheckRunners.delete(sessionId);
+          const settled = await Promise.allSettled([
+            inactiveUsageLimitRecoveryScheduler.cancel({ sessionId }),
+            runtimeAuthRecoveryScheduler?.cancel({ sessionId }) ?? Promise.resolve(null),
+            clearConnectedServiceRecoveryAfterSupersession({
+              sessionId,
+              event: { kind: 'manual_session_supersession', reason: 'stop' },
+            }),
+          ]);
+          for (const result of settled) {
+            if (result.status === 'rejected') {
+              logger.warn('[DAEMON RUN] Failed to clear connected-service recovery wait state after user wait-resume cancel', {
+                sessionId,
+                error: serializeAxiosErrorForLog(result.reason),
+              });
+            }
+          }
+          return { ok: true };
+        };
+
     const controlToken = randomBytes(32).toString('base64url');
 
     // Start control server
@@ -4183,6 +4225,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
       onHappySessionWebhook,
       controlToken,
       isShuttingDown: () => shutdownInitiated,
+      handleConnectedServiceUsageLimitWaitResumeCancel: cancelConnectedServiceUsageLimitWaitResumeForSession,
       handleSessionConnectedServiceAuthSwitch: async (input) => {
         let diagnostics: SessionConnectedServiceAuthSwitchDiagnostics | undefined;
         const switchStartedAtMs = Date.now();
@@ -4386,6 +4429,18 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             });
           },
           registerHotApplyTargets: (tracked) => {
+            // Hot-apply keeps the runner alive, so no webhook will rewrite the durable
+            // session marker — refresh it here or a daemon restart restores the
+            // pre-switch bindings and treats real switch requests as 'unchanged'.
+            if (tracked.spawnOptions) {
+              void refreshSessionMarkerRespawn({
+                pid: tracked.pid,
+                spawnOptions: tracked.spawnOptions,
+                encryptionMaterial: credentials.encryption,
+              }).catch((error) => {
+                logger.debug('[DAEMON RUN] Failed to refresh session marker after hot-applied auth switch', error);
+              });
+            }
             const catalogAgentId = resolveCatalogAgentIdFromBackendTarget(tracked.spawnOptions?.backendTarget);
             const materializationIdentity = readConnectedServiceMaterializationIdentityV1(
               tracked.spawnOptions?.connectedServiceMaterializationIdentityV1,
@@ -5197,6 +5252,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     });
                   });
                 },
+                // QAE-1: user wait-resume cancel must clear the daemon runtime-auth
+                // recovery store too (shared owner clears both stores).
+                cancelConnectedServiceRuntimeAuthRecovery: cancelConnectedServiceUsageLimitWaitResumeForSession,
                 notifyConnectedServiceRuntimeAuthFailure: async ({ sessionId, switchesThisTurn, classification }) => ({
                   ok: true as const,
                   result: await handleConnectedServiceRuntimeAuthRecovery({

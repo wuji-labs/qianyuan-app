@@ -5,8 +5,13 @@ import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/pro
 import { join } from 'node:path';
 import * as z from 'zod';
 import { CATALOG_AGENT_IDS } from '@/backends/types';
-import { SessionRunnerRespawnDescriptorV1Schema } from './processSupervision/sessionRunnerRespawnDescriptor';
+import {
+  buildSessionRunnerRespawnDescriptorV1FromSpawnOptions,
+  SessionRunnerRespawnDescriptorV1Schema,
+  type RespawnDescriptorEncryptionMaterial,
+} from './processSupervision/sessionRunnerRespawnDescriptor';
 import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseChannel';
+import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 
 const DaemonSessionMarkerSchema = z.object({
   pid: z.number().int().positive(),
@@ -116,6 +121,54 @@ export async function writeSessionMarker(marker: Omit<DaemonSessionMarker, 'crea
     updatedAt: now,
   });
   await writeJsonAtomic(filePath, payload);
+}
+
+/**
+ * Rewrite an existing marker's respawn descriptor from updated spawn options,
+ * preserving all other marker fields (identity, metadata, process hash).
+ *
+ * Needed after in-place session mutations that do NOT respawn the runner —
+ * e.g. a hot-applied connected-service auth switch updates the tracked
+ * session's bindings in memory only; without refreshing the durable marker a
+ * daemon restart restores the spawn-time bindings and treats real switch
+ * requests as 'unchanged' while the runtime auth has actually moved on.
+ *
+ * No-op when no marker exists for the pid (nothing to refresh).
+ */
+export async function refreshSessionMarkerRespawn(params: Readonly<{
+  pid: number;
+  spawnOptions: SpawnSessionOptions;
+  encryptionMaterial?: RespawnDescriptorEncryptionMaterial;
+}>): Promise<void> {
+  let existing: DaemonSessionMarker | null = null;
+  for (const candidatePath of markerPathsForPid(params.pid)) {
+    try {
+      const raw = await readFile(candidatePath, 'utf-8');
+      const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) {
+        existing = parsed.data;
+        break;
+      }
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err?.code !== 'ENOENT') {
+        logger.debug(`[sessionRegistry] Could not read session marker pid-${params.pid}.json for respawn refresh`, e);
+      }
+    }
+  }
+  if (!existing) return;
+
+  const respawn = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
+    params.spawnOptions,
+    params.encryptionMaterial ? { encryptionMaterial: params.encryptionMaterial } : undefined,
+  );
+  if (!respawn) return;
+
+  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = existing;
+  await writeSessionMarker({
+    ...rest,
+    respawn,
+  });
 }
 
 export async function removeSessionMarker(pid: number): Promise<void> {

@@ -22,7 +22,7 @@ const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = [
 ] as const;
 const MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS = 65_536;
 
-type RespawnDescriptorEncryptionMaterial =
+export type RespawnDescriptorEncryptionMaterial =
   | AccountScopedCryptoMaterial
   | Readonly<{ type: 'dataKey'; publicKey: Uint8Array; machineKey: Uint8Array }>;
 

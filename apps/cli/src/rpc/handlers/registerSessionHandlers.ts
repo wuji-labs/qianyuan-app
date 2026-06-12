@@ -232,6 +232,8 @@ export function registerSessionHandlers(
         setAdditionalAllowedWriteDirs?: (dirs: string[]) => void;
         accessPolicy?: FilesystemAccessPolicy;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        /** QAE-1: daemon-side propagation for successful wait-resume cancels. */
+        notifyUsageLimitWaitResumeCancelled?: ((request: Readonly<{ sessionId: string }>) => Promise<unknown> | unknown) | null;
     }>,
 ) {
     const pathAllowanceRegistry = createTransferPathAllowanceRegistry({
@@ -277,5 +279,6 @@ export function registerSessionHandlers(
         getSessionMetadata: opts?.getSessionMetadata ?? null,
         updateSessionMetadata: opts?.updateSessionMetadata ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
+        notifyUsageLimitWaitResumeCancelled: opts?.notifyUsageLimitWaitResumeCancelled ?? null,
     });
 }
