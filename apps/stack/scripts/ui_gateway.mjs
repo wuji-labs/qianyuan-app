@@ -15,7 +15,7 @@ function usage() {
     'Reverse-proxy gateway that can optionally serve the built Happier web UI at /.',
     '',
     'Always proxies:',
-    '- /v1/* and /health to backend-url',
+    '- /v1/*, /v2/*, /health, /ready, and /metrics to backend-url',
     '- /v1/updates websocket upgrades to backend-url (socket.io)',
     '- /files/* to local Minio (http://127.0.0.1:<minio-port>/<bucket>/...)',
   ].join('\n');
@@ -159,7 +159,7 @@ async function main() {
       const url = req.url || '/';
 
       // API + health proxy
-      if (url.startsWith('/v1/') || url === '/health' || url === '/metrics' || url.startsWith('/v2/')) {
+      if (url.startsWith('/v1/') || url.startsWith('/v2/') || url === '/health' || url === '/ready' || url === '/metrics') {
         proxyHttp({ target: backendUrl, req, res });
         return;
       }
