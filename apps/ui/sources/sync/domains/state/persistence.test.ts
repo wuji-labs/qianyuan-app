@@ -155,7 +155,7 @@ describe('persistence', () => {
                 themePreference: 'adaptive',
                 themeProfiles: {
                     profiles: [],
-                    activeProfileId: null,
+                    activeProfileIds: { light: null, dark: null },
                 },
             });
             consoleError.mockRestore();
@@ -171,7 +171,7 @@ describe('persistence', () => {
                 themePreference: 'dark',
                 themeProfiles: {
                     profiles: [],
-                    activeProfileId: null,
+                    activeProfileIds: { light: null, dark: null },
                 },
             });
         });

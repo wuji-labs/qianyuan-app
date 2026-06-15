@@ -56,6 +56,101 @@ index 6799c8a..b78c730 100644
              applyOffsetCorrection();
          }
          if (horizontal &&
+diff --git a/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js b/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js
+index 08724d1..5072ea7 100644
+--- a/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js
++++ b/node_modules/@shopify/flash-list/dist/recyclerview/hooks/useRecyclerViewController.js
+@@ -5,6 +5,23 @@ import { PlatformConfig } from "../../native/config/PlatformHelper";
+ import { WarningMessages } from "../../errors/WarningMessages";
+ import { useUnmountFlag } from "./useUnmountFlag";
+ import { useUnmountAwareTimeout } from "./useUnmountAwareCallbacks";
++// HAPPIER PATCH(flash-list-offset-correction-hook): dev-only observability for the MVCP offset
++// corrector. When the app installs a function at this global slot, it is notified on every
++// pauseOffsetCorrection transition and on every nonzero correction decision, so corrector pause
++// windows can be correlated with app-side scroll writes and prepend commits. When the slot is
++// empty this is a single property read; failures are swallowed so observability can never break
++// the scroll path.
++const notifyHappierOffsetCorrectionHook = (event) => {
++    try {
++        const hook = globalThis.__HAPPIER_FLASHLIST_OFFSET_CORRECTION_HOOK__;
++        if (typeof hook === "function") {
++            hook(event);
++        }
++    }
++    catch (_unused) {
++        // Never let observability break scrolling.
++    }
++};
+ /**
+  * Comprehensive hook that manages RecyclerView scrolling behavior and provides
+  * imperative methods for controlling the RecyclerView.
+@@ -121,6 +138,19 @@ export function useRecyclerViewController(recyclerViewManager, ref, scrollViewRe
+                     firstVisibleItemLayout.current = {
+                         ...recyclerViewManager.getLayout(currentIndexOfFirstVisibleItem),
+                     };
++                    // HAPPIER PATCH(flash-list-offset-correction-hook): report every nonzero
++                    // correction decision (applied vs skipped and why) to the dev hook.
++                    if (diff !== 0) {
++                        notifyHappierOffsetCorrectionHook({
++                            type: pauseOffsetCorrection.current
++                                ? "correction-skipped-paused"
++                                : recyclerViewManager.animationOptimizationsEnabled
++                                    ? "correction-skipped-animation"
++                                    : "correction-applied",
++                            diffPx: diff,
++                            timestampMs: Date.now(),
++                        });
++                    }
+                     if (diff !== 0 &&
+                         !pauseOffsetCorrection.current &&
+                         !recyclerViewManager.animationOptimizationsEnabled) {
+@@ -252,6 +282,12 @@ export function useRecyclerViewController(recyclerViewManager, ref, scrollViewRe
+                         index < recyclerViewManager.getDataLength()) {
+                         // Pause the scroll offset adjustments
+                         pauseOffsetCorrection.current = true;
++                        // HAPPIER PATCH(flash-list-offset-correction-hook)
++                        notifyHappierOffsetCorrectionHook({
++                            type: "pause-set",
++                            source: "scroll-to-index",
++                            timestampMs: Date.now(),
++                        });
+                         recyclerViewManager.setOffsetProjectionEnabled(false);
+                         const getFinalOffset = () => {
+                             const layout = recyclerViewManager.getLayout(index);
+@@ -381,6 +417,12 @@ export function useRecyclerViewController(recyclerViewManager, ref, scrollViewRe
+                             // Longer delay for animated scrolls to allow animation to complete
+                             setTimeout(() => {
+                                 pauseOffsetCorrection.current = false;
++                                // HAPPIER PATCH(flash-list-offset-correction-hook)
++                                notifyHappierOffsetCorrectionHook({
++                                    type: "pause-cleared",
++                                    source: "scroll-to-index",
++                                    timestampMs: Date.now(),
++                                });
+                                 recyclerViewManager.setOffsetProjectionEnabled(true);
+                                 resolve(); // Resolve the promise after re-enabling corrections
+                             }, animated ? 300 : 200);
+@@ -471,8 +513,20 @@ export function useRecyclerViewController(recyclerViewManager, ref, scrollViewRe
+             setTimeout(() => {
+                 recyclerViewManager.isInitialScrollComplete = true;
+                 pauseOffsetCorrection.current = false;
++                // HAPPIER PATCH(flash-list-offset-correction-hook)
++                notifyHappierOffsetCorrectionHook({
++                    type: "pause-cleared",
++                    source: "initial-scroll-index",
++                    timestampMs: Date.now(),
++                });
+             }, 100);
+             pauseOffsetCorrection.current = true;
++            // HAPPIER PATCH(flash-list-offset-correction-hook)
++            notifyHappierOffsetCorrectionHook({
++                type: "pause-set",
++                source: "initial-scroll-index",
++                timestampMs: Date.now(),
++            });
+             const additionalOffset = (_c = initialScrollIndexParams === null || initialScrollIndexParams === void 0 ? void 0 : initialScrollIndexParams.viewOffset) !== null && _c !== void 0 ? _c : 0;
+             const offset = horizontal
+                 ? recyclerViewManager.getLayout(initialScrollIndex).x + additionalOffset
 diff --git a/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx b/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx
 index 3c25e7e..bc718ae 100644
 --- a/node_modules/@shopify/flash-list/src/recyclerview/RecyclerView.tsx
@@ -119,3 +214,108 @@ index 3c25e7e..bc718ae 100644
        applyOffsetCorrection();
      }
  
+diff --git a/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx b/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx
+index 3689830..0782a54 100644
+--- a/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx
++++ b/node_modules/@shopify/flash-list/src/recyclerview/hooks/useRecyclerViewController.tsx
+@@ -42,6 +42,32 @@ import { useUnmountAwareTimeout } from "./useUnmountAwareCallbacks";
+  * @param scrollAnchorRef - Reference to the scroll anchor component
+  * @param props - The RecyclerViewProps containing configuration
+  */
++// HAPPIER PATCH(flash-list-offset-correction-hook): dev-only observability for the MVCP offset
++// corrector. When the app installs a function at this global slot, it is notified on every
++// pauseOffsetCorrection transition and on every nonzero correction decision, so corrector pause
++// windows can be correlated with app-side scroll writes and prepend commits. When the slot is
++// empty this is a single property read; failures are swallowed so observability can never break
++// the scroll path.
++const notifyHappierOffsetCorrectionHook = (event: {
++  type: string;
++  source?: string;
++  diffPx?: number;
++  timestampMs?: number;
++}): void => {
++  try {
++    const hook = (
++      globalThis as {
++        __HAPPIER_FLASHLIST_OFFSET_CORRECTION_HOOK__?: (event: unknown) => void;
++      }
++    ).__HAPPIER_FLASHLIST_OFFSET_CORRECTION_HOOK__;
++    if (typeof hook === "function") {
++      hook(event);
++    }
++  } catch {
++    // Never let observability break scrolling.
++  }
++};
++
+ export function useRecyclerViewController<T>(
+   recyclerViewManager: RecyclerViewManager<T>,
+   ref: React.Ref<FlashListRef<T>>,
+@@ -175,6 +201,19 @@ export function useRecyclerViewController<T>(
+           firstVisibleItemLayout.current = {
+             ...recyclerViewManager.getLayout(currentIndexOfFirstVisibleItem),
+           };
++          // HAPPIER PATCH(flash-list-offset-correction-hook): report every nonzero
++          // correction decision (applied vs skipped and why) to the dev hook.
++          if (diff !== 0) {
++            notifyHappierOffsetCorrectionHook({
++              type: pauseOffsetCorrection.current
++                ? "correction-skipped-paused"
++                : recyclerViewManager.animationOptimizationsEnabled
++                ? "correction-skipped-animation"
++                : "correction-applied",
++              diffPx: diff,
++              timestampMs: Date.now(),
++            });
++          }
+           if (
+             diff !== 0 &&
+             !pauseOffsetCorrection.current &&
+@@ -332,6 +371,12 @@ export function useRecyclerViewController<T>(
+           ) {
+             // Pause the scroll offset adjustments
+             pauseOffsetCorrection.current = true;
++            // HAPPIER PATCH(flash-list-offset-correction-hook)
++            notifyHappierOffsetCorrectionHook({
++              type: "pause-set",
++              source: "scroll-to-index",
++              timestampMs: Date.now(),
++            });
+             recyclerViewManager.setOffsetProjectionEnabled(false);
+ 
+             const getFinalOffset = () => {
+@@ -485,6 +530,12 @@ export function useRecyclerViewController<T>(
+               setTimeout(
+                 () => {
+                   pauseOffsetCorrection.current = false;
++                  // HAPPIER PATCH(flash-list-offset-correction-hook)
++                  notifyHappierOffsetCorrectionHook({
++                    type: "pause-cleared",
++                    source: "scroll-to-index",
++                    timestampMs: Date.now(),
++                  });
+                   recyclerViewManager.setOffsetProjectionEnabled(true);
+                   resolve(); // Resolve the promise after re-enabling corrections
+                 },
+@@ -589,9 +640,21 @@ export function useRecyclerViewController<T>(
+       setTimeout(() => {
+         recyclerViewManager.isInitialScrollComplete = true;
+         pauseOffsetCorrection.current = false;
++        // HAPPIER PATCH(flash-list-offset-correction-hook)
++        notifyHappierOffsetCorrectionHook({
++          type: "pause-cleared",
++          source: "initial-scroll-index",
++          timestampMs: Date.now(),
++        });
+       }, 100);
+ 
+       pauseOffsetCorrection.current = true;
++      // HAPPIER PATCH(flash-list-offset-correction-hook)
++      notifyHappierOffsetCorrectionHook({
++        type: "pause-set",
++        source: "initial-scroll-index",
++        timestampMs: Date.now(),
++      });
+ 
+       const additionalOffset = initialScrollIndexParams?.viewOffset ?? 0;
+       const offset = horizontal

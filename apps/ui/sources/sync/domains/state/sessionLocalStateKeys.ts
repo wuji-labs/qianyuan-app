@@ -5,6 +5,7 @@ import {
 
 export const SESSION_DRAFT_VALUES_STORAGE_BASE_KEY = 'session-draft-values-v1';
 export const AGENT_INPUT_LOCAL_UI_STATE_STORAGE_BASE_KEY = 'agent-input-local-ui-state-v1';
+export const SESSION_VIEWPORT_STORAGE_BASE_KEY = 'session-viewport-v1';
 
 export function scopedSessionLocalStateKey(baseKey: string, scope?: ServerAccountScope | null): string {
     if (!scope) return baseKey;
@@ -17,4 +18,8 @@ export function sessionDraftValuesStorageKey(scope?: ServerAccountScope | null):
 
 export function agentInputLocalUiStateStorageKey(scope?: ServerAccountScope | null): string {
     return scopedSessionLocalStateKey(AGENT_INPUT_LOCAL_UI_STATE_STORAGE_BASE_KEY, scope);
+}
+
+export function sessionViewportStorageKey(scope?: ServerAccountScope | null): string {
+    return scopedSessionLocalStateKey(SESSION_VIEWPORT_STORAGE_BASE_KEY, scope);
 }

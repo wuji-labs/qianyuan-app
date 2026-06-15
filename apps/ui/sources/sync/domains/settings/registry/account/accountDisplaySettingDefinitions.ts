@@ -195,6 +195,55 @@ export const ACCOUNT_DISPLAY_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
     },
+    tabBarGitBadgeMode: {
+        schema: z.enum(['changedFiles', 'diffLines', 'off']),
+        default: 'changedFiles',
+        description: 'What the cockpit Git tab badge shows: changed-file count, added/removed lines, or nothing',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarFriendsBadgeEnabled: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Show the friend-request count badge on the Friends tab',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarInboxBadgeEnabled: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Show the inbox activity indicator on the Inbox tab',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarSessionsBadgeEnabled: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Show the attention indicator on the Sessions tab',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarOpenTabsBadgeEnabled: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Show the open-tab count badge on the cockpit Tabs tab',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarShowLabels: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Show text labels under the bottom tab bar icons (off = icon-only, Instagram-style)',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarSize: {
+        schema: z.enum(['compact', 'regular', 'large']),
+        default: 'regular',
+        description: 'Bottom tab bar size (icon size + bar height)',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
 });
 
 export const ACCOUNT_DISPLAY_SETTING_ARTIFACTS = buildSettingArtifacts(ACCOUNT_DISPLAY_SETTING_DEFINITIONS);

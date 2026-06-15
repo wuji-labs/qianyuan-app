@@ -44,10 +44,28 @@ const DIAGNOSTIC_TITLE_KEYS = {
         'connectedServices.diagnostics.title.recovery_retry_scheduled',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.recoveryDeadLettered]:
         'connectedServices.diagnostics.title.recovery_dead_lettered',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthRecoverySuperseded]:
+        'connectedServices.diagnostics.title.runtime_auth_recovery_superseded',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthGenerationStale]:
+        'connectedServices.diagnostics.title.runtime_auth_generation_stale',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.hotApplyUnavailable]:
+        'connectedServices.diagnostics.title.hot_apply_unavailable',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.appServerUnavailable]:
+        'connectedServices.diagnostics.title.app_server_unavailable',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountAdoptionMismatch]:
         'connectedServices.diagnostics.title.provider_account_adoption_mismatch',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountIdentityUnverified]:
+        'connectedServices.diagnostics.title.provider_account_identity_unverified',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed]:
         'connectedServices.diagnostics.title.post_switch_verification_failed',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaSnapshotStale]:
+        'connectedServices.diagnostics.title.quota_snapshot_stale',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchDisabled]:
+        'connectedServices.diagnostics.title.quota_fetch_disabled',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchBackoff]:
+        'connectedServices.diagnostics.title.quota_fetch_backoff',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.authSurfaceWeaklyVerified]:
+        'connectedServices.diagnostics.title.auth_surface_weakly_verified',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired]:
         'connectedServices.diagnostics.title.connected_service_credential_reconnect_required',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionMissingClaudeCodeScope]:
@@ -73,10 +91,28 @@ const DIAGNOSTIC_BODY_KEYS = {
         'connectedServices.diagnostics.body.recovery_retry_scheduled',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.recoveryDeadLettered]:
         'connectedServices.diagnostics.body.recovery_dead_lettered',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthRecoverySuperseded]:
+        'connectedServices.diagnostics.body.runtime_auth_recovery_superseded',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthGenerationStale]:
+        'connectedServices.diagnostics.body.runtime_auth_generation_stale',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.hotApplyUnavailable]:
+        'connectedServices.diagnostics.body.hot_apply_unavailable',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.appServerUnavailable]:
+        'connectedServices.diagnostics.body.app_server_unavailable',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountAdoptionMismatch]:
         'connectedServices.diagnostics.body.provider_account_adoption_mismatch',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountIdentityUnverified]:
+        'connectedServices.diagnostics.body.provider_account_identity_unverified',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed]:
         'connectedServices.diagnostics.body.post_switch_verification_failed',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaSnapshotStale]:
+        'connectedServices.diagnostics.body.quota_snapshot_stale',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchDisabled]:
+        'connectedServices.diagnostics.body.quota_fetch_disabled',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchBackoff]:
+        'connectedServices.diagnostics.body.quota_fetch_backoff',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.authSurfaceWeaklyVerified]:
+        'connectedServices.diagnostics.body.auth_surface_weakly_verified',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired]:
         'connectedServices.diagnostics.body.connected_service_credential_reconnect_required',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionMissingClaudeCodeScope]:
@@ -102,10 +138,28 @@ const DIAGNOSTIC_STATUS_KEYS = {
         'connectedServices.diagnostics.status.recovery_retry_scheduled',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.recoveryDeadLettered]:
         'connectedServices.diagnostics.status.recovery_dead_lettered',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthRecoverySuperseded]:
+        'connectedServices.diagnostics.status.runtime_auth_recovery_superseded',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.runtimeAuthGenerationStale]:
+        'connectedServices.diagnostics.status.runtime_auth_generation_stale',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.hotApplyUnavailable]:
+        'connectedServices.diagnostics.status.hot_apply_unavailable',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.appServerUnavailable]:
+        'connectedServices.diagnostics.status.app_server_unavailable',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountAdoptionMismatch]:
         'connectedServices.diagnostics.status.provider_account_adoption_mismatch',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.providerAccountIdentityUnverified]:
+        'connectedServices.diagnostics.status.provider_account_identity_unverified',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.postSwitchVerificationFailed]:
         'connectedServices.diagnostics.status.post_switch_verification_failed',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaSnapshotStale]:
+        'connectedServices.diagnostics.status.quota_snapshot_stale',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchDisabled]:
+        'connectedServices.diagnostics.status.quota_fetch_disabled',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.quotaFetchBackoff]:
+        'connectedServices.diagnostics.status.quota_fetch_backoff',
+    [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.authSurfaceWeaklyVerified]:
+        'connectedServices.diagnostics.status.auth_surface_weakly_verified',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.connectedServiceCredentialReconnectRequired]:
         'connectedServices.diagnostics.status.connected_service_credential_reconnect_required',
     [CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES.claudeSubscriptionMissingClaudeCodeScope]:

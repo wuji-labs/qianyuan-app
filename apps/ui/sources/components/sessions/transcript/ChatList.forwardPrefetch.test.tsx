@@ -12,7 +12,7 @@ import { installLegacyChatListHarnessCommonModuleMocks } from './chatListLegacyH
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const loadNewerMessages = vi.fn(async () => {});
+const loadNewerMessages = vi.fn(async (_sessionId?: string) => {});
 const hasDeferredNewerMessages = vi.fn(() => true);
 const getSyncTuning = vi.fn(() => ({ transcriptForwardPrefetchThresholdPx: 800, transcriptBackwardPrefetchThresholdPx: 0 }));
 
@@ -57,12 +57,30 @@ vi.mock('@/utils/system/fireAndForget', () => ({
     fireAndForget: (p: any) => p,
 }));
 
+const deferredNewerDrainInFlight = new Set<string>();
+
 vi.mock('@/sync/sync', () => ({
     sync: {
         loadOlderMessages: vi.fn(),
         loadNewerMessages,
         hasDeferredNewerMessages,
         getSyncTuning,
+        // C6/D3: sync owns the deferred-newer drain decision (threshold + in-flight dedupe + fetch);
+        // the list supplies geometry only. This stand-in mirrors that decision against the
+        // boundary-mocked loadNewerMessages so the forward-prefetch contract is exercised.
+        maybeDrainDeferredNewerMessages: (
+            sessionId: string,
+            viewport: { isPinned: boolean; distanceFromBottomPx: number },
+        ) => {
+            if (!sessionId || hasDeferredNewerMessages() !== true) return;
+            const thresholdPx = getSyncTuning().transcriptForwardPrefetchThresholdPx;
+            const nearBottom = viewport.isPinned || viewport.distanceFromBottomPx <= thresholdPx;
+            if (!nearBottom || deferredNewerDrainInFlight.has(sessionId)) return;
+            deferredNewerDrainInFlight.add(sessionId);
+            void Promise.resolve(loadNewerMessages(sessionId)).catch(() => {}).finally(() => {
+                deferredNewerDrainInFlight.delete(sessionId);
+            });
+        },
     },
 }));
 
@@ -72,6 +90,7 @@ describe('ChatList (forward prefetch)', () => {
             platformOs: 'web',
         });
 
+        deferredNewerDrainInFlight.clear();
         loadNewerMessages.mockClear();
         hasDeferredNewerMessages.mockClear();
         hasDeferredNewerMessages.mockReturnValue(true);

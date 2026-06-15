@@ -167,6 +167,7 @@ function makeRenderable(
         canApprovePermissions: overrides.canApprovePermissions,
         hasPendingPermissionRequests: overrides.hasPendingPermissionRequests,
         hasPendingUserActionRequests: overrides.hasPendingUserActionRequests,
+        pendingRequestObservedAt: overrides.pendingRequestObservedAt,
         keepVisibleWhenInactive: overrides.keepVisibleWhenInactive,
     };
 }
@@ -258,6 +259,117 @@ describe('sessions domain: renderable patches', () => {
         expect(get().sessionListRenderables.s1.metadataVersion).toBe(7);
         expect(get().sessionListRenderables.s1.metadata?.name).toBe('Decrypted title');
         expect(saveWarmCache).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes the list source row when decrypted metadata becomes available', async () => {
+        mockSessionsDomainBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain);
+
+        domain.replaceSessionListRenderables([makeRenderable({
+            id: 's1',
+            metadataVersion: 7,
+            metadata: null,
+        })]);
+        const initialListViewData = get().sessionListViewData;
+
+        domain.applySessionListRenderablePatches([{
+            sessionId: 's1',
+            patch: {
+                metadataVersion: 8,
+                metadata: {
+                    name: 'Decrypted title',
+                    summaryText: 'Existing summary',
+                    path: '',
+                    homeDir: null,
+                    host: null,
+                    machineId: null,
+                    flavor: 'codex',
+                    directSessionV1: null,
+                    readStateV1: null,
+                    hiddenSystemSession: false,
+                },
+            },
+        }]);
+
+        expect(get().sessionListRenderables.s1.metadata?.name).toBe('Decrypted title');
+        expect(get().sessionListViewData).not.toBe(initialListViewData);
+        const nextListViewData = get().sessionListViewData as SessionListViewItem[] | null;
+        const sessionItem = nextListViewData?.find(
+            (item): item is Extract<SessionListViewItem, { type: 'session' }> => item.type === 'session',
+        );
+        expect(sessionItem?.session.metadata?.name).toBe('Decrypted title');
+        expect(sessionItem?.session.metadata?.summaryText).toBe('Existing summary');
+    });
+
+    it('refreshes the list source row when row-rendered pending count changes', async () => {
+        mockSessionsDomainBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain);
+
+        domain.replaceSessionListRenderables([makeRenderable({
+            id: 's1',
+            pendingCount: 0,
+            metadata: {
+                name: 'Existing title',
+                summaryText: 'Existing summary',
+                path: '',
+                homeDir: null,
+                host: null,
+                machineId: null,
+                flavor: 'codex',
+                directSessionV1: null,
+                readStateV1: null,
+                hiddenSystemSession: false,
+            },
+        })]);
+        const initialListViewData = get().sessionListViewData;
+
+        domain.applySessionListRenderablePatches([{
+            sessionId: 's1',
+            patch: {
+                pendingCount: 2,
+            },
+        }]);
+
+        expect(get().sessionListViewData).not.toBe(initialListViewData);
+        const nextListViewData = get().sessionListViewData as SessionListViewItem[] | null;
+        const sessionItem = nextListViewData?.find(
+            (item): item is Extract<SessionListViewItem, { type: 'session' }> => item.type === 'session',
+        );
+        expect(sessionItem?.session.pendingCount).toBe(2);
+    });
+
+    it('refreshes the list source row when row-rendered pending request timing changes', async () => {
+        mockSessionsDomainBoundaries();
+
+        const { createSessionsDomain } = await import('./sessions');
+        const { get, domain } = createHarness(createSessionsDomain);
+
+        domain.replaceSessionListRenderables([makeRenderable({
+            id: 's1',
+            active: true,
+            presence: 'online',
+            hasPendingPermissionRequests: true,
+            pendingRequestObservedAt: 100,
+        })]);
+        const initialListViewData = get().sessionListViewData;
+
+        domain.applySessionListRenderablePatches([{
+            sessionId: 's1',
+            patch: {
+                pendingRequestObservedAt: 500,
+            },
+        }]);
+
+        expect(get().sessionListViewData).not.toBe(initialListViewData);
+        const nextListViewData = get().sessionListViewData as SessionListViewItem[] | null;
+        const sessionItem = nextListViewData?.find(
+            (item): item is Extract<SessionListViewItem, { type: 'session' }> => item.type === 'session',
+        );
+        expect(sessionItem?.session.pendingRequestObservedAt).toBe(500);
     });
 
     it('initializes empty replacements then treats repeated empty replacements as no-ops', async () => {

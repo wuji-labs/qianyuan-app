@@ -14,6 +14,8 @@ import type { StorageState } from '@/sync/store/types';
 let capturedMessageViewProps: any[] = [];
 let capturedBuildChatListItemsOptions: any[] = [];
 let capturedToolCallsGroupRowProps: any[] = [];
+let capturedToolGroupUnitHeaderProps: any[] = [];
+let capturedToolGroupUnitToolProps: any[] = [];
 
 let sessionState: any = null;
 let forkSnapshot: any = null;
@@ -58,6 +60,8 @@ beforeEach(() => {
     capturedMessageViewProps = [];
     capturedBuildChatListItemsOptions = [];
     capturedToolCallsGroupRowProps = [];
+    capturedToolGroupUnitHeaderProps = [];
+    capturedToolGroupUnitToolProps = [];
     useMessageMock.mockReset();
     Object.keys(settingValues).forEach((k) => delete settingValues[k]);
 
@@ -265,6 +269,29 @@ vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
   },
 }));
 
+// N2c per-unit rows: under flash_v2 tool groups render as header/expand/tool/footer units.
+vi.mock('@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitHeaderRow', () => ({
+  ToolCallsGroupUnitHeaderRow: (props: any) => {
+    capturedToolGroupUnitHeaderProps.push(props);
+    return React.createElement('ToolCallsGroupUnitHeaderRow');
+  },
+  ToolCallsGroupUnitHeaderRowWithSessionCommon: (props: any) => {
+    capturedToolGroupUnitHeaderProps.push(props);
+    return React.createElement('ToolCallsGroupUnitHeaderRowWithSessionCommon');
+  },
+}));
+
+vi.mock('@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitToolRow', () => ({
+  ToolCallsGroupUnitToolRow: (props: any) => {
+    capturedToolGroupUnitToolProps.push(props);
+    return React.createElement('ToolCallsGroupUnitToolRow');
+  },
+  ToolCallsGroupUnitToolRowWithSessionCommon: (props: any) => {
+    capturedToolGroupUnitToolProps.push(props);
+    return React.createElement('ToolCallsGroupUnitToolRowWithSessionCommon');
+  },
+}));
+
 vi.mock('@/components/sessions/pending/PendingMessagesTranscriptBlock', () => ({
   PendingMessagesTranscriptBlock: () => React.createElement('PendingMessagesTranscriptBlock'),
 }));
@@ -387,17 +414,25 @@ describe('ChatList (forked transcript)', () => {
 
         const screen = await renderChatList();
 
-        const groupProps = capturedToolCallsGroupRowProps[0];
-        expect(groupProps).toBeTruthy();
-        expect(groupProps.sessionId).toBe('child-1');
-        expect(groupProps.toolMessageIds).toEqual(['p1']);
-        expect(groupProps.getMessageById).toEqual(expect.any(Function));
-        expect(groupProps.interaction).toEqual(expect.objectContaining({
+        // N2c: under flash_v2 the group renders as per-unit rows; the read-only
+        // ancestor-origin interaction must reach both the header and tool units.
+        const readOnlyInteraction = expect.objectContaining({
             canSendMessages: false,
             canApprovePermissions: false,
             permissionDisabledReason: 'readOnly',
             disableToolNavigation: true,
-        }));
+        });
+        const headerProps = capturedToolGroupUnitHeaderProps[0];
+        expect(headerProps).toBeTruthy();
+        expect(headerProps.sessionId).toBe('child-1');
+        expect(headerProps.toolMessages.map((m: any) => m.id)).toEqual(['p1']);
+        expect(headerProps.interaction).toEqual(readOnlyInteraction);
+
+        const toolProps = capturedToolGroupUnitToolProps[0];
+        expect(toolProps).toBeTruthy();
+        expect(toolProps.sessionId).toBe('child-1');
+        expect(toolProps.message?.id).toBe('p1');
+        expect(toolProps.interaction).toEqual(readOnlyInteraction);
 
         await screen.unmount();
     });
@@ -410,7 +445,11 @@ describe('ChatList (forked transcript)', () => {
         const screen = await renderChatList();
 
         const data = flashListRuntime.mock.state.props?.data ?? [];
-        expect(data.some((it: any) => it?.kind === 'turn')).toBe(true);
+        // N2c: turn items decompose into per-unit/message rows under flash_v2 — the
+        // turns-mode invariant is that committed content was NOT built through the
+        // linear items builder and decomposed message rows carry the `msg:` ids.
+        expect(data.some((it: any) => it?.kind === 'turn')).toBe(false);
+        expect(data.some((it: any) => it?.kind === 'message' && typeof it?.id === 'string' && it.id.startsWith('msg:'))).toBe(true);
         expect(data.some((it: any) => it?.kind === 'fork-divider')).toBe(true);
         expect(capturedBuildChatListItemsOptions).toHaveLength(0);
 

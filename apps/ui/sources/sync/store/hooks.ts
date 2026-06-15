@@ -1370,6 +1370,7 @@ export function buildSessionListShellViewItemSignature(item: SessionListViewItem
     item.session.thinkingGraceUntil != null ? '1' : '0',
     item.session.hasPendingPermissionRequests === true ? '1' : '0',
     item.session.hasPendingUserActionRequests === true ? '1' : '0',
+    item.session.pendingRequestObservedAt ?? '',
     item.session.hasUnreadMessages === true ? '1' : '0',
     item.session.metadataUnavailable === true ? '1' : '0',
   ].join('\u0001');

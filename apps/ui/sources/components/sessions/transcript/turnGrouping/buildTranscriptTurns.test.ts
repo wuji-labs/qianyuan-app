@@ -858,6 +858,163 @@ describe('buildTranscriptTurnsCached', () => {
         expect(new Set(mergedCache.turns.map((turn) => turn.id)).size).toBe(mergedCache.turns.length);
     });
 
+    it('keeps the previously-built tool-group id sticky when a prepend extends the group upward (plan N2c)', () => {
+        // Page boundary fell inside a consecutive tool run: the loaded window starts at t2, so the
+        // headless turn is `turn:t2` and its group id embeds the first loaded tool
+        // (`toolCalls:turn:t2:t2`). Prepending the rest of the run extends the group upward —
+        // the merged group must KEEP the previously-assigned group id even though its first tool
+        // is now t1, so per-tool virtualization-unit keys derived from the group id stay stable.
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            agentMessage('a1', 2),
+            toolMessage({ id: 't1', createdAt: 3, state: 'completed' }),
+            toolMessage({ id: 't2', createdAt: 4, state: 'completed' }),
+            toolMessage({ id: 't3', createdAt: 5, state: 'completed' }),
+            userMessage('u3', 6),
+            agentMessage('a3', 7),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const windowCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['t2', 't3', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        expect(windowCache.turns.map((turn) => turn.id)).toEqual(['turn:t2', 'turn:u3']);
+        expect(windowCache.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:t2:t2']);
+
+        const prependedCache = buildTranscriptTurnsCached({
+            cache: windowCache,
+            messageIdsOldestFirst: ['u1', 'a1', 't1', 't2', 't3', 'u3', 'a3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(prependedCache.turns.map((turn) => turn.id)).toEqual(['turn:t2', 'turn:u3']);
+        const mergedGroup = prependedCache.turns[0]!.content.find((content) => content.kind === 'tool_calls');
+        expect(mergedGroup?.kind === 'tool_calls' && mergedGroup.toolMessageIds).toEqual(['t1', 't2', 't3']);
+        // The group id survives the upward extension (NOT re-derived from the new first tool).
+        expect(mergedGroup?.kind === 'tool_calls' && mergedGroup.id).toBe('toolCalls:turn:t2:t2');
+    });
+
+    it('keeps the sticky tool-group id across multiple successive prepends into the same run', () => {
+        const chronological: Message[] = [
+            toolMessage({ id: 't1', createdAt: 1, state: 'completed' }),
+            toolMessage({ id: 't2', createdAt: 2, state: 'completed' }),
+            toolMessage({ id: 't3', createdAt: 3, state: 'completed' }),
+            userMessage('u3', 4),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const cache1 = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['t3', 'u3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const cache2 = buildTranscriptTurnsCached({
+            cache: cache1,
+            messageIdsOldestFirst: ['t2', 't3', 'u3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        const cache3 = buildTranscriptTurnsCached({
+            cache: cache2,
+            messageIdsOldestFirst: ['t1', 't2', 't3', 'u3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(cache1.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:t3:t3']);
+        expect(cache2.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:t3:t3']);
+        expect(cache3.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:t3:t3']);
+        const finalGroup = cache3.turns[0]!.content.find((content) => content.kind === 'tool_calls');
+        expect(finalGroup?.kind === 'tool_calls' && finalGroup.toolMessageIds).toEqual(['t1', 't2', 't3']);
+    });
+
+    it('resolves tool-group sticky-id collisions to the previously-rendered bottom-most group id', () => {
+        // A fork boundary inside a tool run previously split it into two groups; removing the
+        // boundary merges them into one group. The bottom-most previously-rendered group id wins —
+        // mirroring the turn-level collision rule.
+        const chronological: Message[] = [
+            userMessage('u1', 1),
+            toolMessage({ id: 't1', createdAt: 2, state: 'completed' }),
+            toolMessage({ id: 't2', createdAt: 3, state: 'completed' }),
+            toolMessage({ id: 't3', createdAt: 4, state: 'completed' }),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const boundaryCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['u1', 't1', 't2', 't3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+            forkBoundaryBeforeMessageIds: new Set(['t2']),
+            forkBoundarySignature: 'fork-t2',
+        });
+        expect(boundaryCache.turns.flatMap((turn) => turn.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : [])))
+            .toEqual(['toolCalls:turn:u1:t1', 'toolCalls:turn:t2:t2']);
+
+        const mergedCache = buildTranscriptTurnsCached({
+            cache: boundaryCache,
+            messageIdsOldestFirst: ['u1', 't1', 't2', 't3'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+
+        expect(mergedCache.turns).toHaveLength(1);
+        const mergedGroups = mergedCache.turns[0]!.content.filter((content) => content.kind === 'tool_calls');
+        expect(mergedGroups).toHaveLength(1);
+        expect(mergedGroups[0]?.kind === 'tool_calls' && mergedGroups[0].toolMessageIds).toEqual(['t1', 't2', 't3']);
+        expect(mergedGroups[0]?.kind === 'tool_calls' && mergedGroups[0].id).toBe('toolCalls:turn:t2:t2');
+        // Ids stay unique after remapping.
+        const allGroupIds = mergedCache.turns.flatMap((turn) => turn.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []));
+        expect(new Set(allGroupIds).size).toBe(allGroupIds.length);
+    });
+
+    it('does not apply a sticky group id when the rebuilt group no longer contains all previous group tools', () => {
+        // Containment is the sticky precondition at the group level too: when the window dropped
+        // part of the old group (rollback/fork switch), derive a fresh id from the first tool.
+        const chronological: Message[] = [
+            toolMessage({ id: 't1', createdAt: 1, state: 'completed' }),
+            toolMessage({ id: 't2', createdAt: 2, state: 'completed' }),
+            userMessage('u2', 3),
+        ];
+        const messagesById = Object.fromEntries(chronological.map((m) => [m.id, m]));
+
+        const windowCache = buildTranscriptTurnsCached({
+            cache: null,
+            messageIdsOldestFirst: ['t1', 't2', 'u2'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        expect(windowCache.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:t1:t1']);
+
+        const shrunkCache = buildTranscriptTurnsCached({
+            cache: windowCache,
+            messageIdsOldestFirst: ['t2', 'u2'],
+            messagesById,
+            groupToolCalls: true,
+            toolCallsGroupStrategy: 'consecutive_tools',
+        });
+        expect(shrunkCache.turns[0]?.content.flatMap((content) => content.kind === 'tool_calls' ? [content.id] : []))
+            .toEqual(['toolCalls:turn:t2:t2']);
+    });
+
     it('does not apply a sticky id when the rebuilt turn no longer contains all of the previous turn messages', () => {
         // Containment is the sticky precondition: if the window dropped part of the old turn
         // (rollback/fork switch), the on-screen row genuinely changed — derive a fresh id.

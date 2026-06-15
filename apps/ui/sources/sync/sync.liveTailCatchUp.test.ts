@@ -78,6 +78,7 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
 }));
 
 import { storage } from './domains/state/storage';
+import { markSessionVisible, markSessionHidden } from './domains/session/activeViewingSession';
 import type { Session } from './domains/state/storageTypes';
 import type { NormalizedMessage } from './typesRaw';
 
@@ -89,6 +90,7 @@ type SyncLiveTailCatchUpTestAccess = {
     hasFetchedSessionsSnapshotForActiveServer: boolean;
     isForeground: boolean;
     sessionMaterializedMaxSeqById: Record<string, number>;
+    getOrCreateMessagesSync: (sessionId: string) => { awaitQueue: (opts?: { timeoutMs?: number }) => Promise<void> };
 };
 
 const initialStorageState = storage.getState();
@@ -159,6 +161,10 @@ async function seedLargeGapSession(): Promise<{ sync: typeof import('./sync').sy
     syncForTest.hasFetchedSessionsSnapshotForActiveServer = true;
     syncForTest.isForeground = true;
     syncForTest.sessionMaterializedMaxSeqById = { [SESSION_ID]: 10 };
+    // These viewport-transition cases model a session whose transcript is on screen
+    // (the only realistic source of viewport reports). Catch-up is now visibility-gated, so
+    // the session must be an active live-content consumer for the decision lane to engage.
+    markSessionVisible(SESSION_ID);
     requestMock.mockImplementation(() => Promise.resolve(emptyMessagesResponse()));
     requestMock.mockClear();
     return { sync };
@@ -169,6 +175,7 @@ describe('sync live-tail catch-up decision (plan B8)', () => {
         storage.setState(initialStorageState, true);
         kvStore.clear();
         requestMock.mockReset();
+        markSessionHidden(SESSION_ID);
     });
 
     it('defers forward loading on a large gap while the stored viewport is unpinned', async () => {
@@ -205,11 +212,35 @@ describe('sync live-tail catch-up decision (plan B8)', () => {
             offsetY: 0,
             shouldRestoreViewport: false,
         });
-        expect(sync.hasDeferredNewerMessages(SESSION_ID)).toBe(false);
 
         // The same large gap now resolves tail_reset_latest_page: a snapshot fetch,
         // never defer_forward_loading.
         await sync.refreshSessionMessages(SESSION_ID);
+
+        expect(sync.hasDeferredNewerMessages(SESSION_ID)).toBe(false);
+        expect(messagesRequestPaths().length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not drop deferred newer content when live-tail arrives before another manual refresh', async () => {
+        const { sync } = await seedLargeGapSession();
+        const syncForTest = sync as unknown as SyncLiveTailCatchUpTestAccess;
+
+        sync.onSessionViewportChange(SESSION_ID, {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+        });
+        await sync.refreshSessionMessages(SESSION_ID);
+        expect(sync.hasDeferredNewerMessages(SESSION_ID)).toBe(true);
+        expect(messagesRequestPaths()).toHaveLength(0);
+
+        sync.onSessionViewportChange(SESSION_ID, {
+            isPinned: true,
+            offsetY: 0,
+            shouldRestoreViewport: false,
+        });
+
+        await syncForTest.getOrCreateMessagesSync(SESSION_ID).awaitQueue({ timeoutMs: 2_000 });
 
         expect(sync.hasDeferredNewerMessages(SESSION_ID)).toBe(false);
         expect(messagesRequestPaths().length).toBeGreaterThanOrEqual(1);

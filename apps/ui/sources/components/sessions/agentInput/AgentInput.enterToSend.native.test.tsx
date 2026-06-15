@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from '@/components/ui/forms/largeTextInputPolicy';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
 
@@ -16,6 +17,8 @@ const mocks = vi.hoisted(() => ({
     suggestionMoveDown: vi.fn(),
     activeSuggestions: [] as Array<{ key: string; text: string; label?: string }>,
     activeSuggestionIndex: -1,
+    respectSuggestionQuery: false,
+    lastSuggestionQuery: undefined as string | null | undefined,
 }));
 
 const settingState = vi.hoisted(() => ({
@@ -185,7 +188,14 @@ vi.mock('@/components/autocomplete/useActiveWord', () => ({
 }));
 
 vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: () => [mocks.activeSuggestions, mocks.activeSuggestionIndex, mocks.suggestionMoveUp, mocks.suggestionMoveDown],
+    useActiveSuggestions: (query: string | null) => {
+        mocks.lastSuggestionQuery = query;
+        const suggestions = mocks.respectSuggestionQuery && query === null
+            ? []
+            : mocks.activeSuggestions;
+        const selected = suggestions.length > 0 ? mocks.activeSuggestionIndex : -1;
+        return [suggestions, selected, mocks.suggestionMoveUp, mocks.suggestionMoveDown];
+    },
 }));
 
 vi.mock('@/components/autocomplete/applySuggestion', () => ({
@@ -253,6 +263,8 @@ describe('AgentInput (enter to send on native)', () => {
         hardwareShiftEnterState.listener = null;
         mocks.activeSuggestions = [];
         mocks.activeSuggestionIndex = -1;
+        mocks.respectSuggestionQuery = false;
+        mocks.lastSuggestionQuery = undefined;
         vi.clearAllMocks();
     });
 
@@ -325,6 +337,35 @@ describe('AgentInput (enter to send on native)', () => {
         }));
         expect(mocks.onChangeText).toHaveBeenCalledWith('Expanded QA prompt');
         expect(mocks.onSend).not.toHaveBeenCalled();
+    });
+
+    it('keeps slash autocomplete active when focusing a large native input with an active trigger', async () => {
+        mocks.activeSuggestions = [{ key: 'cmd-run', text: '/run', label: '/run' }];
+        mocks.activeSuggestionIndex = 0;
+        mocks.respectSuggestionQuery = true;
+        const largePrompt = `${'x'.repeat(TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT + 1)} /r`;
+        const { AgentInput } = await import('./AgentInput');
+        const screen = await renderScreen(
+            <AgentInput
+                sessionId="session-1"
+                value={largePrompt}
+                onChangeText={mocks.onChangeText}
+                placeholder="p"
+                onSend={mocks.onSend}
+                autocompletePrefixes={['/']}
+                autocompleteSuggestions={async () => mocks.activeSuggestions as any}
+                isSendDisabled={false}
+                disabled={false}
+                showAbortButton={false}
+            />
+        );
+
+        const input = findMultiTextInput(screen);
+        await act(async () => {
+            input.props.onFocus?.();
+        });
+
+        expect(mocks.lastSuggestionQuery).toBe('/r');
     });
 
     it('uses a 16 point input text base for existing sessions and new sessions', async () => {

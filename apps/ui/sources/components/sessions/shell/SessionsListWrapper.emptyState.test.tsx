@@ -2,7 +2,8 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import type { VisibleSessionListViewDataOptions } from '@/hooks/session/useVisibleSessionListViewData';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -10,7 +11,7 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 const sessionListState = vi.hoisted(() => ({
     data: [] as any[] | null,
     storageKinds: [] as string[],
-    paneOptions: [] as Array<{ activeSessionId?: string | null; sessionListSurfaceDataActive?: boolean } | undefined>,
+    paneOptions: [] as Array<VisibleSessionListViewDataOptions | undefined>,
     paneHookCalls: 0,
     contentRenderCalls: 0,
     paneVersion: 0,
@@ -64,7 +65,7 @@ vi.mock('@/hooks/session/useVisibleSessionListViewData', () => ({
     },
     useVisibleSessionListPaneState: (
         storageKind?: string,
-        options?: { activeSessionId?: string | null; sessionListSurfaceDataActive?: boolean },
+        options?: VisibleSessionListViewDataOptions,
     ) => {
         React.useSyncExternalStore(
             (listener) => {
@@ -322,6 +323,79 @@ describe('SessionsListWrapper (empty state)', () => {
 
         expect(sessionListState.paneOptions).toEqual([]);
         expect(() => screen.findByType('SessionsListContent' as any)).toThrow();
+
+        await screen.unmount();
+    });
+
+    it('seeds retained pane data and foreground session identity when returning from a foreground session route', async () => {
+        const { SessionsListWrapper } = await import('./SessionsListWrapper');
+        const retainedData = [{ type: 'session', session: { id: 'session-2' } }];
+        sessionListState.data = retainedData;
+        focusState.isFocused = true;
+        routeState.pathname = '/';
+
+        const screen = await renderScreen(<SessionsListWrapper pathname="/" surfaceRoutePathname="/" />);
+
+        expect(sessionListState.paneOptions).toEqual([{
+            activeSessionId: null,
+            sessionListSurfaceDataActive: true,
+        }]);
+
+        routeState.pathname = '/session/session-2';
+        await screen.update(<SessionsListWrapper pathname="/" surfaceRoutePathname="/session/session-2" />);
+        expect(sessionListState.paneOptions).toHaveLength(1);
+
+        routeState.pathname = '/';
+        await screen.update(<SessionsListWrapper pathname="/" surfaceRoutePathname="/" />);
+
+        expect(sessionListState.paneOptions[0]).toEqual({
+            activeSessionId: null,
+            sessionListSurfaceDataActive: true,
+        });
+        expect(sessionListState.paneOptions[1]).toEqual({
+            activeSessionId: 'session-2',
+            retainedSessionListViewData: retainedData,
+            sessionListSurfaceDataActive: true,
+        });
+
+        await screen.unmount();
+    });
+
+    it('does not seed retained pane data after the storage kind changes while returning from a foreground session route', async () => {
+        const { SessionsListWrapper } = await import('./SessionsListWrapper');
+        const persistedData = [{ type: 'session', session: { id: 'persisted-session' } }];
+        const directData = [{ type: 'session', session: { id: 'direct-session' } }];
+        featureDecisionState.enabled = true;
+        storageKindState.storageKind = 'persisted';
+        sessionListState.data = persistedData;
+        focusState.isFocused = true;
+        routeState.pathname = '/';
+
+        const screen = await renderScreen(<SessionsListWrapper pathname="/" surfaceRoutePathname="/" />);
+
+        expect(sessionListState.paneOptions).toEqual([{
+            activeSessionId: null,
+            sessionListSurfaceDataActive: true,
+        }]);
+
+        routeState.pathname = '/session/persisted-session';
+        await screen.update(<SessionsListWrapper pathname="/" surfaceRoutePathname="/session/persisted-session" />);
+        expect(sessionListState.paneOptions).toHaveLength(1);
+
+        storageKindState.storageKind = 'direct';
+        sessionListState.data = directData;
+        await screen.update(<SessionsListWrapper pathname="/" surfaceRoutePathname="/session/persisted-session?storage=direct" />);
+        await flushHookEffects({ cycles: 1, turns: 4 });
+        expect(sessionListState.paneOptions).toHaveLength(1);
+
+        routeState.pathname = '/';
+        await screen.update(<SessionsListWrapper pathname="/" surfaceRoutePathname="/" />);
+
+        expect(sessionListState.storageKinds.at(-1)).toBe('direct');
+        expect(sessionListState.paneOptions[1]).toEqual({
+            activeSessionId: null,
+            sessionListSurfaceDataActive: true,
+        });
 
         await screen.unmount();
     });

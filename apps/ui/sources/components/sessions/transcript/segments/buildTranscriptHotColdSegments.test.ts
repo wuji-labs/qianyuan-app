@@ -55,6 +55,54 @@ describe('buildTranscriptHotColdSegments', () => {
         expect(result.hotItems.map((item) => item.id)).toEqual(['tools-1', 'm2']);
     });
 
+    it('widens the hot segment to keep expanded tool-group unit rows in the live tail (N2c)', () => {
+        const groupId = 'toolCalls:turn:x:tool-1';
+        const toolMessageIds = ['tool-1', 'tool-2'];
+        const result = buildTranscriptHotColdSegments({
+            enabled: true,
+            hotTailItemCount: 1,
+            items: [
+                { kind: 'message', id: 'm1', messageId: 'm1' },
+                { kind: 'tool-group-header', id: `${groupId}#header`, toolMessageIds },
+                { kind: 'tool-group-tool', id: `${groupId}#tool:tool-1`, toolMessageId: 'tool-1', toolMessageIds },
+                { kind: 'tool-group-tool', id: `${groupId}#tool:tool-2`, toolMessageId: 'tool-2', toolMessageIds },
+                { kind: 'tool-group-footer', id: `${groupId}#footer`, toolMessageIds },
+                { kind: 'message', id: 'm2', messageId: 'm2' },
+            ],
+            activeThinkingMessageId: null,
+            expandedToolCallsAnchorMessageIds: new Set<string>(['tool-2']),
+        });
+
+        expect(result.coldItems.map((item) => item.id)).toEqual(['m1']);
+        expect(result.hotItems.map((item) => item.id)).toEqual([
+            `${groupId}#header`,
+            `${groupId}#tool:tool-1`,
+            `${groupId}#tool:tool-2`,
+            `${groupId}#footer`,
+            'm2',
+        ]);
+    });
+
+    it('leaves collapsed tool-group unit rows in the cold segment (N2c)', () => {
+        const groupId = 'toolCalls:turn:x:tool-1';
+        const toolMessageIds = ['tool-1', 'tool-2'];
+        const result = buildTranscriptHotColdSegments({
+            enabled: true,
+            hotTailItemCount: 1,
+            items: [
+                { kind: 'tool-group-header', id: `${groupId}#header`, toolMessageIds },
+                { kind: 'tool-group-expand', id: `${groupId}#expand`, toolMessageIds },
+                { kind: 'tool-group-tool', id: `${groupId}#tool:tool-2`, toolMessageId: 'tool-2', toolMessageIds },
+                { kind: 'tool-group-footer', id: `${groupId}#footer`, toolMessageIds },
+                { kind: 'message', id: 'm2', messageId: 'm2' },
+            ],
+            activeThinkingMessageId: null,
+            expandedToolCallsAnchorMessageIds: new Set<string>(),
+        });
+
+        expect(result.hotItems.map((item) => item.id)).toEqual(['m2']);
+    });
+
     it('keeps pending queues and action drafts in the hot tail even when the tail window is small', () => {
         const result = buildTranscriptHotColdSegments({
             enabled: true,

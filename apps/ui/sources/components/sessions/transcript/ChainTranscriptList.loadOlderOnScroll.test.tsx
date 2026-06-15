@@ -182,9 +182,11 @@ describe('ChainTranscriptList', () => {
             await settleListEffects(2);
         });
 
+        // N2c: the turn decomposes into one message row per agent text, so the
+        // bottom pin targets the LAST decomposed row.
         expect(initialScrollToIndexSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-                index: 0,
+                index: 1,
                 animated: false,
                 viewPosition: 1,
             }),
@@ -195,7 +197,7 @@ describe('ChainTranscriptList', () => {
         ];
         expect(scrollToOffsetCalls).toEqual(expect.arrayContaining([
             [expect.objectContaining({
-                offset: 0,
+                offset: 120,
                 animated: false,
             })],
         ]));
@@ -521,6 +523,52 @@ describe('ChainTranscriptList', () => {
         });
 
         expect(loadOlder).toHaveBeenCalledTimes(1);
+    });
+
+    it('loads older from an exact web edge while passive exact-zero scroll remains suspended', async () => {
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        try {
+            scrollToIndexShouldReject = false;
+            const deferred = createDeferred<{ loaded: number; hasMore: boolean; status: 'loaded' }>();
+            const loadOlder = vi.fn(async () => await deferred.promise);
+            const webScroller = {
+                scrollTop: 0,
+                scrollHeight: 1000,
+                clientHeight: 500,
+            };
+
+            const screen = await renderChainTranscriptList({
+                sessionId: 's1',
+                messages: [{ kind: 'agent-text', id: 'm1', localId: null, createdAt: 1, text: 'hi', isThinking: false }],
+                metadata: null,
+                interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+                loadOlder,
+            });
+
+            const list = getFlashList(screen);
+            await act(async () => {
+                invokeTestInstanceHandler(list, 'onLayout', { nativeEvent: { layout: { height: 500 } } });
+                list.props.onContentSizeChange(0, 500);
+                list.props.onScroll({ nativeEvent: { target: webScroller } });
+                await settleListEffects();
+            });
+            expect(loadOlder).not.toHaveBeenCalled();
+
+            await act(async () => {
+                list.props.onStartReached();
+                await settleListEffects();
+            });
+            expect(loadOlder).toHaveBeenCalledTimes(1);
+            const loadOlderPromise = loadOlder.mock.results[0]?.value as Promise<unknown> | undefined;
+            deferred.resolve({ loaded: 1, hasMore: true, status: 'loaded' });
+            if (loadOlderPromise) {
+                await loadOlderPromise;
+            }
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
     });
 
     it('does not load older while pinned at the bottom of a short transcript', async () => {

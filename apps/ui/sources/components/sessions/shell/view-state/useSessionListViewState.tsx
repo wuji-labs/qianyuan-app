@@ -32,7 +32,10 @@ import {
     countCollapsedSessionListGroups,
     filterCollapsedSessionListItems,
 } from '../sessionListCollapsedItems';
-import { buildSessionListReachabilityModels } from '../sessionListReachabilityModels';
+import {
+    buildSessionListReachabilityModels,
+    createSessionListReachabilityModelsCache,
+} from '../sessionListReachabilityModels';
 import {
     buildSessionListSelectedItems,
     type SessionListSelectedItem,
@@ -50,6 +53,7 @@ import {
     hasActiveSessionListHeaderFilters,
     type SessionListHeaderFilterInput,
 } from '../sessionListFilters';
+import { useSessionListSnapshotWhenInactive } from '../surface/useSessionListSnapshotWhenInactive';
 
 const EMPTY_SESSION_KEYS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_SESSION_LIST_GROUP_ORDER: Readonly<Record<string, ReadonlyArray<string> | undefined>> = Object.freeze({});
@@ -122,6 +126,10 @@ export function useSessionListViewState({
     const sessionListDensity = useSetting('sessionListDensity');
     const profile = useProfile();
     const machineDisplayById = useMachineDisplayById();
+    const renderMachineDisplayById = useSessionListSnapshotWhenInactive(
+        machineDisplayById,
+        sessionListSurfaceDataActive,
+    );
     const selection = useResolvedActiveServerSelection();
     const sessionFoldersDecision = useFeatureDecision('sessions.folders');
     const sessionFolderAssignmentsBySessionKey = useSessionFolderAssignmentsBySessionKey();
@@ -217,6 +225,7 @@ export function useSessionListViewState({
         return projectHeader?.title ?? null;
     }, [filteredListItems, focusedFolderState.folderBreadcrumbs.length]);
 
+    const reachabilityModelsCacheRef = React.useRef(createSessionListReachabilityModelsCache());
     const reachabilityModels = React.useMemo(() => {
         return measureSessionListRenderDerivation(
             'ui.sessionsList.render.reachabilityDisplayMap',
@@ -224,15 +233,16 @@ export function useSessionListViewState({
             () => ({
                 sessions: countSessionListItems(filteredListItems),
                 displayRows: countSessionListItems(filteredListItems),
-                machines: Object.keys(machineDisplayById).length,
+                machines: Object.keys(renderMachineDisplayById).length,
             }),
             () => buildSessionListReachabilityModels({
+                cache: reachabilityModelsCacheRef.current,
                 items: filteredListItems,
-                machinesById: machineDisplayById,
+                machinesById: renderMachineDisplayById,
                 workspaceLabelsV1,
             }),
         );
-    }, [filteredListItems, machineDisplayById, workspaceLabelsV1]);
+    }, [filteredListItems, renderMachineDisplayById, workspaceLabelsV1]);
 
     const selectedItemsRef = React.useRef<ReadonlyArray<SessionListSelectedItem> | null>(null);
     const visibleListItems = React.useMemo(() => {

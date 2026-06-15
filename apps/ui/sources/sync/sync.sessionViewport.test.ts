@@ -347,7 +347,7 @@ describe('sync session viewport', () => {
         });
     });
 
-    it('keeps viewport state memory-only across runtime reloads', async () => {
+    it('hydrates the persisted viewport anchor across app restarts (N2b.1)', async () => {
         const { sync } = await import('./sync');
 
         sync.onSessionViewportChange('session-1', {
@@ -357,6 +357,111 @@ describe('sync session viewport', () => {
             anchor: validViewportAnchor,
         });
         expect(sync.getSessionViewport('session-1')).toMatchObject({ anchor: validViewportAnchor });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+
+        expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            offsetY: 420,
+            source: 'observed',
+            anchor: {
+                kind: validViewportAnchor.kind,
+                messageId: validViewportAnchor.messageId,
+                itemId: validViewportAnchor.itemId,
+                itemOffsetPx: validViewportAnchor.itemOffsetPx,
+            },
+        });
+
+        // Session entry keeps the hydrated anchored intent instead of defaulting to live-tail.
+        reloadedSync.onSessionVisible('session-1');
+        expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            offsetY: 420,
+            source: 'observed',
+        });
+    });
+
+    it('stamps the persisted anchor with the message seq when the message is materialized (identity-first)', async () => {
+        const { sync } = await import('./sync');
+        const { storage } = await import('@/sync/domains/state/storage');
+
+        storage.getState().applyMessages('session-1', [buildMessage('message-1', 7)]);
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+
+        expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
+            anchor: { messageId: 'message-1', seq: 7 },
+        });
+    });
+
+    it('hydrates an anchor whose message is no longer materialized (deleted/pruned window degrades downstream)', async () => {
+        const { sync } = await import('./sync');
+
+        // No message store entry for the anchor: identity is persisted regardless;
+        // entry resolution degrades through nearest-surviving / bounded materialization.
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+
+        const hydrated = reloadedSync.getSessionViewport('session-1');
+        expect(hydrated).toMatchObject({
+            isPinned: false,
+            anchor: { messageId: 'message-1' },
+        });
+        // Raw distance survives as degraded fallback metadata only.
+        expect(hydrated?.offsetY).toBe(420);
+    });
+
+    it('does not leak a persisted anchor across the fork boundary (per-session keying)', async () => {
+        const { sync } = await import('./sync');
+
+        sync.onSessionViewportChange('session-parent', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+
+        expect(reloadedSync.getSessionViewport('session-parent')).toMatchObject({ isPinned: false });
+        expect(reloadedSync.getSessionViewport('session-parent-fork')).toBeNull();
+
+        reloadedSync.onSessionVisible('session-parent-fork');
+        expect(reloadedSync.getSessionViewport('session-parent-fork')).toMatchObject({
+            isPinned: true,
+            offsetY: 0,
+            source: 'default',
+            anchor: null,
+        });
+    });
+
+    it('live-tail intent beats a stale persisted anchor across restarts (catchup precedence)', async () => {
+        const { sync } = await import('./sync');
+        const liveTailSync = sync as unknown as { markSessionLiveTailIntent: (sessionId: string) => void };
+
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+        liveTailSync.markSessionLiveTailIntent('session-1');
 
         vi.resetModules();
         const { sync: reloadedSync } = await import('./sync');
@@ -372,10 +477,146 @@ describe('sync session viewport', () => {
         });
     });
 
-    it('resets stale hidden transcript markers and clears the reveal marker after invalidation', async () => {
+    it('does not persist transient unpinned viewport reports', async () => {
+        const { sync } = await import('./sync');
+
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 9_999,
+            shouldRestoreViewport: false,
+        });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+
+        expect(reloadedSync.getSessionViewport('session-1')).toBeNull();
+    });
+
+    it('keeps the hydrated anchored intent against passive pinned reports after restart', async () => {
+        const { sync } = await import('./sync');
+
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+
+        // A passive pinned observation that still requests restore must not wipe the
+        // hydrated anchor (same guard as the in-memory path).
+        reloadedSync.onSessionViewportChange('session-1', {
+            isPinned: true,
+            offsetY: 0,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            offsetY: 420,
+            source: 'observed',
+        });
+    });
+
+    it('preserves the stored identity anchor across anchor-less passive observation emits (N2b.5)', async () => {
+        const { sync } = await import('./sync');
+
+        // User dwell capture stores the durable identity anchor.
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        // App restart hydrates the persisted anchor (cold reopen #1).
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+        expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
+            anchor: { messageId: 'message-1', itemId: 'item-1' },
+        });
+
+        // Passive observation emit from the onScroll pipeline: unpinned restore
+        // intent with NO anchor field (the capture is suppressed for passive
+        // frames). It must merge — update offset metadata, keep the identity.
+        reloadedSync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 380,
+            shouldRestoreViewport: true,
+        });
+        expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            offsetY: 380,
+            source: 'observed',
+            anchor: { messageId: 'message-1', itemId: 'item-1' },
+        });
+
+        // Cold reopen #2: the identity round-trip must survive the visit.
+        vi.resetModules();
+        const { sync: coldSync } = await import('./sync');
+        const hydrated = coldSync.getSessionViewport('session-1');
+        expect(hydrated).toMatchObject({
+            isPinned: false,
+            anchor: { messageId: 'message-1', itemId: 'item-1' },
+        });
+        expect(hydrated?.offsetY).toBe(380);
+    });
+
+    it('clears the stored anchor when a capture outcome explicitly reports no anchor', async () => {
+        const { sync } = await import('./sync');
+
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 420,
+            shouldRestoreViewport: true,
+            anchor: validViewportAnchor,
+        });
+
+        // A user-attributed capture that found no anchor (anchor-capture-empty)
+        // emits an explicit null: the record degrades to distance fallback at
+        // the NEW position instead of keeping a stale identity.
+        sync.onSessionViewportChange('session-1', {
+            isPinned: false,
+            offsetY: 980,
+            shouldRestoreViewport: true,
+            anchor: null,
+        });
+        expect(sync.getSessionViewport('session-1')).toMatchObject({
+            isPinned: false,
+            offsetY: 980,
+            source: 'observed',
+            anchor: null,
+        });
+
+        vi.resetModules();
+        const { sync: reloadedSync } = await import('./sync');
+        const hydrated = reloadedSync.getSessionViewport('session-1');
+        expect(hydrated).toMatchObject({ isPinned: false, anchor: null });
+        expect(hydrated?.offsetY).toBe(980);
+    });
+
+    it('repairs stale hidden transcript markers non-destructively and clears the reveal marker', async () => {
+        // C6/D2a: reopening a session with a stale-message marker must NOT wipe the transcript.
+        // The edited region is refetched and merged in place; loaded history is preserved and the
+        // stale marker is cleared. (Previously onSessionVisible did a full destructive reset.)
         const { sync } = await import('./sync');
         const { storage } = await import('@/sync/domains/state/storage');
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
         const invalidateCoalesced = vi.fn();
+        const requestMock = apiSocket.request as unknown as ReturnType<typeof vi.fn>;
+        requestMock.mockImplementation(async () => new Response(
+            JSON.stringify({ messages: [], hasMore: false, nextAfterSeq: null }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ));
         const sessionId = 'session-stale-reveal';
         type StaleTranscriptHarness = {
             markSessionTranscriptStale: (
@@ -384,10 +625,14 @@ describe('sync session viewport', () => {
             ) => void;
             messagesSync: Map<string, { invalidateCoalesced: () => void }>;
             sessionMaterializedMaxSeqById: Record<string, number>;
+            deferredTranscriptState: { staleMessageIdsBySessionId: Record<string, readonly string[]> };
         };
         const harness = sync as unknown as StaleTranscriptHarness;
 
+        storage.getState().applySessions([createSessionFixture({ id: sessionId, seq: 7, encryptionMode: 'plain' })]);
         storage.getState().applyMessages(sessionId, [buildMessage('message-stale', 7)]);
+        storage.getState().applyMessagesLoaded(sessionId);
+        const historyCountBefore = storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst.length ?? 0;
         harness.messagesSync = new Map([[sessionId, { invalidateCoalesced }]]);
         harness.sessionMaterializedMaxSeqById = { [sessionId]: 7 };
         harness.markSessionTranscriptStale(sessionId, {
@@ -397,16 +642,23 @@ describe('sync session viewport', () => {
         });
 
         sync.onSessionVisible(sessionId);
+        await expect.poll(() => requestMock.mock.calls.length).toBe(1);
+        await expect.poll(
+            () => harness.deferredTranscriptState.staleMessageIdsBySessionId[sessionId]?.length ?? 0,
+        ).toBe(0);
 
-        expect(storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst).toEqual([]);
-        expect(storage.getState().sessionMessages[sessionId]?.isLoaded).toBe(false);
-        expect(harness.sessionMaterializedMaxSeqById[sessionId]).toBe(0);
+        // Transcript history preserved (not wiped), record stays loaded, materialized seq intact.
+        expect(storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst.length).toBe(historyCountBefore);
+        expect(storage.getState().sessionMessages[sessionId]?.isLoaded).toBe(true);
+        expect(harness.sessionMaterializedMaxSeqById[sessionId]).toBe(7);
         expect(invalidateCoalesced).toHaveBeenCalledTimes(1);
 
-        storage.getState().applyMessages(sessionId, [buildMessage('message-after-reset', 8)]);
+        // Reopening again with no remaining stale marker does not re-trigger a repair, only the
+        // standard coalesced invalidate.
         sync.onSessionVisible(sessionId);
-
-        expect(storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst).toHaveLength(1);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(requestMock).toHaveBeenCalledTimes(1);
+        expect(storage.getState().sessionMessages[sessionId]?.messageIdsOldestFirst.length).toBe(historyCountBefore);
         expect(invalidateCoalesced).toHaveBeenCalledTimes(2);
     });
 

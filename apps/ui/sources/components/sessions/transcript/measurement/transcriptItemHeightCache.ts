@@ -25,6 +25,7 @@ export type TranscriptItemHeightCacheEntry = Readonly<{
 }>;
 
 export type TranscriptItemHeightCache = Readonly<{
+    delete(signature: TranscriptItemHeightValiditySignature): boolean;
     get(signature: TranscriptItemHeightValiditySignature): TranscriptItemHeightCacheEntry | undefined;
     set(signature: TranscriptItemHeightValiditySignature, entry: TranscriptItemHeightCacheEntry): boolean;
     clear(): void;
@@ -72,6 +73,10 @@ export function createDefaultTranscriptItemHeightCache(
     const entries = new LruMap<string, TranscriptItemHeightCacheEntry>({ maxEntries });
 
     return {
+        delete(signature) {
+            if (!isTranscriptItemHeightSignatureStable(signature)) return false;
+            return entries.delete(buildTranscriptItemHeightSignatureKey(signature));
+        },
         get(signature) {
             if (!isTranscriptItemHeightSignatureStable(signature)) return undefined;
             return entries.get(buildTranscriptItemHeightSignatureKey(signature));

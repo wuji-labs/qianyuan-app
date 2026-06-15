@@ -36,6 +36,33 @@ export function resolveSessionListRowStoreScopeKey(scope: SessionListRowStoreSub
     return serverId && sessionId ? sessionTagKey(serverId, sessionId) : sessionId;
 }
 
+export function reuseSessionListRowStoreSubscriptionScopes<T extends ReadonlyArray<SessionListRowStoreSubscriptionScope>>(
+    previous: T | null | undefined,
+    next: T,
+): T {
+    if (!previous || previous.length !== next.length) return next;
+    for (let index = 0; index < next.length; index += 1) {
+        const previousScope = previous[index];
+        const nextScope = next[index];
+        if (!previousScope || !nextScope) return next;
+        if (resolveSessionListRowStoreScopeKey(previousScope) !== resolveSessionListRowStoreScopeKey(nextScope)) {
+            return next;
+        }
+    }
+    return previous;
+}
+
+export function reuseSessionListRowStoreKeySet<T extends ReadonlySet<string>>(
+    previous: T | null | undefined,
+    next: T,
+): T {
+    if (!previous || previous.size !== next.size) return next;
+    for (const key of next) {
+        if (!previous.has(key)) return next;
+    }
+    return previous;
+}
+
 export function resolveSessionListRowStoreSubscriptionScopes(
     scopes: ReadonlyArray<SessionListRowStoreSubscriptionScope>,
     visibleRowKeys: ReadonlySet<string> | null,

@@ -26,6 +26,7 @@ export type DirectSessionTranscriptUpdatedEphemeralUpdate = Readonly<{
     type: 'direct-session-transcript-delta';
     sessionId: string;
     items: ReadonlyArray<DirectTranscriptRawMessageV1>;
+    fromCursor?: string | null;
     nextCursor?: string | null;
     tailCursor?: string | null;
     truncated?: boolean;
@@ -52,10 +53,25 @@ const DirectSessionTranscriptUpdatedEphemeralUpdateSchema = z.object({
     type: z.literal('direct-session-transcript-delta'),
     sessionId: z.string(),
     items: z.array(DirectTranscriptRawMessageV1Schema),
+    fromCursor: z.string().nullable().optional(),
     nextCursor: z.string().nullable().optional(),
     tailCursor: z.string().nullable().optional(),
     truncated: z.boolean().optional(),
-}).passthrough();
+}).passthrough().superRefine((value, ctx) => {
+    const advancesCursor = Object.prototype.hasOwnProperty.call(value, 'nextCursor')
+        || Object.prototype.hasOwnProperty.call(value, 'tailCursor');
+    if (
+        value.truncated !== true
+        && advancesCursor
+        && (typeof value.fromCursor !== 'string' || value.fromCursor.trim().length === 0)
+    ) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'fromCursor is required when a cursor is present on non-truncated direct-session transcript deltas',
+            path: ['fromCursor'],
+        });
+    }
+});
 
 const LegacySharingUpdateBodySchema = z.discriminatedUnion('t', [
     z.object({

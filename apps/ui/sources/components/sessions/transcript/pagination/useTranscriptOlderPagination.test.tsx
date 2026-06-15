@@ -33,10 +33,14 @@ function createHarness(overrides?: HarnessOverrides) {
 
 async function observe(
     hook: { getCurrent: () => ReturnType<typeof useTranscriptOlderPagination> },
-    metrics: { offsetY: number; scrollable?: boolean },
+    metrics: { offsetY: number; scrollable?: boolean; trigger?: 'scroll' | 'edge-reached' },
 ) {
     await act(async () => {
-        hook.getCurrent().onScrollObservation({ offsetY: metrics.offsetY, scrollable: metrics.scrollable ?? true });
+        hook.getCurrent().onScrollObservation({
+            offsetY: metrics.offsetY,
+            scrollable: metrics.scrollable ?? true,
+            trigger: metrics.trigger ?? 'scroll',
+        });
     });
 }
 
@@ -182,7 +186,26 @@ describe('useTranscriptOlderPagination', () => {
         expect(loadOlder).toHaveBeenCalledTimes(1);
     });
 
-    it('suspends loads while the observed offset is <= 0 (negative-offset settling)', async () => {
+    it('loads again from explicit exact-top edge triggers after cooldown without requiring a threshold exit', async () => {
+        vi.useFakeTimers();
+        const { input, loadOlder, pendingLoads } = createHarness({ cooldownMs: 500 });
+        const hook = await renderHook(() => useTranscriptOlderPagination(input));
+
+        await observe(hook, { offsetY: 0, trigger: 'edge-reached' });
+        expect(loadOlder).toHaveBeenCalledTimes(1);
+        expect(loadOlder).toHaveBeenCalledWith({ trigger: 'threshold-enter' });
+
+        await resolveLoad(pendingLoads, { status: 'loaded', loaded: 20, hasMore: true });
+        await observe(hook, { offsetY: 0, trigger: 'edge-reached' });
+        await act(async () => {
+            vi.advanceTimersByTime(500);
+        });
+        await observe(hook, { offsetY: 0, trigger: 'edge-reached' });
+        expect(loadOlder).toHaveBeenCalledTimes(2);
+        expect(loadOlder).toHaveBeenLastCalledWith({ trigger: 'post-cooldown' });
+    });
+
+    it('suspends passive exact-zero and negative offsets (negative-offset settling)', async () => {
         vi.useFakeTimers();
         const { input, loadOlder } = createHarness();
         const hook = await renderHook(() => useTranscriptOlderPagination(input));

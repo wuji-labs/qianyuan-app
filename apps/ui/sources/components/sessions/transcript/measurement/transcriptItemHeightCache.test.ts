@@ -118,6 +118,20 @@ describe('transcriptItemHeightCache', () => {
         expect(cache.get(c)?.heightPx).toBe(120);
     });
 
+    it('deletes one stable signature without clearing unrelated measured rows', () => {
+        const cache = createTestTranscriptItemHeightCache();
+        const a = stableSignature({ itemId: 'a', structuralKey: 'a:v1' });
+        const b = stableSignature({ itemId: 'b', structuralKey: 'b:v1' });
+        cache.set(a, { heightPx: 100 });
+        cache.set(b, { heightPx: 120 });
+
+        expect(cache.delete(a)).toBe(true);
+
+        expect(cache.get(a)).toBeUndefined();
+        expect(cache.get(b)?.heightPx).toBe(120);
+        expect(cache.delete(a)).toBe(false);
+    });
+
     it('returns isolated test cache instances', () => {
         const a = createTestTranscriptItemHeightCache();
         const b = createTestTranscriptItemHeightCache();

@@ -1488,6 +1488,77 @@ describe('useVisibleSessionListViewData', () => {
         await hook.unmount();
     });
 
+    it('uses a retained visible-list seed after the pane-state hook remounts', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000_000);
+        sourceData.sessionListWorkingPlacementMode = 'global';
+        sourceData.activeData = [
+            {
+                type: 'header',
+                title: 'Today',
+                headerKind: 'date',
+                groupKey: 'server:server-a:day:2026-05-04',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('working-session', {
+                    active: true,
+                    activeAt: 1_000_000,
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 1_000_000,
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+            {
+                type: 'session',
+                session: makeRenderableSession('normal-session', {
+                    active: true,
+                }),
+                section: 'active',
+                groupKey: 'server:server-a:day:2026-05-04',
+                groupKind: 'date',
+                serverId: 'server-a',
+            },
+        ];
+
+        const { useVisibleSessionListPaneState } = await import('./useVisibleSessionListViewData');
+        const firstHook = await renderHook(() => useVisibleSessionListPaneState('all'));
+        const retainedSessionListViewData = firstHook.getCurrent().sessionListViewData;
+        expect(retainedSessionListViewData?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}:${item.workingPlacementReason ?? 'none'}`
+        )).toEqual([
+            'header:working',
+            'session:working-session:working:working',
+            'header:date',
+            'session:normal-session:date:none',
+        ]);
+        await firstHook.unmount();
+
+        vi.setSystemTime(1_130_001);
+        const remountOptions: Parameters<typeof useVisibleSessionListPaneState>[1] & Readonly<{
+            retainedSessionListViewData: typeof retainedSessionListViewData;
+        }> = {
+            retainedSessionListViewData,
+        };
+        const remountedHook = await renderHook(() => useVisibleSessionListPaneState('all', remountOptions));
+
+        expect(remountedHook.getCurrent().sessionListViewData?.map((item) => item.type === 'header'
+            ? `header:${item.headerKind ?? 'unknown'}`
+            : `session:${item.session.id}:${item.groupKind ?? 'unknown'}:${item.workingPlacementReason ?? 'none'}`
+        )).toEqual([
+            'header:working',
+            'session:working-session:working:working',
+            'header:date',
+            'session:normal-session:date:none',
+        ]);
+        await remountedHook.unmount();
+    });
+
     it('keeps the workspace header when every visible workspace session is assigned to a folder', async () => {
         sourceData.sessionFoldersEnabled = true;
         sourceData.sessionFolderViewModeV1 = 'tree';

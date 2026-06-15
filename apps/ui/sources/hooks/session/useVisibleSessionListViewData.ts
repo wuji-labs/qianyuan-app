@@ -59,6 +59,7 @@ const EMPTY_OPEN_APPROVAL_SESSION_ID_SET: ReadonlySet<string> = Object.freeze(ne
 
 export type VisibleSessionListViewDataOptions = Readonly<{
     activeSessionId?: string | null;
+    retainedSessionListViewData?: ReadonlyArray<SessionListViewItem> | null;
     sessionListSurfaceDataActive?: boolean;
 }>;
 
@@ -280,6 +281,13 @@ function collectRetainedWorkingSessionKeys(params: Readonly<{
 function countRenderedSessions(data: SessionListViewItem[] | null): number {
     if (!data) return 0;
     return data.reduce((count, item) => count + (item.type === 'session' ? 1 : 0), 0);
+}
+
+function resolvePreviousVisibleSessionListForRetention(
+    previousVisible: SessionListViewItem[] | null,
+    retainedVisible: ReadonlyArray<SessionListViewItem> | null | undefined,
+): ReadonlyArray<SessionListViewItem> | null {
+    return previousVisible ?? retainedVisible ?? null;
 }
 
 export function countVisibleSessionListSessions(data: SessionListViewItem[] | null): number {
@@ -598,19 +606,23 @@ export function useVisibleSessionListViewData(
     const previousVisibleRef = React.useRef<SessionListViewItem[] | null>(null);
 
     const visible = React.useMemo(() => {
+        const previousVisible = resolvePreviousVisibleSessionListForRetention(
+            previousVisibleRef.current,
+            options.retainedSessionListViewData,
+        );
         const nextVisible = buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions, {
             retainAttentionSessionKeys: collectRetainedAttentionSessionKeys({
-                previousVisible: previousVisibleRef.current,
+                previousVisible,
                 activeSessionId: options.activeSessionId,
                 mode: state.sessionListAttentionPromotionMode,
             }),
             retainWorkingSessionKeys: collectRetainedWorkingSessionKeys({
-                previousVisible: previousVisibleRef.current,
+                previousVisible,
                 mode: state.sessionListWorkingPlacementMode,
             }),
         });
-        return reuseStableVisibleSessionListRows(previousVisibleRef.current, nextVisible);
-    }, [options.activeSessionId, state, storageFilter]);
+        return reuseStableVisibleSessionListRows(previousVisible, nextVisible);
+    }, [options.activeSessionId, options.retainedSessionListViewData, state, storageFilter]);
 
     React.useEffect(() => {
         previousVisibleRef.current = visible;
@@ -628,14 +640,18 @@ export function useHasHiddenInactiveSessions(
 
     const result = React.useMemo(() => {
         if (!state.source || state.hideInactiveSessions !== true) return false;
+        const previousVisible = resolvePreviousVisibleSessionListForRetention(
+            previousVisibleRef.current,
+            options.retainedSessionListViewData,
+        );
 
         const retainAttentionSessionKeys = collectRetainedAttentionSessionKeys({
-            previousVisible: previousVisibleRef.current,
+            previousVisible,
             activeSessionId: options.activeSessionId,
             mode: state.sessionListAttentionPromotionMode,
         });
         const retainWorkingSessionKeys = collectRetainedWorkingSessionKeys({
-            previousVisible: previousVisibleRef.current,
+            previousVisible,
             mode: state.sessionListWorkingPlacementMode,
         });
         const visible = buildVisibleSessionListViewData(state, storageFilter, true, {
@@ -649,7 +665,7 @@ export function useHasHiddenInactiveSessions(
             retainWorkingSessionKeys,
         });
         return countRenderedSessions(unhidden) > visibleSessionCount;
-    }, [options.activeSessionId, state, storageFilter]);
+    }, [options.activeSessionId, options.retainedSessionListViewData, state, storageFilter]);
 
     return result;
 }
@@ -671,17 +687,21 @@ export function useVisibleSessionListPaneState(
     }> | null>(null);
 
     const paneState = React.useMemo(() => {
+        const previousVisible = resolvePreviousVisibleSessionListForRetention(
+            previousVisibleRef.current,
+            options.retainedSessionListViewData,
+        );
         const retainAttentionSessionKeys = collectRetainedAttentionSessionKeys({
-            previousVisible: previousVisibleRef.current,
+            previousVisible,
             activeSessionId: options.activeSessionId,
             mode: state.sessionListAttentionPromotionMode,
         });
         const retainWorkingSessionKeys = collectRetainedWorkingSessionKeys({
-            previousVisible: previousVisibleRef.current,
+            previousVisible,
             mode: state.sessionListWorkingPlacementMode,
         });
         const sessionListViewData = reuseStableVisibleSessionListRows(
-            previousVisibleRef.current,
+            previousVisible,
             buildVisibleSessionListViewData(state, storageFilter, state.hideInactiveSessions, {
                 retainAttentionSessionKeys,
                 retainWorkingSessionKeys,
@@ -718,7 +738,7 @@ export function useVisibleSessionListPaneState(
             retainWorkingSessionKeys,
         });
         return reusePreviousPaneState(countRenderedSessions(unhidden) > visibleSessionCount);
-    }, [options.activeSessionId, state, storageFilter]);
+    }, [options.activeSessionId, options.retainedSessionListViewData, state, storageFilter]);
 
     React.useEffect(() => {
         previousVisibleRef.current = paneState.sessionListViewData;

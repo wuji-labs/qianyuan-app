@@ -59,7 +59,7 @@ describe('localSettingsParse', () => {
     it('defaults theme profiles to an empty local-only state', () => {
         expect(localSettingsParse(null).themeProfiles).toEqual({
             profiles: [],
-            activeProfileId: null,
+            activeProfileIds: { light: null, dark: null },
         });
     });
 
@@ -72,7 +72,7 @@ describe('localSettingsParse', () => {
         expect(parsed.themePreference).toBe('dark');
         expect(parsed.themeProfiles).toEqual({
             profiles: [],
-            activeProfileId: null,
+            activeProfileIds: { light: null, dark: null },
         });
     });
 
@@ -100,7 +100,7 @@ describe('localSettingsParse', () => {
 
         expect(parsed.themeProfiles.profiles).toHaveLength(1);
         expect(parsed.themeProfiles.profiles[0]?.id).toBe('valid-profile');
-        expect(parsed.themeProfiles.activeProfileId).toBe('valid-profile');
+        expect(parsed.themeProfiles.activeProfileIds).toEqual({ light: 'valid-profile', dark: 'valid-profile' });
     });
 
     it('accepts built-in theme preset ids as active without storing them in custom profiles', () => {
@@ -112,7 +112,7 @@ describe('localSettingsParse', () => {
         });
 
         expect(parsed.themeProfiles).toEqual({
-            activeProfileId: 'premiumDark',
+            activeProfileIds: { light: 'premiumDark', dark: 'premiumDark' },
             profiles: [],
         });
     });
@@ -140,7 +140,7 @@ describe('localSettingsParse', () => {
 
         expect(parsed.themeProfiles).toEqual({
             profiles: [],
-            activeProfileId: null,
+            activeProfileIds: { light: null, dark: null },
         });
     });
 
@@ -167,7 +167,7 @@ describe('localSettingsParse', () => {
 
         expect(parsed.themeProfiles).toEqual({
             profiles: [],
-            activeProfileId: null,
+            activeProfileIds: { light: null, dark: null },
         });
     });
 
@@ -199,7 +199,7 @@ describe('localSettingsParse', () => {
 
         expect(parsed.themeProfiles).toEqual({
             profiles: [],
-            activeProfileId: null,
+            activeProfileIds: { light: null, dark: null },
         });
     });
 

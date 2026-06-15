@@ -17,6 +17,7 @@ type TranscriptJumpSeqTurn = Readonly<{
 export type TranscriptJumpSeqResolvableItem = Readonly<{
     kind?: unknown;
     messageId?: unknown;
+    toolMessageId?: unknown;
     seq?: unknown;
     turn?: TranscriptJumpSeqTurn;
 }>;
@@ -30,6 +31,12 @@ export type TranscriptJumpSeqResolvableItem = Readonly<{
  * window must therefore stay `null` while older pages may still exist — the
  * nearest-loaded fallback only applies once materialization cannot surface the target
  * (no more older pages, an in-window gap, or a target beyond the newest item).
+ *
+ * Per-unit tool-group rows (N2c): a `tool-group-tool` unit resolves its OWN seq
+ * (`item.seq`, falling back to the resolver on its `toolMessageId`); the
+ * header/expand/footer cap units resolve NO seqs, so a jump targeting a tool hidden
+ * behind the collapsed preview lands on the nearest loaded seq — an adjacent row of
+ * the same group.
  */
 export function resolveTranscriptJumpSeqIndex(params: Readonly<{
     targetSeq: number;
@@ -73,6 +80,11 @@ export function resolveTranscriptJumpSeqIndex(params: Readonly<{
             const seq = typeof item.seq === 'number' && Number.isFinite(item.seq)
                 ? item.seq
                 : resolveSeq(item.messageId);
+            if (seq !== null) considerSeq(i, seq);
+        } else if (item.kind === 'tool-group-tool') {
+            const seq = typeof item.seq === 'number' && Number.isFinite(item.seq)
+                ? item.seq
+                : resolveSeq(item.toolMessageId);
             if (seq !== null) considerSeq(i, seq);
         } else if (item.kind === 'turn' && item.turn) {
             const userSeq = resolveSeq(item.turn.userMessageId);

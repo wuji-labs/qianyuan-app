@@ -1850,6 +1850,75 @@ describe('SessionsList (native virtualization)', () => {
         expect(navigateToSessionSpy).not.toHaveBeenCalled();
     });
 
+    it('freezes rendered data while the surface is not data-active and catches up when active again', async () => {
+        const screen = await renderSessionsListWithSurfaceOwnership({
+            ownerKey: 'phone-root',
+            visible: true,
+            interactive: true,
+            dataActive: true,
+        });
+        const list = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected native FlashListCompat',
+        );
+        const activeData = list.props.data;
+        const nextSession = {
+            id: 'sess_hidden_refresh',
+            active: true,
+            updatedAt: 20,
+            metadata: {
+                machineId: 'machine-target',
+                path: '/Users/test/hidden-refresh',
+                homeDir: '/Users/test',
+                host: 'target.local',
+            },
+        };
+        mockVisibleSessionListViewData = [
+            ...(mockVisibleSessionListViewData ?? []),
+            {
+                type: 'session',
+                session: nextSession,
+                serverId: 'server_a',
+                section: 'active',
+                groupKind: 'active',
+            },
+        ];
+
+        const { SessionsList } = await import('./SessionsList');
+        await screen.update(
+            <SessionsList
+                surfaceOwnership={{
+                    ownerKey: 'phone-root',
+                    visible: false,
+                    interactive: false,
+                    dataActive: false,
+                }}
+            />,
+        );
+        const inactiveList = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected inactive native FlashListCompat',
+        );
+        expect(inactiveList.props.data).toBe(activeData);
+
+        await screen.update(
+            <SessionsList
+                surfaceOwnership={{
+                    ownerKey: 'phone-root',
+                    visible: true,
+                    interactive: true,
+                    dataActive: true,
+                }}
+            />,
+        );
+        const reactivatedList = expectPresent(
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected reactivated native FlashListCompat',
+        );
+        expect(reactivatedList.props.data).not.toBe(activeData);
+        expect(reactivatedList.props.data.some((item: any) => item.type === 'session' && item.session.id === 'sess_hidden_refresh')).toBe(true);
+    });
+
     it('does not expose a load-more handler when the surface is not data-active', async () => {
         const screen = await renderSessionsListWithSurfaceOwnership({
             ownerKey: 'phone-root',
@@ -2025,6 +2094,49 @@ describe('SessionsList (native virtualization)', () => {
         expect(hook.getCurrent().hasMultipleMachines).toBe(true);
 
         await hook.unmount();
+    });
+
+    it('does not rebuild hidden reachability display data for machine display-only refreshes', async () => {
+        platformOs = 'android';
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
+
+        try {
+            const { useSessionListViewState } = await import('./view-state/useSessionListViewState');
+            const hook = await renderHook(({ tick }: { tick: number }) => {
+                void tick;
+                return useSessionListViewState({
+                    data: mockVisibleSessionListViewData,
+                    pathname: '',
+                    sessionListSurfaceDataActive: false,
+                });
+            }, { initialProps: { tick: 0 } });
+
+            syncPerformanceTelemetry.reset();
+            readMachineTargetForSessionMock.mockClear();
+            machineDisplayById = {
+                ...machineDisplayById,
+                'machine-target': {
+                    ...machineDisplayById['machine-target'],
+                    updatedAt: Number(machineDisplayById['machine-target']?.updatedAt ?? 0) + 1,
+                },
+            };
+            await hook.rerender({ tick: 1 });
+
+            expect(syncPerformanceTelemetry.snapshot().events.some((event) =>
+                event.name === 'ui.sessionsList.render.reachabilityDisplayMap'
+            )).toBe(false);
+            expect(readMachineTargetForSessionMock).not.toHaveBeenCalled();
+            await hook.unmount();
+        } finally {
+            syncPerformanceTelemetry.configure({ enabled: false });
+            syncPerformanceTelemetry.reset();
+        }
     });
 
     it('does not rebuild reachability display data for machine heartbeat-only updates', async () => {

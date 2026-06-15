@@ -1,3 +1,4 @@
+import type { TranscriptListOrientation } from '../listOrientation';
 import type { TranscriptBottomFollowMode } from './transcriptBottomFollowMode';
 
 export type TranscriptFlashListBottomMaintenanceResult =
@@ -6,6 +7,9 @@ export type TranscriptFlashListBottomMaintenanceResult =
         readonly startRenderingFromBottom: true;
         readonly autoscrollToBottomThreshold?: number;
         readonly animateAutoScrollToBottom?: false;
+    }
+    | {
+        readonly disabled: true;
     };
 
 export function resolveTranscriptFlashListBottomMaintenance(params: Readonly<{
@@ -15,11 +19,13 @@ export function resolveTranscriptFlashListBottomMaintenance(params: Readonly<{
     hasOpenViewportTransaction: boolean;
     layoutHeight: number;
     nativeEntryShouldUseBottomMaintenance: boolean;
+    orientation: TranscriptListOrientation;
     pinEnabled: boolean;
     pinThresholdPx: number;
     platformIsWeb: boolean;
 }>): TranscriptFlashListBottomMaintenanceResult {
     if (params.platformIsWeb) return undefined;
+    void params.orientation;
     if (!params.nativeEntryShouldUseBottomMaintenance) return undefined;
     if (params.bottomFollowMode !== 'following') {
         // Plan P1: prepends land while released/escaping — FlashList's key-based

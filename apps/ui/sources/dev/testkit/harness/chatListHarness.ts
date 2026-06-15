@@ -492,12 +492,36 @@ export async function createFlashListChatListStorageMock(
 export function createFlashListChatListSyncModuleMock(
     overrides: Partial<Record<string, unknown>> = {},
 ) {
+    // C6/D3: faithful stand-in for the sync-owned reactive drain (the data layer owns the threshold
+    // + in-flight dedupe + fetch; the list supplies geometry only). Mirrors the real decision against
+    // the boundary-mocked loadNewerMessages so the catch-up contract is still exercised end-to-end
+    // through ChatList without loading the heavy sync module. The in-flight guard mirrors the real
+    // loadNewerMessages dedupe (sessionMessagesLoadingNewerByKey).
+    const inFlightSessions = new Set<string>();
+    const hasDeferredNewerMessages = (overrides.hasDeferredNewerMessages as ((id: string) => boolean) | undefined)
+        ?? (() => false);
+    const loadNewerMessages = (overrides.loadNewerMessages as ((id: string) => Promise<unknown>) | undefined)
+        ?? (async () => undefined);
+    const maybeDrainDeferredNewerMessages = (
+        sessionId: string,
+        viewport: Readonly<{ isPinned: boolean; distanceFromBottomPx: number }>,
+    ): void => {
+        if (!sessionId || hasDeferredNewerMessages(sessionId) !== true) return;
+        const thresholdPx = flashListChatListHarnessState.syncTuningState.transcriptForwardPrefetchThresholdPx;
+        const nearBottom = viewport.isPinned || viewport.distanceFromBottomPx <= thresholdPx;
+        if (!nearBottom || inFlightSessions.has(sessionId)) return;
+        inFlightSessions.add(sessionId);
+        void Promise.resolve(loadNewerMessages(sessionId)).catch(() => {}).finally(() => {
+            inFlightSessions.delete(sessionId);
+        });
+    };
     return {
         sync: {
             loadOlderMessages: async () => ({ loaded: 0, hasMore: false, status: 'no_more' as const }),
-            loadNewerMessages: async () => undefined,
-            hasDeferredNewerMessages: () => false,
+            loadNewerMessages,
+            hasDeferredNewerMessages,
             getSyncTuning: () => flashListChatListHarnessState.syncTuningState,
+            maybeDrainDeferredNewerMessages,
             ...overrides,
         },
     };

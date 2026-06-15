@@ -83,8 +83,11 @@ import {
     resolveSessionListRowStoreScopeKey,
     resolveSessionListRowStoreSubscriptionMode,
     resolveSessionListRowStoreSubscriptionScopes,
+    reuseSessionListRowStoreKeySet,
+    reuseSessionListRowStoreSubscriptionScopes,
     type SessionListRowStorePriorityReason,
     type SessionListRowStorePriorityReasonCounts,
+    type SessionListRowStoreSubscriptionScope,
 } from './row/sessionListVisibleRowStoreScopes';
 import { treeRowId } from './drop-resolution/treeRowId';
 import { SessionListViewMenuButton } from './sessionListViewMenu';
@@ -126,6 +129,7 @@ import {
     normalizeSessionListSurfaceOwnership,
     type SessionListSurfaceOwnership,
 } from './surface/sessionListSurfaceOwnership';
+import { useSessionListSnapshotWhenInactive } from './surface/useSessionListSnapshotWhenInactive';
 import { createSessionListRowStoreStateSelector } from '@/sync/store/sessionListRowStateSnapshot';
 import { preloadEnrichedMarkdownRuntime } from '@/components/markdown/enriched/preloadEnrichedMarkdownRuntime';
 import { SyncPerformanceReactProfiler } from '@/components/ui/performance/SyncPerformanceReactProfiler';
@@ -495,6 +499,22 @@ function stringSetsEqual(left: ReadonlySet<string> | null, right: ReadonlySet<st
     return true;
 }
 
+function useStableSessionListRowStoreKeySet<T extends ReadonlySet<string>>(value: T): T {
+    const previousRef = React.useRef<T | null>(null);
+    const stableValue = reuseSessionListRowStoreKeySet(previousRef.current, value);
+    previousRef.current = stableValue;
+    return stableValue;
+}
+
+function useStableSessionListRowStoreSubscriptionScopes<T extends ReadonlyArray<SessionListRowStoreSubscriptionScope>>(
+    scopes: T,
+): T {
+    const previousRef = React.useRef<T | null>(null);
+    const stableScopes = reuseSessionListRowStoreSubscriptionScopes(previousRef.current, scopes);
+    previousRef.current = stableScopes;
+    return stableScopes;
+}
+
 function findVisibleSessionNavigationEntryByScope(
     entries: readonly VisibleSessionNavigationEntry[],
     sessionId: string,
@@ -584,8 +604,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
-    const data = props.data;
+    const liveData = props.data;
     const surfaceOwnership = normalizeSessionListSurfaceOwnership(props.surfaceOwnership);
+    const data = useSessionListSnapshotWhenInactive(liveData, surfaceOwnership.dataActive);
     const surfaceDataActiveRef = React.useRef(surfaceOwnership.dataActive);
     surfaceDataActiveRef.current = surfaceOwnership.dataActive;
     const currentPathname = usePathname();
@@ -907,16 +928,18 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         liveViewItems: listItems as ReadonlyArray<SessionListViewItem>,
     });
     const renderedListItems = frozenListProjection.viewItems;
-    const rowStoreScopes = React.useMemo(() => renderedListItems
+    const rowStoreScopesRaw = React.useMemo(() => renderedListItems
         .filter((item): item is SessionListSessionItem => item.type === 'session')
         .map((item) => ({
             sessionId: item.session.id,
             serverId: item.serverId ?? null,
         })), [renderedListItems]);
-    const prioritySessionRowKeys = React.useMemo(
+    const rowStoreScopes = useStableSessionListRowStoreSubscriptionScopes(rowStoreScopesRaw);
+    const prioritySessionRowKeysRaw = React.useMemo(
         () => buildPrioritySessionRowKeys(renderedListItems),
         [renderedListItems],
     );
+    const prioritySessionRowKeys = useStableSessionListRowStoreKeySet(prioritySessionRowKeysRaw);
     const prioritySessionRowReasonCounts = React.useMemo(
         () => buildPrioritySessionRowReasonCounts(renderedListItems),
         [renderedListItems],

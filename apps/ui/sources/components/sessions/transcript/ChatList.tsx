@@ -14,10 +14,10 @@ import {
     useSetting,
 } from '@/sync/domains/state/storage';
 import { Dimensions, FlatList, PixelRatio, Platform, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
-import { FlashList, LayoutCommitObserver, useRecyclingState } from '@/components/ui/lists/flashListCompat/FlashListCompat';
+import { FlashList, LayoutCommitObserver } from '@/components/ui/lists/flashListCompat/FlashListCompat';
 import { useCallback } from 'react';
 import { MessageView, MessageViewWithSessionCommon } from './MessageView';
-import type { Message } from '@/sync/domains/messages/messageTypes';
+import type { Message, ToolCallMessage } from '@/sync/domains/messages/messageTypes';
 import { Metadata, Session } from '@/sync/domains/state/storageTypes';
 import { buildSessionMetadataStabilitySignatureValue, buildStableJsonSignature } from '@/sync/domains/session/metadata/sessionMetadataStability';
 import { buildSessionTranscriptRenderSignature } from '@/sync/domains/session/transcriptRenderSignature';
@@ -26,7 +26,7 @@ import { ChatFooter, type ChatFooterDirectControlState } from './ChatFooter';
 import { buildChatListItems, buildChatListItemsCached, type ChatListItem, type ChatListItemsBuildCache } from '@/components/sessions/chatListItems';
 import { buildForkAwareMessageDescriptors } from '@/components/sessions/transcript/forkContext/buildForkAwareMessageDescriptors';
 import { deriveReadOnlyTranscriptInteraction } from '@/components/sessions/transcript/forkContext/deriveReadOnlyTranscriptInteraction';
-import { insertForkDividersIntoTranscriptItems } from '@/components/sessions/transcript/forkContext/insertForkDividersIntoTranscriptItems';
+import { insertForkDividersIntoTranscriptItems, type ForkDividerTranscriptItem } from '@/components/sessions/transcript/forkContext/insertForkDividersIntoTranscriptItems';
 import { ForkDividerRow } from '@/components/sessions/transcript/forkContext/ForkDividerRow';
 import { PendingMessagesTranscriptBlock, type PendingMessageEditRequest } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { SessionActionDraftCard } from '@/components/sessions/actions/SessionActionDraftCard';
@@ -34,9 +34,13 @@ import { sync, type SessionViewportAnchorSnapshot } from '@/sync/sync';
 import { jumpToTranscriptSeq } from '@/utils/sessions/jumpToTranscriptSeq';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { buildTranscriptTurnsCached, type TranscriptTurnsBuildCache } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
-import { splitOversizedTranscriptTurnItems } from '@/components/sessions/transcript/turnGrouping/splitOversizedTranscriptTurnItems';
+import { buildTranscriptTurnUnits } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurnUnits';
 import { TurnViewWithSessionCommon } from '@/components/sessions/transcript/turns/TurnView';
 import { ToolCallsGroupRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/ToolCallsGroupRow';
+import { ToolCallsGroupUnitHeaderRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitHeaderRow';
+import { ToolCallsGroupUnitExpandRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitExpandRow';
+import { ToolCallsGroupUnitToolRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitToolRow';
+import { ToolCallsGroupUnitFooterRowWithSessionCommon } from '@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitFooterRow';
 import { shouldAutoExpandToolCallsGroupForShortTranscript } from '@/components/sessions/transcript/toolCalls/resolveToolCallsGroupAutoExpandPolicy';
 import { TranscriptMotionProvider } from '@/components/sessions/transcript/motion/TranscriptMotionProvider';
 import { resolveTranscriptMotionConfig } from '@/components/sessions/transcript/motion/resolveTranscriptMotionConfig';
@@ -51,14 +55,26 @@ import {
     type TranscriptScrollPinEvent,
     type TranscriptScrollPinState,
 } from '@/components/sessions/transcript/scroll/transcriptScrollPinController';
+import { subscribeToFlashListOffsetCorrections } from '@/components/sessions/transcript/scroll/flashListOffsetCorrectionHook';
 import {
+    resolveTranscriptRowContentCount,
+    resolveTranscriptRowViewportRelation,
+} from '@/components/sessions/transcript/scroll/transcriptRowEvidence';
+import {
+    configureTranscriptViewportTelemetryFromTuning,
     recordTranscriptViewportTelemetryEvent,
     resolveTranscriptViewportTelemetryListImplementation,
     resolveTranscriptViewportTelemetryPlatform,
+    transcriptViewportTelemetry,
     type TranscriptViewportTelemetryEvent,
     type TranscriptViewportTelemetryObservationReason,
+    type TranscriptViewportTelemetryBlankAreaSource,
+    type TranscriptViewportTelemetryBottomFollowMode,
+    type TranscriptViewportTelemetryListOrientation,
+    type TranscriptViewportTelemetryMvcpPolicy,
     type TranscriptViewportTelemetryScrollReason,
     type TranscriptViewportTelemetryScrollWriter,
+    type TranscriptViewportTelemetryVisibleWindowSource,
 } from '@/components/sessions/transcript/scroll/transcriptViewportTelemetry';
 import {
     createTranscriptViewportCommandController,
@@ -82,7 +98,22 @@ import {
     resolveTranscriptBottomFollowMode,
     type TranscriptBottomFollowModeState,
 } from '@/components/sessions/transcript/scroll/transcriptBottomFollowMode';
-import { resolveTranscriptFlashListBottomMaintenance } from '@/components/sessions/transcript/scroll/transcriptFlashListBottomMaintenance';
+import {
+    resolveTranscriptFlashListBottomMaintenance,
+    type TranscriptFlashListBottomMaintenanceResult,
+} from '@/components/sessions/transcript/scroll/transcriptFlashListBottomMaintenance';
+import {
+    fromCanonicalScrollOffset,
+    orientTranscriptListItems,
+    resolveBottomRawScrollCommandOffset,
+    resolveBottomRawScrollOffset,
+    resolveEntrySliceSourceBounds,
+    resolveOlderNeighborRenderedIndex,
+    resolveOrientedListEdgeSlots,
+    resolveTranscriptListPresentation,
+    toCanonicalScrollOffset,
+    type TranscriptListOrientation,
+} from '@/components/sessions/transcript/listOrientation';
 import {
     resolveTranscriptEdgePrefetchThresholdPx,
     TRANSCRIPT_EDGE_PREFETCH_FALLBACK_VIEWPORT_RATIO,
@@ -104,7 +135,7 @@ import {
     useOptionalTranscriptSelectionState,
 } from '@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext';
 import { buildTranscriptHotColdSegments } from '@/components/sessions/transcript/segments/buildTranscriptHotColdSegments';
-import { resolveWebHotColdScrollDecision } from '@/components/sessions/transcript/segments/resolveWebHotColdScrollDecision';
+import { resolveWebColdListScrollTarget } from '@/components/sessions/transcript/segments/resolveWebHotColdScrollDecision';
 import {
     isMessageRolledBack,
     readSessionRollbackRangesV1,
@@ -138,6 +169,7 @@ import {
     TRANSCRIPT_WEB_TOOL_GROUP_PREPEND_ANCHOR_TEST_ID_PREFIX,
     type WebTranscriptPrependAnchor,
     type WebTranscriptPrependRestoreResult,
+    type WebTranscriptViewportAnchor,
 } from '@/components/sessions/transcript/webTranscriptPrependAnchor';
 import { resolveWebTranscriptPrependRangeReservePx } from '@/components/sessions/transcript/webTranscriptPrependRangeReserve';
 import {
@@ -165,7 +197,10 @@ import {
     TRANSCRIPT_WEB_FLASH_LIST_SCROLL_EVENT_THROTTLE_MS,
 } from '@/components/sessions/transcript/_constants';
 import { OlderLoadProgressOverlay } from '@/components/sessions/transcript/OlderLoadProgressOverlay';
-import { useTranscriptOlderPagination } from '@/components/sessions/transcript/pagination/useTranscriptOlderPagination';
+import {
+    useTranscriptOlderPagination,
+    type TranscriptOlderPaginationSnapshot,
+} from '@/components/sessions/transcript/pagination/useTranscriptOlderPagination';
 import { waitForVisualUpdateWithTimeout } from '@/components/sessions/transcript/pagination/waitForVisualUpdateWithTimeout';
 import {
     observePrependOutcome,
@@ -184,9 +219,16 @@ import { LruMap } from '@/utils/cache/lruMap';
 import {
     buildTranscriptItemHeightSignatureKey,
     getDefaultTranscriptItemHeightCache,
-    type TranscriptItemHeightCache,
     type TranscriptItemHeightValiditySignature,
 } from '@/components/sessions/transcript/measurement/transcriptItemHeightCache';
+import {
+    createTranscriptMeasurementReconciler,
+    type TranscriptMeasurementReconciler,
+} from '@/components/sessions/transcript/measurement/transcriptMeasurementReconciler';
+import {
+    TranscriptRowLayoutMutationProvider,
+    type TranscriptRowLayoutMutation,
+} from '@/components/sessions/transcript/measurement/TranscriptRowLayoutMutationContext';
 import { resolveTranscriptRowShellHeight } from '@/components/sessions/transcript/measurement/resolveTranscriptRowShellHeight';
 import {
     buildTranscriptRowShellSignature,
@@ -213,13 +255,19 @@ import {
     nativeBottomFollowCanCompletePendingPin,
     nativeBottomFollowPinTargetObserved,
 } from '@/components/sessions/transcript/viewport/nativeBottomFollowObservationPolicy';
-import { nativeEntryRestoreObservationMatches } from '@/components/sessions/transcript/viewport/nativeEntryRestoreObservationPolicy';
+import {
+    nativeEntryRestoreObservationMatches,
+    resolveNativeSliceEntryObservation,
+} from '@/components/sessions/transcript/viewport/nativeEntryRestoreObservationPolicy';
 import {
     createEntryRestoreTransaction,
     type EntryRestoreTransaction,
     type EntryRestoreTransactionTarget,
 } from '@/components/sessions/transcript/viewport/entryRestore/entryRestoreTransaction';
-import { resolveEntryRestoreTarget } from '@/components/sessions/transcript/viewport/entryRestore/resolveEntryRestoreTarget';
+import {
+    resolveEntryRestoreTarget,
+    type EntryRestoreSliceTarget,
+} from '@/components/sessions/transcript/viewport/entryRestore/resolveEntryRestoreTarget';
 import {
     shouldIgnoreNativeInvalidScrollObservation as resolveShouldIgnoreNativeInvalidScrollObservation,
     shouldIgnoreNativePassiveViewportScroll as resolveShouldIgnoreNativePassiveViewportScroll,
@@ -230,6 +278,7 @@ type ScrollableChatListRef = Readonly<{
     scrollToIndex: (params: { index: number; animated?: boolean; viewOffset?: number; viewPosition?: number }) => void;
     scrollToOffset: (params: { offset: number; animated?: boolean }) => void;
     scrollToEnd?: (params?: { animated?: boolean }) => void;
+    clearLayoutCacheOnUpdate?: () => void;
     computeVisibleIndices?: () => { startIndex: number; endIndex: number };
     getAbsoluteLastScrollOffset?: () => number;
     getFirstVisibleIndex?: () => number;
@@ -260,7 +309,12 @@ type EntryRestoreWriteContext = Readonly<{
     /** Canonical content height (scroll-event contentSize basis) at issue time. */
     issuedContentHeight: number;
     issuedLayoutHeight: number;
-    kind: 'anchor' | 'distance' | 'bottom';
+    /**
+     * `slice-anchor` (N2b.2): the entry's initial act was the data-window slice —
+     * an observe-only transaction that confirms the visible anchor still sits at
+     * the saved pixel offset and can never authorize a write.
+     */
+    kind: 'anchor' | 'distance' | 'bottom' | 'slice-anchor';
     sessionId: string;
     targetOffsetY: number | null;
     targetOffsetYWasClamped: boolean;
@@ -274,6 +328,31 @@ type LastNativeRestoreIndexCommand = Readonly<{
     viewOffset?: number;
 }>;
 
+type NativeVisibleWindowSnapshot = Readonly<{
+    blankAreaPx: number;
+    blankAreaSource: TranscriptViewportTelemetryBlankAreaSource;
+    firstVisibleItemId?: string;
+    hasVisibleRows: boolean;
+    lastVisibleItemId?: string;
+    lastKnownFirstVisibleItemId?: string;
+    lastKnownLastVisibleItemId?: string;
+    visibleWindowStale?: boolean;
+    visibleWindowSource: TranscriptViewportTelemetryVisibleWindowSource;
+}>;
+
+type NativeViewableTranscriptItem = Readonly<{
+    index?: number | null;
+    isViewable?: boolean;
+    item?: ChatTranscriptListItem | null;
+}>;
+
+type ScheduledPinToBottom = {
+    kind: 'raf' | 'timeout';
+    id: any;
+    previousWebMetrics: WebTranscriptScrollMetrics | null;
+    reason: TranscriptViewportTelemetryScrollReason;
+};
+
 const EMPTY_MESSAGES_BY_ID: Readonly<Record<string, Message>> = Object.freeze({});
 const TRANSCRIPT_SCROLL_AUTO_REPIN_THROTTLE_MS = 200;
 const TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS = 250;
@@ -284,6 +363,7 @@ const TRANSCRIPT_SCROLL_USER_INTENT_RECENT_MS = 500;
 const TRANSCRIPT_WEB_NON_PROGRAMMATIC_SCROLL_SUSTAIN_FRAMES = 2;
 const TRANSCRIPT_NATIVE_DRAW_DISTANCE_DEFAULT_MIN_PX = 600;
 const TRANSCRIPT_NATIVE_DRAW_DISTANCE_DEFAULT_MAX_PX = 1200;
+const TRANSCRIPT_NATIVE_ENTRY_SLICE_HEAD_OFFSET_TOLERANCE_PX = 2;
 const TRANSCRIPT_NATIVE_ENTRY_RESTORE_PAINT_RELEASE_DELAY_MS = 32;
 const TRANSCRIPT_NATIVE_TOUCH_ESCAPE_MOVE_THRESHOLD_PX = 12;
 const TRANSCRIPT_SCROLL_JUMP_TO_BOTTOM_REVEAL_VIEWPORT_RATIO_FALLBACK = 0.75;
@@ -304,6 +384,36 @@ function resolveIndexScrollWriter(params: Readonly<{
 
 function resolveNativeScrollEventMetric(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : null;
+}
+
+function canUseWriteFreeEntrySliceForAnchorOffset(itemOffsetPx: number): boolean {
+    return (
+        Number.isFinite(itemOffsetPx) &&
+        Math.abs(itemOffsetPx) <= TRANSCRIPT_NATIVE_ENTRY_SLICE_HEAD_OFFSET_TOLERANCE_PX
+    );
+}
+
+function readFiniteTelemetryNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function readTelemetryBoolean(value: unknown): boolean | undefined {
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+function resolveNativeTelemetryMvcpPolicy(
+    maintenance: TranscriptFlashListBottomMaintenanceResult | undefined,
+): TranscriptViewportTelemetryMvcpPolicy {
+    if (!maintenance) return 'default';
+    if ('disabled' in maintenance && maintenance.disabled === true) return 'disabled';
+    if (
+        'startRenderingFromBottom' in maintenance &&
+        maintenance.startRenderingFromBottom === true
+    ) {
+        if (typeof maintenance.autoscrollToBottomThreshold === 'number') return 'autoscroll-threshold';
+        return 'start-rendering-from-bottom';
+    }
+    return 'default';
 }
 
 function readNativeTouchPageY(event: unknown): number | null {
@@ -537,7 +647,6 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
     const transcriptGroupingMode = useSetting('transcriptGroupingMode');
     const transcriptGroupToolCalls = useSetting('transcriptGroupToolCalls');
     const transcriptTurnToolCallsGroupStrategy = useSetting('transcriptTurnToolCallsGroupStrategy');
-    const transcriptListImplementation = useSetting('transcriptListImplementation');
     const transcriptSessionCommon = useTranscriptSessionCommon(props.session.id);
     const toolViewTimelineChromeMode = transcriptSessionCommon.toolChrome.toolViewTimelineChromeMode;
 
@@ -695,21 +804,15 @@ export const ChatList = React.memo(function ChatList(props: ChatListProps) {
                 includeCommittedMessages: false,
             });
 
+            // N2c: turn items are emitted UNDECOMPOSED here; per-unit decomposition for
+            // flash_v2 happens inside ChatListInternal where tool-group expansion state lives.
             const turns = turnsCache?.turns ?? [];
-            const turnItems: ChatTranscriptListItem[] = turns.map((t) => ({ kind: 'turn', id: t.id, turn: t }));
-            const base = [...turnItems, ...trailing];
-            const virtualizableBase = transcriptListImplementation === 'flash_v2'
-                ? splitOversizedTranscriptTurnItems({
-                    items: base,
-                    maxTurnEntriesPerListItem: transcriptMaxTurnEntriesPerListItem,
-                    messagesById,
-                    metadataByMessageId: forkAwareMessageDescriptors?.metadataByMessageId,
-                }) as ChatTranscriptListItem[]
-                : base;
-            if (!forkedTranscriptEnabled || !fork) return virtualizableBase;
-            return insertForkDividersIntoTranscriptItems({ items: virtualizableBase, fork }) as ChatTranscriptListItem[];
+            const turnItems: ForkDividerTranscriptItem[] = turns.map((t) => ({ kind: 'turn', id: t.id, turn: t }));
+            const base: ForkDividerTranscriptItem[] = [...turnItems, ...trailing];
+            if (!forkedTranscriptEnabled || !fork) return base;
+            return insertForkDividersIntoTranscriptItems({ items: base, fork }) as ChatTranscriptListItem[];
         });
-    }, [actionDrafts, fork, forkAwareMessageDescriptors?.metadataByMessageId, forkedTranscriptEnabled, groupingMode, linearCache, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages, transcriptListImplementation, transcriptMaxTurnEntriesPerListItem, turnsCache]);
+    }, [actionDrafts, fork, forkedTranscriptEnabled, groupingMode, linearCache, messageIdsOldestFirst, messagesById, pendingMessages, discardedPendingMessages, turnsCache]);
 
     const latestCommittedActivityKey =
         messageIdsOldestFirst.length > 0 ? messageIdsOldestFirst[messageIdsOldestFirst.length - 1]! : null;
@@ -952,44 +1055,116 @@ const ChatListMessageRow = React.memo(function ChatListMessageRow(props: {
 });
 
 const TranscriptRowShell = React.memo(function TranscriptRowShell(props: Readonly<{
-    cache: TranscriptItemHeightCache;
+    reconciler: TranscriptMeasurementReconciler;
     children: React.ReactNode;
     itemId: string;
+    onRowLayoutMutation?: (params: Readonly<{
+        itemId: string;
+        mutation: TranscriptRowLayoutMutation;
+        rowKind: string;
+    }>) => void;
+    /** N1.2 evidence callback (dev-gated telemetry only; no layout behavior). */
+    onRowMeasured?: (params: Readonly<{ itemId: string; rowKind: string; heightPx: number }>) => void;
     signature: TranscriptItemHeightValiditySignature;
 }>) {
-    const signatureKey = buildTranscriptItemHeightSignatureKey(props.signature);
-    // This is recycle identity state, not layout state: FlashList may reuse this cell for
-    // another row, so reset the one-shot hint release when the row signature changes.
-    const [heightHintReleased, setHeightHintReleased] = useRecyclingState(false, [signatureKey]);
-    const heightHint = resolveTranscriptRowShellHeight({
-        cache: props.cache,
+    // C1: the row-shell reservation is sourced from the single measurement reconciler. Stable rows
+    // carry an exact minHeight (== last measured); streaming/prepended/never-measured rows carry a
+    // monotonic floor (>= last measured) so a growing or freshly-inserted row never leaves the next
+    // row positioned above where the previous frame ended (overlap is structurally impossible during
+    // append). The floor resets on a structural/expansion/width/font change (the shrink-capable
+    // transitions) so a collapse leaves no persistent over-reservation.
+    const reservation = resolveTranscriptRowShellHeight({
+        reconciler: props.reconciler,
         signature: props.signature,
     });
-    const shouldApplyHeightHint = heightHint !== undefined && !heightHintReleased;
+    const reservedMinHeight = reservation?.minHeight;
     const shellStyle = React.useMemo(() => (
-        shouldApplyHeightHint ? { minHeight: heightHint.minHeight } : undefined
-    ), [heightHint?.minHeight, shouldApplyHeightHint]);
+        reservedMinHeight === undefined ? undefined : { minHeight: reservedMinHeight }
+    ), [reservedMinHeight]);
+    const signatureKey = React.useMemo(
+        () => buildTranscriptItemHeightSignatureKey(props.signature),
+        [props.signature],
+    );
+    const lastSignatureKeyRef = React.useRef(signatureKey);
+    const lastSignatureRef = React.useRef(props.signature);
 
     const handleLayout = React.useCallback((event: LayoutChangeEvent) => {
         const height = event?.nativeEvent?.layout?.height;
         if (typeof height === 'number' && Number.isFinite(height)) {
-            props.cache.set(props.signature, { heightPx: Math.max(1, Math.trunc(height)) });
+            const heightPx = Math.max(1, Math.trunc(height));
+            props.reconciler.recordMeasuredHeight({ signature: props.signature, heightPx });
+            props.onRowMeasured?.({
+                itemId: props.itemId,
+                rowKind: props.signature.kind,
+                heightPx,
+            });
         }
-        if (heightHint !== undefined && !heightHintReleased) {
-            setHeightHintReleased(true);
+    }, [props.reconciler, props.itemId, props.onRowMeasured, props.signature]);
+
+    React.useLayoutEffect(() => {
+        if (lastSignatureKeyRef.current === signatureKey) return;
+        const previousSignature = lastSignatureRef.current;
+        lastSignatureKeyRef.current = signatureKey;
+        lastSignatureRef.current = props.signature;
+        // Reset the per-item floor on any shrink-capable structural change (expansion toggle,
+        // rowState transition, shape, width/font) so the next onLayout re-seeds from the new
+        // (possibly smaller) height — collapse never carries a stale tall floor.
+        if (isStructuralSignatureDelta(previousSignature, props.signature)) {
+            props.reconciler.resetReservationForStructuralChange({
+                itemId: props.itemId,
+                signature: props.signature,
+            });
         }
-    }, [heightHint, heightHintReleased, props.cache, props.signature, setHeightHintReleased]);
+        props.onRowLayoutMutation?.({
+            itemId: props.itemId,
+            mutation: {
+                reason: 'signature-change',
+                sourceId: props.itemId,
+                previousSignature,
+                nextSignature: props.signature,
+            },
+            rowKind: props.signature.kind,
+        });
+    }, [props.onRowLayoutMutation, props.reconciler, props.itemId, signatureKey, props.signature]);
+    const handleChildRowLayoutMutation = React.useCallback((mutation: TranscriptRowLayoutMutation) => {
+        props.onRowLayoutMutation?.({
+            itemId: props.itemId,
+            mutation,
+            rowKind: props.signature.kind,
+        });
+    }, [props.itemId, props.onRowLayoutMutation, props.signature.kind]);
 
     return (
-        <View
-            testID={`${TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX}${props.itemId}`}
-            style={shellStyle}
-            onLayout={handleLayout}
-        >
-            {props.children}
-        </View>
+        <TranscriptRowLayoutMutationProvider value={handleChildRowLayoutMutation}>
+            <View
+                testID={`${TRANSCRIPT_WEB_PREPEND_ANCHOR_TEST_ID_PREFIX}${props.itemId}`}
+                style={shellStyle}
+                onLayout={handleLayout}
+            >
+                {props.children}
+            </View>
+        </TranscriptRowLayoutMutationProvider>
     );
 });
+
+/**
+ * C1: a structural (shrink-capable) signature delta warrants resetting the per-item floor and is the
+ * only thing that may drive a whole-list invalidation. A pure streaming append (rowState stays
+ * streaming, only the content revision grew) is NOT structural — the per-row onLayout channel absorbs
+ * growth. This generalizes (and replaces) the old streaming-specific suppression band-aid.
+ */
+function isStructuralSignatureDelta(
+    previous: TranscriptItemHeightValiditySignature,
+    next: TranscriptItemHeightValiditySignature,
+): boolean {
+    if (previous.rowState === 'streaming' && next.rowState === 'streaming') return false;
+    if (previous.rowState !== next.rowState) return true;
+    if (previous.kind !== next.kind) return true;
+    if (previous.expansionKey !== next.expansionKey) return true;
+    if (previous.widthBucket !== next.widthBucket) return true;
+    if (previous.fontScaleKey !== next.fontScaleKey) return true;
+    return false;
+}
 
 const ChatListInternal = React.memo((props: {
     metadata: Metadata | null,
@@ -1108,8 +1283,11 @@ const ChatListInternal = React.memo((props: {
         }
         closeEntryViewportOwnership('preempted');
     }, [closeEntryViewportOwnership]);
-    const itemsRef = React.useRef<ChatTranscriptListItem[]>(props.items);
-    const listDataRef = React.useRef<ChatTranscriptListItem[]>(props.items);
+    const itemsRef = React.useRef<readonly ChatTranscriptListItem[]>(props.items);
+    const listDataRef = React.useRef<readonly ChatTranscriptListItem[]>(props.items);
+    // Pre-decomposition source (turn / tool-calls-group shapes) for visitors that must
+    // not see per-unit rows (auto-expand policy scan).
+    const preDecompositionItemsRef = React.useRef<ChatTranscriptListItem[]>(props.items);
     const toolRouteCommonRef = React.useRef(props.toolRouteCommon);
     toolRouteCommonRef.current = props.toolRouteCommon;
     const lastJumpSeqRef = React.useRef<number | null>(null);
@@ -1118,7 +1296,14 @@ const ChatListInternal = React.memo((props: {
     const listContentHeightRef = React.useRef<number>(0);
     const lastMeasuredContentActivityKeyRef = React.useRef<string | null>(null);
     const initialFillStatusRef = React.useRef<'idle' | 'in_progress' | 'done'>('idle');
-    const rowShellHeightCache = React.useMemo(() => getDefaultTranscriptItemHeightCache(), []);
+    // C1: the single measurement reconciler — sole recycle-type/reservation/global-invalidation
+    // authority for transcript rows. It composes the shared height cache for the exact (stable) path
+    // and owns the per-item monotonic floors, per-type medians, and the transaction-gated, once-per-
+    // commit `clearLayoutCacheOnUpdate` decision.
+    const measurementReconciler = React.useMemo<TranscriptMeasurementReconciler>(
+        () => createTranscriptMeasurementReconciler({ cache: getDefaultTranscriptItemHeightCache() }),
+        [],
+    );
     const mountSettleCoordinatorRef = React.useRef<TranscriptMountSettlePinCoordinator | null>(null);
     if (mountSettleCoordinatorRef.current === null) {
         mountSettleCoordinatorRef.current = createTranscriptMountSettlePinCoordinator({
@@ -1137,10 +1322,19 @@ const ChatListInternal = React.memo((props: {
     const initialFillAbortRef = React.useRef<AbortController | null>(null);
     const chatListReactId = React.useId();
     const chatListNativeId = React.useMemo(() => buildChatListNativeId(props.sessionId, chatListReactId), [props.sessionId, chatListReactId]);
-    const loadNewerInFlight = React.useRef(false);
     const webScrollContainerRef = React.useRef<HTMLElement | null>(null);
     const pendingWebPrependAnchorRef = React.useRef<ReturnType<typeof captureWebTranscriptPrependAnchor> | null>(null);
     const inFlightWebPrependAnchorRef = React.useRef<ReturnType<typeof captureWebTranscriptPrependAnchor> | null>(null);
+    const webHotColdCountsRef = React.useRef<{ coldCount: number; hotCount: number }>({
+        coldCount: props.items.length,
+        hotCount: 0,
+    });
+    const olderPaginationSnapshotRef = React.useRef<TranscriptOlderPaginationSnapshot>({
+        phase: 'idle',
+        suspendedReasons: [],
+        hasMore: true,
+        insideThreshold: false,
+    });
     // Native prepend transaction (plan F4 / Lane C): exactly one transaction per older-page
     // prepend; commit opens the prepend ownership phase; one post-commit layout timeout.
     const nativePrependTransactionRef = React.useRef<PrependTransaction | null>(null);
@@ -1170,6 +1364,10 @@ const ChatListInternal = React.memo((props: {
     // MVCP correction can land first (mvcp-preserved, zero writes) instead of double-shifting.
     const nativePrependQuietGateRef = React.useRef<PrependFallbackQuietGate | null>(null);
     const nativePrependQuietTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    // N2d.1 corrector deference: one pending re-observation scheduled when an applied corrector
+    // correction lands during a committed transaction, so the corrector-covered classification
+    // closes the window (mvcp-preserved, zero writes) before the quiet gate can spend the fallback.
+    const nativePrependCorrectorNudgeRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const observeNativePrependTransactionRef = React.useRef<() => void>(() => {});
     const invalidateNativePrependTransactionRef = React.useRef<() => void>(() => {});
     // Plan P2: lets the momentum-settle handler (defined before the scheduler) arm a capture
@@ -1182,7 +1380,41 @@ const ChatListInternal = React.memo((props: {
     const clearWebPrependRangeReserve = React.useCallback(() => {
         setWebPrependRangeReservePx((previous) => previous === 0 ? previous : 0);
     }, []);
+    const cancelScheduledWebPrependIndexRecovery = React.useCallback(() => {
+        const scheduledRecovery = scheduledWebPrependIndexRecoveryRef.current;
+        if (!scheduledRecovery) return;
+        scheduledWebPrependIndexRecoveryRef.current = null;
+        if (scheduledRecovery.kind === 'raf') {
+            for (const id of scheduledRecovery.ids) {
+                cancelAnimationFrame(id);
+            }
+            return;
+        }
+        for (const id of scheduledRecovery.ids) {
+            clearTimeout(id);
+        }
+    }, []);
+    const clearWebPrependRestoreWindowState = React.useCallback(() => {
+        pendingWebPrependAnchorRef.current = null;
+        pendingWebPrependIndexRecoveryRef.current = false;
+        cancelScheduledWebPrependIndexRecovery();
+        clearWebPrependRangeReserve();
+    }, [cancelScheduledWebPrependIndexRecovery, clearWebPrependRangeReserve]);
+    const closeWebPrependViewportOwnership = React.useCallback((
+        outcome: TranscriptViewportTransactionOutcome,
+    ) => {
+        if (Platform.OS !== 'web') return;
+        if (viewportCommandController.activeOwner() !== 'prepend') return;
+        viewportCommandController.closeTransaction('prepend', outcome);
+    }, [viewportCommandController]);
+    const clearWebPrependRestoreWindow = React.useCallback((
+        outcome: TranscriptViewportTransactionOutcome,
+    ) => {
+        clearWebPrependRestoreWindowState();
+        closeWebPrependViewportOwnership(outcome);
+    }, [clearWebPrependRestoreWindowState, closeWebPrependViewportOwnership]);
     const wantsPinnedRef = React.useRef(true);
+    const pinThresholdPxRef = React.useRef(72);
     const lastUserScrollIntentAtMsRef = React.useRef(Number.NEGATIVE_INFINITY);
     const nativeTranscriptTouchStartYRef = React.useRef<number | null>(null);
     // Last web scroll-container `scrollTop` we observed or wrote programmatically. Used to detect a
@@ -1213,11 +1445,15 @@ const ChatListInternal = React.memo((props: {
     const nativeContentMaterializationAutoPinRef = React.useRef<{ contentHeight: number; sessionId: string } | null>(null);
     // Single stream writer (plan B3): at most one follow command per measured content version.
     const lastNativeStreamAppendPinRef = React.useRef<{ contentHeight: number; sessionId: string } | null>(null);
+    const nativeListDragActiveRef = React.useRef(false);
     const nativeBottomFollowRearmedAfterDragRef = React.useRef(false);
     // Plan B9: true between onMomentumScrollBegin and onMomentumScrollEnd. Combined with the
     // mode machine's retained trusted drag session it forms the post-drag release attribution
     // window: momentum frames may release follow, height-churn frames without a drag never can.
     const nativeMomentumScrollActiveRef = React.useRef(false);
+    const nativeVisibleWindowSnapshotRef = React.useRef<NativeVisibleWindowSnapshot | null>(null);
+    const lastNativeVisibleRowsSnapshotRef = React.useRef<NativeVisibleWindowSnapshot | null>(null);
+    const nativeFlashListMvcpPolicyRef = React.useRef<TranscriptViewportTelemetryMvcpPolicy>('none');
     const lastProactiveAutoFollowActivityKeyRef = React.useRef<string | null>(props.latestCommittedActivityKey);
     const pendingNativeMountSettleBottomPinRef = React.useRef(false);
     const flushPendingNativeMountSettleBottomPinRef = React.useRef<(() => void) | null>(null);
@@ -1233,6 +1469,16 @@ const ChatListInternal = React.memo((props: {
     // Entry-restore single owner (plan F2 / Lane A): one transaction per session entry.
     const entryRestoreTransactionRef = React.useRef<EntryRestoreTransaction | null>(null);
     const entryRestoreWriteContextRef = React.useRef<EntryRestoreWriteContext | null>(null);
+    // N2b.2 slice-from-anchor entry window (native flash_v2 anchored entries).
+    const [entrySliceWindow, setEntrySliceWindow] = React.useState<{
+        sessionId: string;
+        anchorRowId: string;
+    } | null>(null);
+    const entrySliceWindowRef = React.useRef<{ sessionId: string; anchorRowId: string } | null>(null);
+    const entrySliceWithheldCountRef = React.useRef(0);
+    /** Per-session degradation latch: slice identity unresolvable → existing write pipeline. */
+    const entrySliceDegradedSessionRef = React.useRef<string | null>(null);
+    const revealEntrySliceWindowRef = React.useRef<() => number>(() => 0);
     const entryRestoreDeadlineTimeoutRef = React.useRef<{
         sessionId: string;
         timeoutId: ReturnType<typeof setTimeout>;
@@ -1243,7 +1489,7 @@ const ChatListInternal = React.memo((props: {
     const finishEntryRestoreTransactionRef = React.useRef<(transaction: EntryRestoreTransaction) => void>(() => {});
     const legacyEntryRestoreAppliedRef = React.useRef<{ sessionId: string; offsetY: number } | null>(null);
     const composerInsetHeightRef = React.useRef(0);
-    const scheduledPinRef = React.useRef<{ kind: 'raf' | 'timeout'; id: any; previousWebMetrics: WebTranscriptScrollMetrics | null } | null>(null);
+    const scheduledPinRef = React.useRef<ScheduledPinToBottom | null>(null);
     const latestJumpToSeqRef = React.useRef<number | null>(props.jumpToSeq ?? null);
     latestJumpToSeqRef.current = props.jumpToSeq ?? null;
     const initialWebPinStabilizingRef = React.useRef(false);
@@ -1405,6 +1651,7 @@ const ChatListInternal = React.memo((props: {
             isWeb: Platform.OS === 'web',
             layoutHeight,
             offsetY,
+            orientation: listOrientationRef.current,
         });
     }, []);
 
@@ -1470,6 +1717,78 @@ const ChatListInternal = React.memo((props: {
         }
         return metrics;
     }, [chatListNativeId]);
+
+    const resolveFirstVisibleWebAnchorTestId = React.useCallback((metrics: WebTranscriptScrollMetrics): string | undefined => {
+        const querySelectorAll = metrics.element.querySelectorAll?.bind(metrics.element);
+        const getContainerRect = metrics.element.getBoundingClientRect?.bind(metrics.element);
+        if (!querySelectorAll || !getContainerRect) return undefined;
+        let containerRect: DOMRect | null = null;
+        try {
+            containerRect = getContainerRect();
+        } catch {
+            return undefined;
+        }
+        const viewportTop = containerRect.top;
+        const viewportBottom = containerRect.top + metrics.clientHeight;
+        try {
+            const anchors = Array.from(querySelectorAll<HTMLElement>('[data-testid]'));
+            for (const anchor of anchors) {
+                const testId = anchor.getAttribute('data-testid') ?? undefined;
+                if (!testId) continue;
+                const rect = anchor.getBoundingClientRect?.();
+                if (!rect) continue;
+                if (rect.bottom > viewportTop && rect.top < viewportBottom) {
+                    return testId;
+                }
+            }
+        } catch {
+            return undefined;
+        }
+        return undefined;
+    }, []);
+
+    const resolveWebViewportTelemetryDiagnostics = React.useCallback((params: Readonly<{
+        flashListContentHeight?: number;
+        flashListLayoutHeight?: number;
+        metrics?: WebTranscriptScrollMetrics | null;
+        paginationPhase?: TranscriptOlderPaginationSnapshot['phase'];
+        paginationSuspendedReasons?: TranscriptOlderPaginationSnapshot['suspendedReasons'];
+        programmaticWebWrite: boolean;
+        scrollable?: boolean;
+        trigger: 'scroll' | 'edge-reached' | 'restore' | 'prepend-restore' | 'jump';
+    }>) => {
+        const metrics = params.metrics ?? null;
+        const paginationSnapshot = olderPaginationSnapshotRef.current;
+        const counts = webHotColdCountsRef.current;
+        const pendingAnchor = pendingWebPrependAnchorRef.current;
+        const pendingWebPrependAnchorKind =
+            pendingAnchor?.anchorTestId ? 'stable'
+                : pendingAnchor?.itemTestId ? 'item'
+                    : 'none';
+        const pendingWebPrependAnchorId =
+            pendingAnchor?.anchorTestId ?? pendingAnchor?.itemTestId ?? undefined;
+        return {
+            trigger: params.trigger,
+            ...(metrics ? {
+                domScrollTop: metrics.scrollTop,
+                domScrollHeight: metrics.scrollHeight,
+                domClientHeight: metrics.clientHeight,
+                firstVisibleAnchorTestId: resolveFirstVisibleWebAnchorTestId(metrics) ?? 'none',
+            } : {
+                firstVisibleAnchorTestId: 'none',
+            }),
+            flashListContentHeight: params.flashListContentHeight ?? listContentHeightRef.current,
+            flashListLayoutHeight: params.flashListLayoutHeight ?? listLayoutHeightRef.current,
+            scrollable: params.scrollable ?? (metrics ? isWebTranscriptScrollable(metrics, 1) : false),
+            paginationPhase: params.paginationPhase ?? paginationSnapshot.phase,
+            paginationSuspendedReasons: params.paginationSuspendedReasons ?? paginationSnapshot.suspendedReasons,
+            coldCount: counts.coldCount,
+            hotCount: counts.hotCount,
+            pendingWebPrependAnchorKind,
+            ...(pendingWebPrependAnchorId ? { pendingWebPrependAnchorId } : {}),
+            programmaticWebWrite: params.programmaticWebWrite,
+        };
+    }, [resolveFirstVisibleWebAnchorTestId]);
 
     const resolveBackwardPrefetchThresholdPx = React.useCallback((viewportPx: number): number => {
         const tuning = sync.getSyncTuning();
@@ -1607,6 +1926,9 @@ const ChatListInternal = React.memo((props: {
             entryRestoreWriteContextRef.current = null;
             entryRestoreSuppressedRef.current = false;
             legacyEntryRestoreAppliedRef.current = null;
+            // Slice window/degradation are per-entry; state clears in the session-scope effect.
+            entrySliceWindowRef.current = null;
+            entrySliceDegradedSessionRef.current = null;
             const entryRestoreDeadlineTimeout = entryRestoreDeadlineTimeoutRef.current;
             if (entryRestoreDeadlineTimeout) {
                 entryRestoreDeadlineTimeoutRef.current = null;
@@ -1640,6 +1962,9 @@ const ChatListInternal = React.memo((props: {
                 !shouldFollowBottom ||
                 (Platform.OS !== 'web' && transcriptListImplementation !== 'flatlist_legacy'),
         });
+        // C1: drop per-item floors, per-type medians, and the per-commit clear latch on session
+        // entry so a new session never reserves heights from the previous one.
+        measurementReconciler.resetForSession(props.sessionId);
     }
     const [expandedToolCallsAnchorMessageIds, setExpandedToolCallsAnchorMessageIds] = React.useState<ReadonlySet<string>>(
         () => new Set<string>(),
@@ -1709,15 +2034,18 @@ const ChatListInternal = React.memo((props: {
         }
     }, []);
 
-    const releaseNativeBottomFollowForGestureIntent = React.useCallback(() => {
+    const beginNativeBottomFollowGestureIntent = React.useCallback(() => {
         if (Platform.OS === 'web') return;
         recordNativeUserScrollIntent();
         markNativeInitialViewportAppliedForCurrentSession();
+        nativeListDragActiveRef.current = true;
         nativeBottomFollowRearmedAfterDragRef.current = false;
         // A finger down catches any in-flight fling: its momentum window ends here.
         nativeMomentumScrollActiveRef.current = false;
-        wantsPinnedRef.current = false;
-        isPinnedRef.current = false;
+        if (listOrientationRef.current !== 'inverted') {
+            wantsPinnedRef.current = false;
+            isPinnedRef.current = false;
+        }
         cancelScheduledPinToBottom();
         commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
             type: 'list-drag-start',
@@ -1768,7 +2096,25 @@ const ChatListInternal = React.memo((props: {
             Math.abs(currentY - startY) >= TRANSCRIPT_NATIVE_TOUCH_ESCAPE_MOVE_THRESHOLD_PX;
         if (movedVertically && !hasActiveNativeRestore && wantsPinnedRef.current) {
             nativeTranscriptTouchStartYRef.current = currentY;
-            releaseNativeBottomFollowForGestureIntent();
+            beginNativeBottomFollowGestureIntent();
+            if (listOrientationRef.current === 'inverted') {
+                const releaseThresholdPx = pinThresholdPxRef.current;
+                // Inverted active streams can remain physically bottom-pinned long
+                // enough that no trusted scroll frame arrives before drag-end. Once
+                // the user's touch has moved beyond the escape threshold, the
+                // gesture itself owns the viewport: release live-tail now and let a
+                // later trusted bottom observation re-arm follow if the user returns.
+                commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
+                    distanceFromBottom: releaseThresholdPx + 1,
+                    movedAwayFromBottom: true,
+                    pinThresholdPx: releaseThresholdPx,
+                    type: 'trusted-away-observation',
+                }));
+                wantsPinnedRef.current = false;
+                isPinnedRef.current = false;
+                nativeBottomFollowRearmedAfterDragRef.current = false;
+                commitScrollPinState({ ...scrollPinRef.current, isPinned: false });
+            }
             return;
         }
         if (!hasActiveNativeRestore) {
@@ -1779,13 +2125,15 @@ const ChatListInternal = React.memo((props: {
         cancelScheduledPinToBottom();
     }, [
         cancelScheduledPinToBottom,
+        commitBottomFollowModeState,
+        commitScrollPinState,
         hasActiveNativeViewportRestore,
-        releaseNativeBottomFollowForGestureIntent,
+        beginNativeBottomFollowGestureIntent,
     ]);
 
     const recordNativeListDragEscapeIntent = React.useCallback(() => {
-        releaseNativeBottomFollowForGestureIntent();
-    }, [releaseNativeBottomFollowForGestureIntent]);
+        beginNativeBottomFollowGestureIntent();
+    }, [beginNativeBottomFollowGestureIntent]);
 
     const recordNativeTranscriptResponderStartIntent = React.useCallback((event?: unknown) => {
         recordNativeTranscriptTouchStartIntent(event);
@@ -1820,6 +2168,31 @@ const ChatListInternal = React.memo((props: {
         nativeMountSettleAutoPinSuppressedRef.current = true;
         cancelScheduledPinToBottom();
     }, [cancelScheduledPinToBottom]);
+
+    const prepareWebToolGroupLocalHeightChange = React.useCallback((): 'anchor' | 'bottom' | 'none' => {
+        if (Platform.OS !== 'web') return 'none';
+        const metrics = resolveWebScrollMetrics();
+        if (!metrics) return 'none';
+        const distanceFromBottom = getWebTranscriptDistanceFromBottom(metrics);
+        if (wantsPinnedRef.current && distanceFromBottom <= pinThresholdPxRef.current) {
+            pendingWebLocalHeightChangeAnchorRef.current = null;
+            return 'bottom';
+        }
+        if (!isWebTranscriptScrollable(metrics, 1)) {
+            pendingWebLocalHeightChangeAnchorRef.current = null;
+            return 'none';
+        }
+        const anchor = captureWebTranscriptViewportAnchor({ container: metrics.element });
+        if (!anchor) {
+            pendingWebLocalHeightChangeAnchorRef.current = null;
+            return 'none';
+        }
+        pendingWebLocalHeightChangeAnchorRef.current = {
+            sessionId: props.sessionId,
+            anchor,
+        };
+        return 'anchor';
+    }, [props.sessionId, resolveWebScrollMetrics]);
 
     const applyToolCallsGroupExpanded = React.useCallback((params: { toolCallsGroupId: string; toolMessageIds: readonly string[]; expanded: boolean }) => {
         setExpandedToolCallsAnchorMessageIds((prev) => {
@@ -1858,9 +2231,12 @@ const ChatListInternal = React.memo((props: {
     }, [thinkingDefaultExpanded]);
 
     const setToolCallsGroupExpanded = React.useCallback((params: { toolCallsGroupId: string; toolMessageIds: readonly string[]; expanded: boolean }) => {
-        deferAutoPinAfterLocalTranscriptInteraction();
+        const webHeightPolicy = prepareWebToolGroupLocalHeightChange();
+        if (Platform.OS !== 'web' || webHeightPolicy !== 'bottom') {
+            deferAutoPinAfterLocalTranscriptInteraction();
+        }
         applyToolCallsGroupExpanded(params);
-    }, [applyToolCallsGroupExpanded, deferAutoPinAfterLocalTranscriptInteraction]);
+    }, [applyToolCallsGroupExpanded, deferAutoPinAfterLocalTranscriptInteraction, prepareWebToolGroupLocalHeightChange]);
 
     const setThinkingExpanded = React.useCallback((messageId: string, expanded: boolean) => {
         if (resolveThinkingExpanded(messageId) === expanded) return;
@@ -1948,22 +2324,7 @@ const ChatListInternal = React.memo((props: {
         cancelScheduledPinToBottom();
         didAutoExpandToolCallsGroupsForSessionRef.current = null;
         inFlightWebPrependAnchorRef.current = null;
-        pendingWebPrependAnchorRef.current = null;
-        pendingWebPrependIndexRecoveryRef.current = false;
-        clearWebPrependRangeReserve();
-        const scheduledRecovery = scheduledWebPrependIndexRecoveryRef.current;
-        if (scheduledRecovery) {
-            scheduledWebPrependIndexRecoveryRef.current = null;
-            if (scheduledRecovery.kind === 'raf') {
-                for (const id of scheduledRecovery.ids) {
-                    cancelAnimationFrame(id);
-                }
-            } else {
-                for (const id of scheduledRecovery.ids) {
-                    clearTimeout(id);
-                }
-            }
-        }
+        clearWebPrependRestoreWindow('abandoned-identity');
         setExpandedToolCallsAnchorMessageIds(new Set());
         const entryViewport = sessionEntryViewportRef.current;
         const shouldFollowBottom = entryViewport?.shouldFollowBottom ?? true;
@@ -2012,7 +2373,7 @@ const ChatListInternal = React.memo((props: {
     }, [
         cancelScheduledPinToBottom,
         cancelScheduledViewportAnchorCapture,
-        clearWebPrependRangeReserve,
+        clearWebPrependRestoreWindow,
         commitBottomFollowModeState,
         emitViewportChange,
         hideOlderLoadSpinner,
@@ -2025,6 +2386,7 @@ const ChatListInternal = React.memo((props: {
         typeof transcriptScrollPinOffsetThresholdPx === 'number' && Number.isFinite(transcriptScrollPinOffsetThresholdPx)
             ? Math.max(0, Math.trunc(transcriptScrollPinOffsetThresholdPx))
             : 72;
+    pinThresholdPxRef.current = pinThresholdPx;
     const autoFollowWhenPinned = transcriptScrollAutoFollowWhenPinned !== false;
     const pinEnabledRef = React.useRef(pinEnabled);
     const autoFollowWhenPinnedRef = React.useRef(autoFollowWhenPinned);
@@ -2078,7 +2440,16 @@ const ChatListInternal = React.memo((props: {
             ? params.contentHeight
             : listContentHeightRef.current;
         if (!Number.isFinite(contentHeight) || !Number.isFinite(layoutHeight) || layoutHeight <= 0) return null;
-        return Math.max(0, Math.trunc(contentHeight - layoutHeight - offset));
+        // Raw offsets map through the orientation seam once. FlashList/RN inverted
+        // transforms the rendered rows, but native offsets still grow physically
+        // toward the visual bottom, so the canonical offset is the native offset.
+        const canonicalOffset = toCanonicalScrollOffset({
+            offsetY: offset,
+            contentHeight,
+            layoutHeight,
+            orientation: listOrientationRef.current,
+        });
+        return Math.max(0, Math.trunc(contentHeight - layoutHeight - canonicalOffset));
     }, []);
     const releaseNativeBottomFollowIfFlashListOffsetEscaped = React.useCallback((params: {
         contentHeight: number;
@@ -2105,21 +2476,40 @@ const ChatListInternal = React.memo((props: {
         const distanceFromBottom = readCurrentNativeDistanceFromBottom(params);
         if (distanceFromBottom == null) return false;
         if (distanceFromBottom <= pinThresholdPx) return false;
-        releaseNativeBottomFollowForGestureIntent();
+        beginNativeBottomFollowGestureIntent();
         commitBottomFollowModeState(resolveTranscriptBottomFollowMode(bottomFollowModeStateRef.current, {
             type: 'trusted-away-observation',
             distanceFromBottom,
             movedAwayFromBottom: true,
             pinThresholdPx,
         }));
+        wantsPinnedRef.current = false;
+        isPinnedRef.current = false;
         return true;
     }, [
+        beginNativeBottomFollowGestureIntent,
         commitBottomFollowModeState,
         hasActiveNativeViewportRestore,
         pinThresholdPx,
         readCurrentNativeDistanceFromBottom,
-        releaseNativeBottomFollowForGestureIntent,
     ]);
+    React.useEffect(() => {
+        (globalThis as { __FLK__?: unknown }).__FLK__ = [];
+        const t0 = Date.now();
+        const id = setInterval(() => {
+            try {
+                const g = globalThis as { __FLK__?: Array<unknown> };
+                const arr = g.__FLK__ ?? [];
+                if (arr.length < 60) {
+                    arr.push({ t: Date.now() - t0, raw: listRef.current?.getAbsoluteLastScrollOffset?.() ?? null, dfb: readCurrentNativeDistanceFromBottom() ?? null });
+                    g.__FLK__ = arr;
+                }
+            } catch {
+                // debug-only
+            }
+        }, 80);
+        return () => clearInterval(id);
+    }, [props.sessionId, readCurrentNativeDistanceFromBottom]);
     /**
      * Trusted arrival back at the bottom (plan B8): re-arming follow is a first-class
      * live-tail transition — the viewport emission must agree with the mode within the
@@ -2147,6 +2537,7 @@ const ChatListInternal = React.memo((props: {
     ]);
     const recordNativeListDragEndIntent = React.useCallback(() => {
         if (Platform.OS === 'web') return;
+        nativeListDragActiveRef.current = false;
         const dragSession = bottomFollowModeStateRef.current.dragSession;
         const distanceFromBottom =
             dragSession?.latestDistanceFromBottom ??
@@ -2253,14 +2644,29 @@ const ChatListInternal = React.memo((props: {
     }, [jumpRevealOffsetThresholdPx]);
     const showJumpToBottom = jumpEnabled && !scrollPin.isPinned && jumpToBottomDistanceFromBottom >= jumpRevealOffsetThresholdPx;
     const jumpAnimateScroll = transcriptScrollJumpToBottomAnimateScroll !== false;
+    const transcriptListExtraData = React.useMemo(() => ({
+        selectionVersion: transcriptMessageSelection.selectionVersion,
+    }), [transcriptMessageSelection.selectionVersion]);
 
-    const preferredListImplementation = transcriptListImplementation === 'flatlist_legacy' ? 'flatlist_legacy' : 'flash_v2';
+    // N3.1: the inverted pilot rides the flash_v2 machinery with orientation as an
+    // orthogonal axis — every `=== 'flash_v2'` gate below stays authoritative; the
+    // orientation is consumed ONLY at the seam boundaries (data order, raw<->canonical
+    // scroll offsets, edge slots, chronological neighbor lookups).
+    const transcriptListPresentation = resolveTranscriptListPresentation({
+        setting: transcriptListImplementation,
+        platformIsWeb: Platform.OS === 'web',
+    });
+    const preferredListImplementation = transcriptListPresentation.implementation;
     // Plan E1: capture the viewport synchronously inside the crash handler, BEFORE the
     // implementation flip renders, so the fallback list can restore the reading position.
     const webCrashFallbackViewportRef = React.useRef<Readonly<{
         sessionId: string;
         anchor: ReturnType<typeof captureWebTranscriptViewportAnchor>;
         distanceFromBottom: number;
+    }> | null>(null);
+    const pendingWebLocalHeightChangeAnchorRef = React.useRef<Readonly<{
+        sessionId: string;
+        anchor: WebTranscriptViewportAnchor;
     }> | null>(null);
     const captureWebCrashFallbackViewport = React.useCallback(() => {
         if (Platform.OS !== 'web') return;
@@ -2286,6 +2692,11 @@ const ChatListInternal = React.memo((props: {
         Platform.OS === 'web' && preferredListImplementation === 'flash_v2' && webFlashListCrashed
             ? 'flatlist_legacy'
             : preferredListImplementation;
+    const listOrientation: TranscriptListOrientation =
+        listImplementation === 'flash_v2' ? transcriptListPresentation.orientation : 'standard';
+    const isInvertedNativeList = listOrientation === 'inverted';
+    const listOrientationRef = React.useRef(listOrientation);
+    listOrientationRef.current = listOrientation;
     const resolveSyncLoadOlderOptions = React.useCallback((): SyncLoadOlderOptions | undefined => {
         if (Platform.OS === 'web' || listImplementation !== 'flash_v2') return undefined;
         const configuredLimit = sync.getSyncTuning().transcriptNativeOlderMessagesPageSize;
@@ -2459,13 +2870,77 @@ const ChatListInternal = React.memo((props: {
         };
     }, []);
 
-    const displayItems = React.useMemo(() => {
+    const getTurnMessageById = React.useCallback((messageId: string): Message | null => {
+        const forkAwareMessage = props.messagesById[messageId];
+        if (forkAwareMessage) return forkAwareMessage;
+        const state = getStorage().getState();
+        const session = state?.sessionMessages?.[props.sessionId];
+        return session?.messagesById?.[messageId] ?? session?.messagesMap?.[messageId] ?? null;
+    }, [props.messagesById, props.sessionId]);
+    const resolveToolCallMessagesForIds = React.useCallback((toolMessageIds: readonly string[]): ToolCallMessage[] => {
+        const toolMessages: ToolCallMessage[] = [];
+        for (const toolMessageId of toolMessageIds) {
+            const message = getTurnMessageById(toolMessageId);
+            if (message?.kind === 'tool-call') toolMessages.push(message);
+        }
+        return toolMessages;
+    }, [getTurnMessageById]);
+    // N2c stable virtualization units: under flash_v2 (native AND web), turn items and
+    // linear tool-calls-group items decompose into per-unit rows HERE, where the
+    // tool-group expansion state lives. `props.items` stays the pre-decomposition
+    // source for consumers that visit turn/tool-calls-group shapes (auto-expand).
+    const decomposedItems = React.useMemo<ChatTranscriptListItem[]>(() => {
+        if (listImplementation !== 'flash_v2') return props.items;
+        return buildTranscriptTurnUnits({
+            items: props.items,
+            getMessageById: getTurnMessageById,
+            metadataByMessageId: props.forkMessageMetadataById ?? undefined,
+            isGroupExpanded: (toolMessageIds) => toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id)),
+            collapsedPreviewCount: resolveTranscriptToolCallsCollapsedPreviewCount(transcriptToolCallsCollapsedPreviewCountSetting),
+        });
+    }, [
+        expandedToolCallsAnchorMessageIds,
+        getTurnMessageById,
+        listImplementation,
+        props.forkMessageMetadataById,
+        props.items,
+        transcriptToolCallsCollapsedPreviewCountSetting,
+    ]);
+    // N2b.2 slice-from-anchor entry window: while set (native flash_v2 anchored
+    // entries only), the rendered window STARTS at the anchor row — the anchor
+    // lands at the viewport head with zero scroll writes. The withheld older rows
+    // reveal as one prepend-observed commit when the entry transaction closes.
+    const entrySliceSourceBounds = React.useMemo(() => {
+        if (Platform.OS === 'web' || listImplementation !== 'flash_v2') return null;
+        if (!entrySliceWindow || entrySliceWindow.sessionId !== props.sessionId) return null;
+        const index = decomposedItems.findIndex((item) => item.id === entrySliceWindow.anchorRowId);
+        // Anchor row id no longer present (fail open: reveal everything).
+        if (index < 0) return null;
+        // N3.1: standard withholds OLDER rows (window starts at the anchor); inverted
+        // withholds NEWER rows (window ends at the anchor) — either way the anchor is
+        // the rendered HEAD (index 0 after orientation) and lands write-free.
+        const bounds = resolveEntrySliceSourceBounds({
+            anchorSourceIndex: index,
+            count: decomposedItems.length,
+            orientation: listOrientation,
+        });
+        return bounds.end - bounds.start < decomposedItems.length ? bounds : null;
+    }, [decomposedItems, entrySliceWindow, listImplementation, listOrientation, props.sessionId]);
+    entrySliceWithheldCountRef.current = entrySliceSourceBounds
+        ? decomposedItems.length - (entrySliceSourceBounds.end - entrySliceSourceBounds.start)
+        : 0;
+    const displayItems = React.useMemo<readonly ChatTranscriptListItem[]>(() => {
         if (listImplementation === 'flatlist_legacy') {
             // Legacy: inverted lists expect newest-first input.
             return [...props.items].reverse();
         }
-        return props.items;
-    }, [listImplementation, props.items]);
+        const windowedItems = entrySliceSourceBounds
+            ? decomposedItems.slice(entrySliceSourceBounds.start, entrySliceSourceBounds.end)
+            : decomposedItems;
+        // N3.1: the orientation reversal is a view adapter at the LIST BOUNDARY only —
+        // turn grouping, derived items, and the slice window above stay oldest-first.
+        return orientTranscriptListItems(windowedItems, listOrientation);
+    }, [decomposedItems, entrySliceSourceBounds, listImplementation, listOrientation, props.items]);
     const transcriptHotColdSegments = React.useMemo(() => {
         const tuning = sync.getSyncTuning();
         return buildTranscriptHotColdSegments({
@@ -2481,11 +2956,39 @@ const ChatListInternal = React.memo((props: {
         listImplementation === 'flash_v2' &&
         transcriptHotColdSegments.hotItems.length > 0;
     const listData = shouldUseWebHotColdSplit ? transcriptHotColdSegments.coldItems : displayItems;
+    webHotColdCountsRef.current = {
+        coldCount: shouldUseWebHotColdSplit
+            ? transcriptHotColdSegments.coldItems.length
+            : listData.length,
+        hotCount: shouldUseWebHotColdSplit
+            ? transcriptHotColdSegments.hotItems.length
+            : 0,
+    };
+
+    React.useEffect(() => {
+        // A stale slice window from the previous session is already inert (sessionId
+        // mismatch); release the state so the next entry starts clean.
+        if (entrySliceWindow && entrySliceWindow.sessionId !== props.sessionId) {
+            entrySliceWindowRef.current = null;
+            setEntrySliceWindow(null);
+        }
+    }, [entrySliceWindow, props.sessionId]);
+
+    React.useEffect(() => {
+        if (props.jumpToSeq == null) return;
+        if (entrySliceWindowRef.current?.sessionId !== props.sessionId) return;
+        // An explicit jump owns the viewport: drop the slice window without a prepend
+        // transaction — the jump's own write places the viewport next.
+        entrySliceWindowRef.current = null;
+        setEntrySliceWindow(null);
+    }, [props.jumpToSeq, props.sessionId]);
 
     React.useEffect(() => {
         setFirstListPaintObserved(false);
         updateNativeViewportPaintObserved(false);
         updateNativeEntryRestorePaintReleased(false);
+        nativeVisibleWindowSnapshotRef.current = null;
+        lastNativeVisibleRowsSnapshotRef.current = null;
     }, [
         listImplementation,
         props.sessionId,
@@ -2494,9 +2997,12 @@ const ChatListInternal = React.memo((props: {
     ]);
 
     // Keep a synchronous view of the current list items for effects that run between renders
-    // (e.g. initial viewport fill and jump-to-seq resolution).
+    // (e.g. initial viewport fill and jump-to-seq resolution). `itemsRef`/`listDataRef`
+    // ALWAYS hold the same decomposed array the list renders; index-based consumers
+    // (renderItem prev-row lookup, jump/anchor/prepend index math) must use these.
     itemsRef.current = displayItems;
     listDataRef.current = listData;
+    preDecompositionItemsRef.current = props.items;
 
     React.useEffect(() => {
         recordStreamingVisibleUpdateForSessionUiTelemetry({
@@ -2554,6 +3060,204 @@ const ChatListInternal = React.memo((props: {
         platform: telemetryPlatform,
         listImplementation,
     });
+    const resolveNativeVisibleWindowSnapshot = React.useCallback((): NativeVisibleWindowSnapshot => {
+        const data = listDataRef.current;
+        const layoutHeight = listLayoutHeightRef.current;
+        const blankAreaPx = data.length > 0 && Number.isFinite(layoutHeight) && layoutHeight > 0
+            ? Math.max(0, Math.trunc(layoutHeight))
+            : 0;
+        const resolveLastKnownVisibleRowsSnapshot = (): NativeVisibleWindowSnapshot | null => {
+            const snapshot = lastNativeVisibleRowsSnapshotRef.current;
+            if (!snapshot?.hasVisibleRows) return null;
+            const rowIds = new Set(data.map((item) => item.id));
+            if (
+                (snapshot.firstVisibleItemId && !rowIds.has(snapshot.firstVisibleItemId)) ||
+                (snapshot.lastVisibleItemId && !rowIds.has(snapshot.lastVisibleItemId))
+            ) {
+                return null;
+            }
+            return snapshot;
+        };
+        const buildBlankSnapshot = (
+            visibleWindowSource: TranscriptViewportTelemetryVisibleWindowSource,
+        ): NativeVisibleWindowSnapshot => {
+            const lastKnownSnapshot = resolveLastKnownVisibleRowsSnapshot();
+            if (lastKnownSnapshot) {
+                return {
+                    blankAreaPx,
+                    blankAreaSource: 'index-estimate',
+                    hasVisibleRows: false,
+                    lastKnownFirstVisibleItemId: lastKnownSnapshot.firstVisibleItemId,
+                    lastKnownLastVisibleItemId: lastKnownSnapshot.lastVisibleItemId,
+                    visibleWindowSource,
+                    visibleWindowStale: true,
+                };
+            }
+            return {
+                blankAreaPx,
+                blankAreaSource: 'index-estimate',
+                hasVisibleRows: false,
+                visibleWindowSource,
+            };
+        };
+        const buildSnapshotFromRange = (
+            startIndex: number,
+            endIndex: number,
+            visibleWindowSource: TranscriptViewportTelemetryVisibleWindowSource,
+        ): NativeVisibleWindowSnapshot | null => {
+            if (!Number.isFinite(startIndex) || !Number.isFinite(endIndex)) return null;
+            if (data.length === 0) {
+                return {
+                    blankAreaPx: 0,
+                    blankAreaSource: 'none',
+                    hasVisibleRows: false,
+                    visibleWindowSource,
+                };
+            }
+            const normalizedStart = Math.trunc(startIndex);
+            const normalizedEnd = Math.trunc(endIndex);
+            if (normalizedStart > normalizedEnd) {
+                return buildBlankSnapshot(visibleWindowSource);
+            }
+            const clampedStart = Math.max(0, Math.min(data.length - 1, normalizedStart));
+            const clampedEnd = Math.max(0, Math.min(data.length - 1, normalizedEnd));
+            if (clampedStart > clampedEnd) {
+                return buildBlankSnapshot(visibleWindowSource);
+            }
+            const firstVisibleItemId = data[clampedStart]?.id;
+            const lastVisibleItemId = data[clampedEnd]?.id;
+            if (!firstVisibleItemId && !lastVisibleItemId) {
+                return buildBlankSnapshot(visibleWindowSource);
+            }
+            const snapshot: NativeVisibleWindowSnapshot = {
+                blankAreaPx: 0,
+                blankAreaSource: 'none',
+                firstVisibleItemId,
+                hasVisibleRows: true,
+                lastVisibleItemId,
+                visibleWindowSource,
+            };
+            lastNativeVisibleRowsSnapshotRef.current = snapshot;
+            return snapshot;
+        };
+
+        try {
+            const visibleIndices = listRef.current?.computeVisibleIndices?.();
+            const snapshot = visibleIndices
+                ? buildSnapshotFromRange(visibleIndices.startIndex, visibleIndices.endIndex, 'ref-compute')
+                : null;
+            if (snapshot) return snapshot;
+        } catch {
+            // Fall through to the viewability/ref fallback; telemetry must not affect scrolling.
+        }
+
+        try {
+            const firstVisibleIndex = listRef.current?.getFirstVisibleIndex?.();
+            if (typeof firstVisibleIndex === 'number' && Number.isFinite(firstVisibleIndex)) {
+                const snapshot = buildSnapshotFromRange(firstVisibleIndex, firstVisibleIndex, 'ref-first-index');
+                if (snapshot) return snapshot;
+            }
+        } catch {
+            // Fall through to the last viewability callback snapshot.
+        }
+
+        return nativeVisibleWindowSnapshotRef.current ?? {
+            blankAreaPx,
+            blankAreaSource: blankAreaPx > 0 ? 'index-estimate' : 'none',
+            hasVisibleRows: false,
+            visibleWindowSource: 'none',
+        };
+    }, []);
+
+    const resolveNativeTelemetryDiagnostics = React.useCallback((
+        source: Readonly<Record<string, unknown>>,
+    ): Record<string, unknown> => {
+        if (Platform.OS === 'web' || telemetryListImplementation !== 'flash_v2') return {};
+        const orientation: TranscriptViewportTelemetryListOrientation =
+            listOrientationRef.current === 'inverted' ? 'inverted' : 'standard';
+        const rawOffsetFromSource = readFiniteTelemetryNumber(source.rawOffsetY);
+        let rawOffsetFromList: number | undefined;
+        try {
+            rawOffsetFromList = readFiniteTelemetryNumber(listRef.current?.getAbsoluteLastScrollOffset?.());
+        } catch {
+            rawOffsetFromList = undefined;
+        }
+        const rawOffsetY = rawOffsetFromSource ?? rawOffsetFromList;
+        const layoutHeight =
+            readFiniteTelemetryNumber(source.layoutHeight) ?? readFiniteTelemetryNumber(listLayoutHeightRef.current);
+        const contentHeight =
+            readFiniteTelemetryNumber(source.contentHeight) ?? readFiniteTelemetryNumber(listContentHeightRef.current);
+        const canonicalOffsetY =
+            readFiniteTelemetryNumber(source.canonicalOffsetY)
+            ?? (
+                rawOffsetY !== undefined &&
+                layoutHeight !== undefined &&
+                contentHeight !== undefined
+                    ? toCanonicalScrollOffset({
+                        offsetY: rawOffsetY,
+                        contentHeight,
+                        layoutHeight,
+                        orientation,
+                    })
+                    : readFiniteTelemetryNumber(source.offsetY)
+            );
+        const distanceFromBottom =
+            readFiniteTelemetryNumber(source.distanceFromBottom)
+            ?? (
+                canonicalOffsetY !== undefined &&
+                layoutHeight !== undefined &&
+                contentHeight !== undefined
+                    ? Math.max(0, Math.trunc(contentHeight - layoutHeight - canonicalOffsetY))
+                    : undefined
+            );
+        const isAtRawBottom =
+            readTelemetryBoolean(source.isAtRawBottom)
+            ?? (
+                rawOffsetY !== undefined &&
+                layoutHeight !== undefined &&
+                contentHeight !== undefined
+                    ? (
+                        Math.abs(rawOffsetY - resolveBottomRawScrollOffset({
+                            contentHeight,
+                            layoutHeight,
+                            orientation,
+                        })) <= 1
+                    )
+                    : undefined
+            );
+        const visibleSnapshot = resolveNativeVisibleWindowSnapshot();
+        const bottomFollowState = bottomFollowModeStateRef.current;
+        const bottomFollowMode: TranscriptViewportTelemetryBottomFollowMode =
+            bottomFollowState.mode === 'escaping' || bottomFollowState.mode === 'released'
+                ? bottomFollowState.mode
+                : 'following';
+
+        return {
+            orientation,
+            ...(rawOffsetY !== undefined ? { rawOffsetY } : {}),
+            ...(canonicalOffsetY !== undefined ? { canonicalOffsetY } : {}),
+            ...(layoutHeight !== undefined ? { layoutHeight } : {}),
+            ...(contentHeight !== undefined ? { contentHeight } : {}),
+            ...(distanceFromBottom !== undefined ? { distanceFromBottom } : {}),
+            bottomFollowMode,
+            dragSessionTrusted: bottomFollowState.dragSession?.trusted === true,
+            nativeMomentumActive: nativeMomentumScrollActiveRef.current,
+            mvcpPolicy: nativeFlashListMvcpPolicyRef.current,
+            ...(isAtRawBottom !== undefined ? { isAtRawBottom } : {}),
+            hasVisibleRows: visibleSnapshot.hasVisibleRows,
+            ...(visibleSnapshot.firstVisibleItemId ? { firstVisibleItemId: visibleSnapshot.firstVisibleItemId } : {}),
+            ...(visibleSnapshot.lastVisibleItemId ? { lastVisibleItemId: visibleSnapshot.lastVisibleItemId } : {}),
+            ...(visibleSnapshot.visibleWindowStale ? { visibleWindowStale: true } : {}),
+            ...(visibleSnapshot.lastKnownFirstVisibleItemId ? { lastKnownFirstVisibleItemId: visibleSnapshot.lastKnownFirstVisibleItemId } : {}),
+            ...(visibleSnapshot.lastKnownLastVisibleItemId ? { lastKnownLastVisibleItemId: visibleSnapshot.lastKnownLastVisibleItemId } : {}),
+            blankAreaPx: visibleSnapshot.blankAreaPx,
+            blankAreaSource: visibleSnapshot.blankAreaSource,
+            visibleWindowSource: visibleSnapshot.visibleWindowSource,
+        };
+    }, [
+        resolveNativeVisibleWindowSnapshot,
+        telemetryListImplementation,
+    ]);
     const resolveViewportTelemetryMode = React.useCallback((mode?: TranscriptViewportMode): TranscriptViewportMode => {
         return mode ?? (wantsPinnedRef.current ? 'follow-bottom' : 'user-unpinned');
     }, []);
@@ -2562,15 +3266,26 @@ const ChatListInternal = React.memo((props: {
             mode: TranscriptViewportMode;
             type: TranscriptViewportTelemetryEvent['type'];
         }>,
+        options?: Readonly<{ sessionId?: string }>,
     ) => {
+        const tuning = sync.getSyncTuning();
+        configureTranscriptViewportTelemetryFromTuning(tuning);
+        if (!transcriptViewportTelemetry.isEnabled()) return;
+        const nativeDiagnostics = resolveNativeTelemetryDiagnostics(event);
         recordTranscriptViewportTelemetryEvent({
             ...event,
-            sessionId: props.sessionId,
+            ...nativeDiagnostics,
+            sessionId: options?.sessionId ?? props.sessionId,
             platform: telemetryPlatform,
             listImplementation: telemetryListImplementation,
             timestampMs: Date.now(),
-        }, sync.getSyncTuning());
-    }, [props.sessionId, telemetryListImplementation, telemetryPlatform]);
+        }, tuning);
+    }, [
+        props.sessionId,
+        resolveNativeTelemetryDiagnostics,
+        telemetryListImplementation,
+        telemetryPlatform,
+    ]);
     const recordRestoreDecisionTelemetry = React.useCallback((
         reason: TranscriptViewportTelemetryObservationReason,
         params: Readonly<{
@@ -2586,8 +3301,12 @@ const ChatListInternal = React.memo((props: {
             layoutHeight?: number;
             mode?: TranscriptViewportMode;
             offsetY?: number;
+            programmaticWebWrite?: boolean;
+            scrollable?: boolean;
+            webTrigger?: 'scroll' | 'edge-reached' | 'restore' | 'prepend-restore' | 'jump';
         }> = {},
     ) => {
+        const webMetrics = Platform.OS === 'web' ? resolveWebScrollMetrics() : null;
         recordViewportTelemetryEvent({
             type: 'restore-decision',
             mode: resolveViewportTelemetryMode(params.mode ?? 'restore-distance'),
@@ -2603,8 +3322,21 @@ const ChatListInternal = React.memo((props: {
             anchorCorrectionAttempt: params.anchorCorrectionAttempt,
             anchorCorrectionTargetOffsetY: params.anchorCorrectionTargetOffsetY,
             anchorRestoreViewOffset: params.anchorRestoreViewOffset,
+            ...(Platform.OS === 'web' ? resolveWebViewportTelemetryDiagnostics({
+                metrics: webMetrics,
+                flashListContentHeight: params.contentHeight,
+                flashListLayoutHeight: params.layoutHeight,
+                programmaticWebWrite: params.programmaticWebWrite ?? false,
+                scrollable: params.scrollable,
+                trigger: params.webTrigger ?? (params.mode === 'jump-to-bottom' ? 'jump' : 'restore'),
+            }) : {}),
         });
-    }, [recordViewportTelemetryEvent, resolveViewportTelemetryMode]);
+    }, [
+        recordViewportTelemetryEvent,
+        resolveViewportTelemetryMode,
+        resolveWebScrollMetrics,
+        resolveWebViewportTelemetryDiagnostics,
+    ]);
 
     const recordScrollObservedTelemetry = React.useCallback((
         params: Readonly<{
@@ -2612,6 +3344,8 @@ const ChatListInternal = React.memo((props: {
             distanceFromBottom: number;
             layoutHeight?: number;
             offsetY: number;
+            rawOffsetY?: number;
+            canonicalOffsetY?: number;
             reason?: TranscriptViewportTelemetryObservationReason;
         }>,
     ) => {
@@ -2620,49 +3354,283 @@ const ChatListInternal = React.memo((props: {
             mode: resolveViewportTelemetryMode(),
             reason: params.reason ?? 'observed',
             offsetY: params.offsetY,
+            rawOffsetY: params.rawOffsetY,
+            canonicalOffsetY: params.canonicalOffsetY,
             layoutHeight: params.layoutHeight,
             contentHeight: params.contentHeight,
             distanceFromBottom: params.distanceFromBottom,
         });
     }, [recordViewportTelemetryEvent, resolveViewportTelemetryMode]);
 
+    const recordNativeVisibleWindowTelemetry = React.useCallback((
+        reason: TranscriptViewportTelemetryObservationReason = 'observed',
+        params: Readonly<{
+            canonicalOffsetY?: number;
+            contentHeight?: number;
+            distanceFromBottom?: number;
+            layoutHeight?: number;
+            rawOffsetY?: number;
+        }> = {},
+    ) => {
+        if (Platform.OS === 'web' || telemetryListImplementation !== 'flash_v2') return;
+        const rawOffsetY = params.rawOffsetY ?? readFiniteTelemetryNumber(listRef.current?.getAbsoluteLastScrollOffset?.());
+        const layoutHeight = params.layoutHeight ?? listLayoutHeightRef.current;
+        const contentHeight = params.contentHeight ?? listContentHeightRef.current;
+        const canonicalOffsetY =
+            params.canonicalOffsetY ??
+            (
+                rawOffsetY !== undefined
+                    ? toCanonicalScrollOffset({
+                        offsetY: rawOffsetY,
+                        contentHeight,
+                        layoutHeight,
+                        orientation: listOrientationRef.current,
+                    })
+                    : undefined
+            );
+        const distanceFromBottom =
+            params.distanceFromBottom ??
+            (
+                canonicalOffsetY !== undefined
+                    ? Math.max(0, Math.trunc(contentHeight - layoutHeight - canonicalOffsetY))
+                    : undefined
+            );
+        recordViewportTelemetryEvent({
+            type: 'visible-window-observed',
+            mode: resolveViewportTelemetryMode(),
+            reason,
+            rawOffsetY,
+            canonicalOffsetY,
+            offsetY: canonicalOffsetY,
+            layoutHeight,
+            contentHeight,
+            distanceFromBottom,
+        });
+    }, [
+        recordViewportTelemetryEvent,
+        resolveViewportTelemetryMode,
+        telemetryListImplementation,
+    ]);
+
+    const handleNativeViewableItemsChanged = React.useCallback((info: Readonly<{
+        viewableItems?: readonly NativeViewableTranscriptItem[];
+    }>) => {
+        if (Platform.OS === 'web' || telemetryListImplementation !== 'flash_v2') return;
+        const tuning = sync.getSyncTuning();
+        configureTranscriptViewportTelemetryFromTuning(tuning);
+        if (!transcriptViewportTelemetry.isEnabled()) return;
+        const viewableItems = Array.isArray(info.viewableItems) ? info.viewableItems : [];
+        const visibleItems = viewableItems
+            .filter((item) => item.isViewable !== false)
+            .sort((left, right) => (left.index ?? Number.MAX_SAFE_INTEGER) - (right.index ?? Number.MAX_SAFE_INTEGER));
+        const first = visibleItems[0];
+        const last = visibleItems[visibleItems.length - 1];
+        const layoutHeight = listLayoutHeightRef.current;
+        const blankAreaPx =
+            visibleItems.length === 0 &&
+            listDataRef.current.length > 0 &&
+            Number.isFinite(layoutHeight) &&
+            layoutHeight > 0
+                ? Math.max(0, Math.trunc(layoutHeight))
+                : 0;
+        nativeVisibleWindowSnapshotRef.current = {
+            blankAreaPx,
+            blankAreaSource: blankAreaPx > 0 ? 'index-estimate' : 'none',
+            firstVisibleItemId: first?.item?.id,
+            hasVisibleRows: visibleItems.length > 0,
+            lastVisibleItemId: last?.item?.id,
+            visibleWindowSource: 'viewability-callback',
+        };
+        if (nativeVisibleWindowSnapshotRef.current.hasVisibleRows) {
+            lastNativeVisibleRowsSnapshotRef.current = nativeVisibleWindowSnapshotRef.current;
+        }
+        recordNativeVisibleWindowTelemetry('observed');
+    }, [
+        recordNativeVisibleWindowTelemetry,
+        telemetryListImplementation,
+    ]);
+
+    const shouldAttachNativeViewabilityTelemetry =
+        Platform.OS !== 'web' &&
+        telemetryListImplementation === 'flash_v2' &&
+        sync.getSyncTuning().transcriptViewportTelemetryEnabled === true;
+    const nativeViewabilityConfig = React.useMemo(() => (
+        shouldAttachNativeViewabilityTelemetry
+            ? { itemVisiblePercentThreshold: 1 }
+            : undefined
+    ), [shouldAttachNativeViewabilityTelemetry]);
+
+    // ---- N1 evidence wiring (dev-gated telemetry only; zero product behavior) ----
+    // Row identity state for N1.2/N1.3: last measured height and last content count per row id,
+    // plus a lazy index lookup over the current list data for viewport-relation geometry.
+    const rowEvidenceHeightsRef = React.useRef(new Map<string, number>());
+    const rowEvidenceContentCountsRef = React.useRef(new Map<string, number>());
+    const rowEvidenceIndexLookupRef = React.useRef<{
+        data: readonly ChatTranscriptListItem[];
+        indexById: Map<string, number>;
+    } | null>(null);
+    React.useEffect(() => {
+        rowEvidenceHeightsRef.current.clear();
+        rowEvidenceContentCountsRef.current.clear();
+        rowEvidenceIndexLookupRef.current = null;
+    }, [props.sessionId]);
+    const isViewportEvidenceTelemetryEnabled = React.useCallback((): boolean => {
+        // The telemetry singleton is reconfigured on every record call; refresh it here too so
+        // the gate observes CDP debug overrides armed after the last recorded event.
+        configureTranscriptViewportTelemetryFromTuning(sync.getSyncTuning());
+        return transcriptViewportTelemetry.isEnabled();
+    }, []);
+    const resolveRowEvidenceViewportRelation = React.useCallback((itemId: string) => {
+        const data = listDataRef.current;
+        let lookup = rowEvidenceIndexLookupRef.current;
+        if (!lookup || lookup.data !== data) {
+            const indexById = new Map<string, number>();
+            for (let i = 0; i < data.length; i += 1) {
+                const item = data[i];
+                if (item) indexById.set(item.id, i);
+            }
+            lookup = { data, indexById };
+            rowEvidenceIndexLookupRef.current = lookup;
+        }
+        const index = lookup.indexById.get(itemId);
+        const layout = index === undefined ? undefined : listRef.current?.getLayout?.(index);
+        return resolveTranscriptRowViewportRelation({
+            rowTopY: layout?.y,
+            rowHeightPx: layout?.height,
+            scrollOffsetY: listRef.current?.getAbsoluteLastScrollOffset?.(),
+            viewportHeightPx: listLayoutHeightRef.current,
+        });
+    }, []);
+    const handleRowShellMeasured = React.useCallback((params: Readonly<{
+        itemId: string;
+        rowKind: string;
+        heightPx: number;
+    }>) => {
+        if (!isViewportEvidenceTelemetryEnabled()) return;
+        const previousHeightPx = rowEvidenceHeightsRef.current.get(params.itemId);
+        rowEvidenceHeightsRef.current.set(params.itemId, params.heightPx);
+        // Same-height re-layouts are not visual deltas; record first measures and changes only.
+        if (previousHeightPx === params.heightPx) return;
+        recordViewportTelemetryEvent({
+            type: 'row-measured',
+            mode: resolveViewportTelemetryMode(),
+            rowId: params.itemId,
+            rowKind: params.rowKind,
+            rowHeightPx: params.heightPx,
+            rowPreviousHeightPx: previousHeightPx,
+            rowDeltaPx: previousHeightPx === undefined ? undefined : params.heightPx - previousHeightPx,
+            rowMeasurePhase: previousHeightPx === undefined ? 'first' : 'remeasure',
+            rowViewportRelation: resolveRowEvidenceViewportRelation(params.itemId),
+        });
+    }, [
+        isViewportEvidenceTelemetryEnabled,
+        recordViewportTelemetryEvent,
+        resolveRowEvidenceViewportRelation,
+        resolveViewportTelemetryMode,
+    ]);
+    // C1: a monotonically increasing per-commit token. The reconciler coalesces the global
+    // `clearLayoutCacheOnUpdate` to at most one clear per commit token, so the host only needs to
+    // advance it once per React commit.
+    const layoutInvalidationCommitTokenRef = React.useRef(0);
+    React.useEffect(() => {
+        layoutInvalidationCommitTokenRef.current += 1;
+    });
+    const handleRowLayoutMutation = React.useCallback((params: Readonly<{
+        itemId: string;
+        mutation: TranscriptRowLayoutMutation;
+        rowKind: string;
+    }>) => {
+        const { reason, previousSignature, nextSignature } = params.mutation;
+        const viewportTransactionOpen =
+            hasOpenNativePrependTransactionForSession() || hasOpenEntryRestoreTransactionForSession();
+        const commitToken = layoutInvalidationCommitTokenRef.current;
+        // C1: the sole, transaction-gated `clearLayoutCacheOnUpdate` caller. The reconciler clears
+        // only on a real structural delta (never on a streaming append) and never while a prepend or
+        // entry-restore transaction owns the viewport — preserving the anti-thrash intent without the
+        // blunt streaming suppression. A deferred clear is not queued; the next post-transaction
+        // structural mutation re-requests (a clear is a refresh, not a debt). A direct expand/collapse
+        // is a discrete structural action with no signature pair, so it asks for a structural clear.
+        const decision = (reason === 'signature-change' && previousSignature !== undefined && nextSignature !== undefined)
+            ? measurementReconciler.requestGlobalLayoutInvalidation({
+                previous: previousSignature,
+                next: nextSignature,
+                viewportTransactionOpen,
+                commitToken,
+            })
+            : measurementReconciler.requestGlobalLayoutInvalidation({
+                structural: reason === 'expand' || reason === 'collapse',
+                viewportTransactionOpen,
+                commitToken,
+            });
+        // Also suppress the clear during the cold-open settle window. The inverted follow-bottom fix
+        // marks the initial viewport applied early (to arm the pin), which closes the entry transaction
+        // sooner — but a structural clearLayoutCacheOnUpdate here resets FlashList bottom-maintenance
+        // and yanks the freshly-pinned inverted list off the bottom (the visible open flicker). Per-row
+        // onLayout settles the cold-open; clears resume once mount-settle is stable (a clear is a
+        // refresh, not a debt — the next post-settle structural mutation re-requests it).
+        const coldOpenSettling = mountSettleCoordinatorRef.current?.getSnapshot().isMountSettleActive === true;
+        if (decision.clear && !coldOpenSettling) {
+            listRef.current?.clearLayoutCacheOnUpdate?.();
+        }
+    }, [
+        hasOpenEntryRestoreTransactionForSession,
+        hasOpenNativePrependTransactionForSession,
+        measurementReconciler,
+    ]);
+    React.useEffect(() => {
+        // N1.1 + N2d.1: one always-on subscription to the patched FlashList offset corrector.
+        // Production consumer: the open prepend transaction's corrector-deference signal —
+        // applied corrections accumulate on the transaction so the observation can classify a
+        // corrector-covered commit as mvcp-preserved instead of double-correcting. Dev/QA
+        // consumer: viewport telemetry (gated per event at the listener level).
+        if (Platform.OS === 'web' || listImplementation !== 'flash_v2') return undefined;
+        return subscribeToFlashListOffsetCorrections((event) => {
+            if (event.type === 'correction-applied' && typeof event.diffPx === 'number') {
+                const transaction = nativePrependTransactionRef.current;
+                if (transaction && !transaction.isClosed()) {
+                    transaction.onCorrectorCorrectionApplied(event.diffPx);
+                    if (transaction.state() === 'committed' && nativePrependCorrectorNudgeRef.current == null) {
+                        // Re-observe off the vendor scroll path so the covered classification
+                        // closes the window promptly (before the quiet gate can spend the fallback).
+                        nativePrependCorrectorNudgeRef.current = setTimeout(() => {
+                            nativePrependCorrectorNudgeRef.current = null;
+                            observeNativePrependTransactionRef.current();
+                        }, 0);
+                    }
+                }
+            }
+            if (!isViewportEvidenceTelemetryEnabled()) return;
+            recordViewportTelemetryEvent({
+                type: 'offset-correction',
+                mode: resolveViewportTelemetryMode(),
+                correctionAction: event.type,
+                correctionSource: event.source,
+                correctionDiffPx: event.diffPx,
+            });
+        });
+    }, [
+        isViewportEvidenceTelemetryEnabled,
+        listImplementation,
+        recordViewportTelemetryEvent,
+        resolveViewportTelemetryMode,
+    ]);
+
     /**
-     * Deferred-newer drain (plan D6): when forward loading was deferred by the catch-up
-     * policy and the user approaches the bottom, load the newer page exactly once.
-     * Every decision is telemetered: triggered, skipped (in flight), drained (the
-     * deferred-forward marker cleared).
+     * Deferred-newer drain (plan C6/D3): the list supplies viewport GEOMETRY only. The data layer
+     * accrues the deferred-forward backlog and owns the release decision (threshold + in-flight
+     * dedupe + fetch) in `sync.maybeDrainDeferredNewerMessages`. Routing the list through that single
+     * owner removes the parallel list-side decision path that silently stalled catch-up on list
+     * shells that did not reproduce the old onScroll callbacks.
      */
     const drainDeferredNewerMessages = React.useCallback((params: Readonly<{
         distanceFromBottom: number;
         pinned: boolean;
     }>) => {
-        const prefetchThresholdPx = sync.getSyncTuning().transcriptForwardPrefetchThresholdPx;
-        if (params.pinned || params.distanceFromBottom > prefetchThresholdPx) return;
-        if (sync.hasDeferredNewerMessages(props.sessionId) !== true) return;
-        if (loadNewerInFlight.current) {
-            recordRestoreDecisionTelemetry('forward-newer-skipped', {
-                distanceFromBottom: params.distanceFromBottom,
-                mode: resolveViewportTelemetryMode(),
-            });
-            return;
-        }
-        loadNewerInFlight.current = true;
-        recordRestoreDecisionTelemetry('forward-newer-triggered', {
-            distanceFromBottom: params.distanceFromBottom,
-            mode: resolveViewportTelemetryMode(),
+        sync.maybeDrainDeferredNewerMessages(props.sessionId, {
+            isPinned: params.pinned,
+            distanceFromBottomPx: params.distanceFromBottom,
         });
-        const p = sync.loadNewerMessages(props.sessionId);
-        p.then(() => {
-            if (sync.hasDeferredNewerMessages(props.sessionId) !== true) {
-                recordRestoreDecisionTelemetry('forward-newer-drained', {
-                    mode: resolveViewportTelemetryMode(),
-                });
-            }
-        }).catch(() => {}).finally(() => {
-            loadNewerInFlight.current = false;
-        });
-        fireAndForget(p, { tag: 'ChatList.loadNewerMessages' });
-    }, [props.sessionId, recordRestoreDecisionTelemetry, resolveViewportTelemetryMode]);
+    }, [props.sessionId]);
 
     const resolveViewportCommand = React.useCallback((input: TranscriptViewportControllerInput): TranscriptViewportCommand => {
         return viewportCommandController.resolve(input);
@@ -2758,6 +3726,12 @@ const ChatListInternal = React.memo((props: {
                     layoutHeight: metrics.clientHeight,
                     contentHeight: metrics.scrollHeight,
                     distanceFromBottom: Math.max(0, Math.trunc(metrics.scrollHeight - metrics.clientHeight - targetOffsetY)),
+                    ...resolveWebViewportTelemetryDiagnostics({
+                        metrics,
+                        programmaticWebWrite: true,
+                        scrollable: isWebTranscriptScrollable(metrics, 1),
+                        trigger: command.reason === 'prepend-restore' ? 'prepend-restore' : command.mode === 'jump-to-bottom' ? 'jump' : 'restore',
+                    }),
                 });
                 return true;
             }
@@ -2765,10 +3739,11 @@ const ChatListInternal = React.memo((props: {
             const node = listRef.current;
             if (!node) return false;
             const isLegacyList = listImplementation === 'flatlist_legacy';
+            const isInvertedOrientation = listOrientationRef.current === 'inverted';
             const offset = isLegacyList
                 ? 0
                 : Math.max(0, Math.trunc(listContentHeightRef.current - listLayoutHeightRef.current));
-            if (!isLegacyList && command.mode === 'jump-to-bottom' && typeof node.scrollToEnd === 'function') {
+            if (!isLegacyList && !isInvertedOrientation && command.mode === 'jump-to-bottom' && typeof node.scrollToEnd === 'function') {
                 // Plan B7: an explicit jump targets the list's OWN end. Our contentHeight
                 // snapshot can be mid-churn (field trace: jump landed at ~93% after the
                 // height shrank under the write), so never derive the explicit bottom
@@ -2778,6 +3753,7 @@ const ChatListInternal = React.memo((props: {
                 if (typeof node.scrollToOffset !== 'function') return false;
                 if (
                     !isLegacyList &&
+                    !isInvertedOrientation &&
                     command.mode === 'jump-to-bottom' &&
                     offset <= 0 &&
                     listDataRef.current.length > 0 &&
@@ -2793,7 +3769,51 @@ const ChatListInternal = React.memo((props: {
                     });
                     return false;
                 }
-                node.scrollToOffset({ offset, animated: command.animated ?? false });
+                const rawBottomOffset = isLegacyList
+                    ? offset
+                    : command.mode === 'jump-to-bottom'
+                        ? resolveBottomRawScrollCommandOffset({
+                            contentHeight: listContentHeightRef.current,
+                            layoutHeight: listLayoutHeightRef.current,
+                            orientation: listOrientationRef.current,
+                        })
+                        : resolveBottomRawScrollOffset({
+                            contentHeight: listContentHeightRef.current,
+                            layoutHeight: listLayoutHeightRef.current,
+                            orientation: listOrientationRef.current,
+                        });
+                // Device-proven: an inverted FlashList ignores scrollToOffset({offset: 0}) (the list
+                // does not move to raw 0). The newest row is index 0 of the reversed newest-first data,
+                // so the visual bottom must be commanded via scrollToIndex(0). scrollToOffset stays the
+                // path for standard/legacy and for non-bottom restore writes.
+                if (!isLegacyList && isInvertedOrientation && typeof node.scrollToIndex === 'function') {
+                    // Offset the inverted bottom command UP by the composer/agent-input inset so the
+                    // newest row lands fully ABOVE the input rather than one inset-height short (device-
+                    // proven: viewOffset = -composerInset drives distance-from-bottom to exactly 0; +inset
+                    // or 0 leaves the gap the user has to manually scroll past). No inset (e.g. tests) →
+                    // the plain index-0 command.
+                    const composerInset = composerInsetHeightRef.current;
+                    node.scrollToIndex(
+                        composerInset > 0
+                            ? { index: 0, animated: command.animated ?? false, viewOffset: -composerInset }
+                            : { index: 0, animated: command.animated ?? false },
+                    );
+                } else {
+                    node.scrollToOffset({ offset: rawBottomOffset, animated: command.animated ?? false });
+                }
+                recordViewportTelemetryEvent({
+                    type: 'scroll-write',
+                    writer: command.mode === 'jump-to-bottom' ? 'native-explicit-jump' : 'native-scroll-to-offset',
+                    reason: command.reason,
+                    mode: command.mode,
+                    targetOffsetY: rawBottomOffset,
+                    previousOffsetY: lastNativePinOffsetRef.current ?? undefined,
+                    layoutHeight: listLayoutHeightRef.current,
+                    contentHeight: listContentHeightRef.current,
+                    distanceFromBottom: 0,
+                    nativeMountSettleStable,
+                });
+                return true;
             }
             recordViewportTelemetryEvent({
                 type: 'scroll-write',
@@ -2840,6 +3860,12 @@ const ChatListInternal = React.memo((props: {
                     distanceFromBottom: command.kind === 'restore-offset'
                         ? command.offsetY
                         : Math.max(0, Math.trunc(metrics.scrollHeight - metrics.clientHeight - targetOffsetY)),
+                    ...resolveWebViewportTelemetryDiagnostics({
+                        metrics,
+                        programmaticWebWrite: true,
+                        scrollable: isWebTranscriptScrollable(metrics, 1),
+                        trigger: command.reason === 'prepend-restore' ? 'prepend-restore' : command.mode === 'jump-to-bottom' ? 'jump' : 'restore',
+                    }),
                 });
                 return true;
             }
@@ -2856,7 +3882,17 @@ const ChatListInternal = React.memo((props: {
                     ? Math.min(maxOffset, command.offsetY)
                     : Math.max(0, maxOffset - command.offsetY)
                 : Math.max(0, Math.trunc(command.offsetY));
-            node.scrollToOffset({ offset: targetOffsetY, animated: command.animated ?? false });
+            // N3.2: command/telemetry offsets stay CANONICAL (standard-space); the raw
+            // write target maps through the orientation seam at this single boundary.
+            const rawTargetOffsetY = listImplementation === 'flatlist_legacy'
+                ? targetOffsetY
+                : Math.max(0, fromCanonicalScrollOffset({
+                    offsetY: targetOffsetY,
+                    contentHeight,
+                    layoutHeight,
+                    orientation: listOrientationRef.current,
+                }));
+            node.scrollToOffset({ offset: rawTargetOffsetY, animated: command.animated ?? false });
             recordViewportTelemetryEvent({
                 type: 'scroll-write',
                 writer: command.mode === 'jump-to-bottom' ? 'native-explicit-jump' : 'native-scroll-to-offset',
@@ -2873,8 +3909,52 @@ const ChatListInternal = React.memo((props: {
         }
 
         if (command.kind === 'restore-index' || command.kind === 'jump-to-seq') {
-            const index = command.kind === 'restore-index' ? command.index : command.index;
+            let index = command.kind === 'restore-index' ? command.index : command.index;
             if (typeof index !== 'number' || !Number.isFinite(index)) return false;
+            if (Platform.OS === 'web' && shouldUseWebHotColdSplit) {
+                const target = resolveWebColdListScrollTarget({
+                    fullIndex: index,
+                    coldCount: transcriptHotColdSegments.coldItems.length,
+                    reason: command.kind === 'jump-to-seq'
+                        ? 'jump-to-seq'
+                        : command.reason === 'prepend-restore'
+                            ? 'prepend-recovery'
+                            : 'restore-index',
+                });
+                if (target.kind === 'pin_to_bottom') {
+                    const metrics = resolveWebScrollMetrics();
+                    if (!metrics) return false;
+                    const previousOffsetY = metrics.scrollTop;
+                    try {
+                        metrics.element.scrollTop = metrics.scrollHeight;
+                    } catch {
+                        return false;
+                    }
+                    lastObservedWebScrollTopRef.current = metrics.element.scrollTop;
+                    recordViewportTelemetryEvent({
+                        type: 'scroll-write',
+                        writer: 'web-dom-bottom',
+                        reason: command.reason,
+                        mode: command.mode,
+                        targetOffsetY: metrics.element.scrollTop,
+                        previousOffsetY,
+                        layoutHeight: metrics.clientHeight,
+                        contentHeight: metrics.scrollHeight,
+                        distanceFromBottom: getWebTranscriptDistanceFromBottom({
+                            ...metrics,
+                            scrollTop: metrics.element.scrollTop,
+                        }),
+                        ...resolveWebViewportTelemetryDiagnostics({
+                            metrics,
+                            programmaticWebWrite: true,
+                            scrollable: isWebTranscriptScrollable(metrics, 1),
+                            trigger: command.kind === 'jump-to-seq' ? 'jump' : command.reason === 'prepend-restore' ? 'prepend-restore' : 'restore',
+                        }),
+                    });
+                    return true;
+                }
+                index = target.index;
+            }
             const node = listRef.current;
             if (!node || typeof node.scrollToIndex !== 'function') return false;
                 if (command.kind === 'restore-index') {
@@ -2917,6 +3997,12 @@ const ChatListInternal = React.memo((props: {
                     layoutHeight: listLayoutHeightRef.current,
                     contentHeight: listContentHeightRef.current,
                     nativeMountSettleStable,
+                    ...(Platform.OS === 'web' ? resolveWebViewportTelemetryDiagnostics({
+                        metrics: resolveWebScrollMetrics(),
+                        programmaticWebWrite: true,
+                        scrollable: undefined,
+                        trigger: command.kind === 'jump-to-seq' ? 'jump' : command.reason === 'prepend-restore' ? 'prepend-restore' : 'restore',
+                    }) : {}),
                 });
                 return true;
             }
@@ -2932,15 +4018,18 @@ const ChatListInternal = React.memo((props: {
             recordRestoreDecisionTelemetry,
             recordViewportTelemetryEvent,
             resolveViewportCommandTelemetryWriter,
+            resolveWebViewportTelemetryDiagnostics,
             resolveWebScrollMetrics,
+            shouldUseWebHotColdSplit,
             telemetryPlatform,
+            transcriptHotColdSegments.coldItems.length,
             viewportCommandController,
         ]);
 
     const writeWebRestoreScrollTopThroughViewportCommand = React.useCallback((
         params: Readonly<{
             mode: Extract<TranscriptViewportMode, 'restore-anchor' | 'restore-distance'>;
-            reason: Extract<TranscriptViewportTelemetryScrollReason, 'entry-restore' | 'prepend-restore'>;
+            reason: Extract<TranscriptViewportTelemetryScrollReason, 'content-size-change' | 'entry-restore' | 'prepend-restore'>;
             targetScrollTop: number;
         }>,
     ): boolean => {
@@ -2969,15 +4058,42 @@ const ChatListInternal = React.memo((props: {
     const restoreWebViewportAnchorThroughViewportCommand = React.useCallback((params: Readonly<{
         anchor: Parameters<typeof restoreWebTranscriptViewportAnchor>[0]['anchor'];
         container: HTMLElement;
+        reason?: Extract<TranscriptViewportTelemetryScrollReason, 'content-size-change' | 'entry-restore'>;
     }>) => {
         return restoreWebTranscriptViewportAnchor(params, {
             writeScrollTop: (targetScrollTop) => writeWebRestoreScrollTopThroughViewportCommand({
                 mode: 'restore-anchor',
-                reason: 'entry-restore',
+                reason: params.reason ?? 'entry-restore',
                 targetScrollTop,
             }),
         });
     }, [writeWebRestoreScrollTopThroughViewportCommand]);
+
+    React.useLayoutEffect(() => {
+        if (Platform.OS !== 'web') return;
+        const pending = pendingWebLocalHeightChangeAnchorRef.current;
+        if (!pending) return;
+        if (pending.sessionId !== props.sessionId || listImplementation !== 'flash_v2') {
+            pendingWebLocalHeightChangeAnchorRef.current = null;
+            return;
+        }
+        const metrics = resolveWebScrollMetrics();
+        if (!metrics) return;
+        pendingWebLocalHeightChangeAnchorRef.current = null;
+        restoreWebViewportAnchorThroughViewportCommand({
+            anchor: pending.anchor,
+            container: metrics.element,
+            reason: 'content-size-change',
+        });
+    }, [
+        expandedToolCallsAnchorMessageIds,
+        listContentHeight,
+        listData.length,
+        listImplementation,
+        props.sessionId,
+        resolveWebScrollMetrics,
+        restoreWebViewportAnchorThroughViewportCommand,
+    ]);
 
     const observeMountSettleMetrics = React.useCallback((options: Readonly<{
         distanceFromBottom?: number;
@@ -3073,6 +4189,14 @@ const ChatListInternal = React.memo((props: {
         props.routeHydrationPending,
         props.sessionId,
         releaseNativePaintForIssuedEntryRestore,
+    ]);
+
+    const handleFlashListLoad = React.useCallback(() => {
+        recordFirstListPaint();
+        recordNativeVisibleWindowTelemetry('observed');
+    }, [
+        recordFirstListPaint,
+        recordNativeVisibleWindowTelemetry,
     ]);
 
     const resolveEffectiveListPaintMetrics = React.useCallback(() => {
@@ -3214,18 +4338,28 @@ const ChatListInternal = React.memo((props: {
         return props.jumpToSeq != null;
     }, [props.jumpToSeq]);
 
-    const flashListMvcpThresholdLayoutHeight = nativeMountSettleStable ? listLayoutHeight : 0;
+    // Arm the MVCP bottom-autoscroll threshold from the real viewport height as soon as the
+    // viewport is laid out, decoupled from content mount-settle. On the inverted native path the
+    // JS pin is a deliberate no-op, so this threshold is the ONLY bottom-pin authority; gating it
+    // behind `nativeMountSettleStable` (a quiescent content-height window that never settles while
+    // rows measure late on a tall cold open) was half of the cold-open follow-bottom deadlock.
+    // The resolver still withholds the threshold for non-follow / open-transaction / web / legacy
+    // (see resolveTranscriptFlashListBottomMaintenance), and `normalizePositive` rejects a
+    // not-yet-laid-out (<= 0) height, so passing the raw layout height is safe.
+    const flashListMvcpThresholdLayoutHeight = listLayoutHeight;
     const flashListMaintainVisibleContentPosition = React.useMemo(() => {
         // FlashList/web can throw "index out of bounds, not enough layouts" under heavy append + scroll
         // when `maintainVisibleContentPosition.startRenderingFromBottom` is enabled. On web we already
         // pin via direct DOM scroll writes, so omit this prop to avoid the crash.
+        const bottomFollowModeState = bottomFollowModeStateRef.current;
         return resolveTranscriptFlashListBottomMaintenance({
             autoFollowWhenPinned,
-            bottomFollowMode: bottomFollowModeStateRef.current.mode,
+            bottomFollowMode: bottomFollowModeState.mode,
             hasOpenViewportTransaction:
                 hasOpenEntryRestoreTransactionForSession() || hasOpenNativePrependTransactionForSession(),
             layoutHeight: flashListMvcpThresholdLayoutHeight,
             nativeEntryShouldUseBottomMaintenance,
+            orientation: listOrientation,
             pinEnabled,
             pinThresholdPx,
             platformIsWeb: Platform.OS === 'web',
@@ -3236,12 +4370,17 @@ const ChatListInternal = React.memo((props: {
         flashListMvcpThresholdLayoutHeight,
         hasOpenEntryRestoreTransactionForSession,
         hasOpenNativePrependTransactionForSession,
+        listOrientation,
         nativeEntryShouldUseBottomMaintenance,
         nativeInitialViewportPendingObservation,
         nativePrependTransactionRevision,
         pinEnabled,
         pinThresholdPx,
     ]);
+    nativeFlashListMvcpPolicyRef.current =
+        Platform.OS !== 'web' && listImplementation === 'flash_v2'
+            ? resolveNativeTelemetryMvcpPolicy(flashListMaintainVisibleContentPosition)
+            : 'none';
 
     const flatListMaintainVisibleContentPosition = React.useMemo(() => {
         return canAutoFollowForReason('stream-append')
@@ -3273,13 +4412,6 @@ const ChatListInternal = React.memo((props: {
         return typeof kind === 'string' ? kind : null;
     }, [props.sessionId]);
 
-    const getTurnMessageById = React.useCallback((messageId: string): Message | null => {
-        const forkAwareMessage = props.messagesById[messageId];
-        if (forkAwareMessage) return forkAwareMessage;
-        const state = getStorage().getState();
-        const session = state?.sessionMessages?.[props.sessionId];
-        return session?.messagesById?.[messageId] ?? session?.messagesMap?.[messageId] ?? null;
-    }, [props.messagesById, props.sessionId]);
     const resolveForkedTurnMessageOrigin = React.useCallback((messageId: string) => {
         const metadata = props.forkMessageMetadataById?.[messageId] ?? null;
         if (!metadata) return null;
@@ -3301,6 +4433,38 @@ const ChatListInternal = React.memo((props: {
             item,
         })
     ), [getTurnMessageById, props.activeThinkingMessageId]);
+    React.useEffect(() => {
+        // N1.3 evidence: intra-row content mutations (a rendered turn/tool-group row gaining or
+        // losing entries post-mount) — the D6 blind spot no list-level maintenance can absorb.
+        if (!isViewportEvidenceTelemetryEnabled()) return;
+        const previousCounts = rowEvidenceContentCountsRef.current;
+        const nextCounts = new Map<string, number>();
+        for (const item of listData) {
+            const count = resolveTranscriptRowContentCount(item);
+            if (count === undefined) continue;
+            nextCounts.set(item.id, count);
+            const previousCount = previousCounts.get(item.id);
+            if (previousCount !== undefined && previousCount !== count) {
+                recordViewportTelemetryEvent({
+                    type: 'row-mutated',
+                    mode: resolveViewportTelemetryMode(),
+                    rowId: item.id,
+                    rowKind: getItemType(item),
+                    rowContentCount: count,
+                    rowPreviousContentCount: previousCount,
+                    rowViewportRelation: resolveRowEvidenceViewportRelation(item.id),
+                });
+            }
+        }
+        rowEvidenceContentCountsRef.current = nextCounts;
+    }, [
+        getItemType,
+        isViewportEvidenceTelemetryEnabled,
+        listData,
+        recordViewportTelemetryEvent,
+        resolveRowEvidenceViewportRelation,
+        resolveViewportTelemetryMode,
+    ]);
     const resolveRollbackActionForMessage = React.useCallback((messageId: string): TranscriptRollbackAction | null => {
         return props.rollbackActionsByMessageId[messageId] ?? null;
     }, [props.rollbackActionsByMessageId]);
@@ -3507,14 +4671,16 @@ const ChatListInternal = React.memo((props: {
         const signature = buildRowShellSignature(item);
         return (
             <TranscriptRowShell
-                cache={rowShellHeightCache}
+                reconciler={measurementReconciler}
                 itemId={item.id}
+                onRowLayoutMutation={handleRowLayoutMutation}
+                onRowMeasured={handleRowShellMeasured}
                 signature={signature}
             >
                 {node}
             </TranscriptRowShell>
         );
-    }, [buildRowShellSignature, rowShellHeightCache]);
+    }, [buildRowShellSignature, handleRowLayoutMutation, handleRowShellMeasured, measurementReconciler]);
 
     const captureCurrentWebPrependAnchor = React.useCallback(() => {
         if (Platform.OS !== 'web' || listImplementation !== 'flash_v2') return null;
@@ -3542,15 +4708,22 @@ const ChatListInternal = React.memo((props: {
         result: Readonly<{ didAdjustScroll: boolean; strategy: 'anchor' | 'item' | 'growth' | 'none' }>,
     ) => {
         if (Platform.OS !== 'web') return;
+        const prependDiagnostics = {
+            programmaticWebWrite: result.didAdjustScroll,
+            webTrigger: 'prepend-restore' as const,
+        };
         if (result.strategy === 'growth') {
-            recordRestoreDecisionTelemetry('restored', { mode: 'restore-distance' });
+            recordRestoreDecisionTelemetry('restored', { mode: 'restore-distance', ...prependDiagnostics });
             return;
         }
         if (result.strategy === 'none') {
-            recordRestoreDecisionTelemetry('not-ready', { mode: 'restore-anchor' });
+            recordRestoreDecisionTelemetry('not-ready', { mode: 'restore-anchor', ...prependDiagnostics });
             return;
         }
-        recordRestoreDecisionTelemetry(result.didAdjustScroll ? 'restored' : 'observed', { mode: 'restore-anchor' });
+        recordRestoreDecisionTelemetry(result.didAdjustScroll ? 'restored' : 'observed', {
+            mode: 'restore-anchor',
+            ...prependDiagnostics,
+        });
     }, [recordRestoreDecisionTelemetry]);
 
     const clearNativePrependQuietState = React.useCallback(() => {
@@ -3573,24 +4746,28 @@ const ChatListInternal = React.memo((props: {
             nativePrependLayoutTimeoutRef.current = null;
             clearTimeout(layoutTimeout);
         }
+        const correctorNudge = nativePrependCorrectorNudgeRef.current;
+        if (correctorNudge != null) {
+            nativePrependCorrectorNudgeRef.current = null;
+            clearTimeout(correctorNudge);
+        }
         const outcome = transaction.outcome() ?? 'abandoned-identity';
         if (viewportCommandController.activeOwner() === 'prepend') {
             viewportCommandController.closeTransaction('prepend', outcome);
         }
         // Every prepend outcome is telemetered (invariant D: never silent), attributed to the
         // transaction's own session even when disposal happens during a session switch.
-        recordTranscriptViewportTelemetryEvent({
+        recordViewportTelemetryEvent({
             type: 'restore-decision',
             mode: 'restore-anchor',
             reason: outcome,
-            sessionId: transaction.sessionId,
-            platform: telemetryPlatform,
-            listImplementation: telemetryListImplementation,
-            timestampMs: Date.now(),
             anchorItemOffsetPx: transaction.capturedAnchor.itemOffsetPx,
-        }, sync.getSyncTuning());
+            anchorDeltaPx: transaction.conclusiveAnchorDeltaPx() ?? undefined,
+            correctorAppliedDiffTotalPx: transaction.correctorCoverage().appliedDiffTotalPx,
+            correctorEventCount: transaction.correctorCoverage().eventCount,
+        }, { sessionId: transaction.sessionId });
         bumpNativePrependTransactionRevision();
-    }, [clearNativePrependQuietState, telemetryListImplementation, telemetryPlatform, viewportCommandController]);
+    }, [clearNativePrependQuietState, recordViewportTelemetryEvent, viewportCommandController]);
 
     const invalidateNativePrependTransaction = React.useCallback(() => {
         const transaction = nativePrependTransactionRef.current;
@@ -3605,9 +4782,16 @@ const ChatListInternal = React.memo((props: {
     const beginNativePrependTransaction = React.useCallback((): PrependTransaction | null => {
         if (Platform.OS === 'web' || listImplementation !== 'flash_v2') return null;
         if (wantsPinnedRef.current) return null;
-        // Entry restore owns the viewport during materialization loads (LA-R contract):
-        // MVCP alone holds position; the entry transaction places the viewport afterwards.
-        if (viewportCommandController.activeOwner() === 'entry') return null;
+        if (viewportCommandController.activeOwner() === 'entry') {
+            // N2d.3(i): entry-owned MATERIALIZATION loads never reach here (they pass
+            // preservePrependViewport:false — LA-R contract). A begin call while the entry
+            // owner is still active is therefore an entry-ADJACENT prepend (first user
+            // older-load / slice reveal): close the entry transaction with an attributable
+            // outcome and let the prepend transaction observe the commit instead of
+            // letting it land transaction-less (the N2d live begin-miss).
+            preemptEntryRestoreTransaction();
+            if (viewportCommandController.activeOwner() === 'entry') return null;
+        }
         const layoutHeight = listLayoutHeightRef.current;
         const contentHeight = listContentHeightRef.current;
         if (!Number.isFinite(layoutHeight) || layoutHeight <= 0) return null;
@@ -3641,7 +4825,40 @@ const ChatListInternal = React.memo((props: {
         nativePrependCommitArmedRef.current = false;
         nativePrependQuietGateRef.current = createPrependFallbackQuietGate();
         return transaction;
-    }, [invalidateNativePrependTransaction, listImplementation, props.sessionId, viewportCommandController]);
+    }, [invalidateNativePrependTransaction, listImplementation, preemptEntryRestoreTransaction, props.sessionId, viewportCommandController]);
+
+    /**
+     * N2b.2: reveals the withheld slice-window rows as ONE prepend-observed data
+     * commit (zero scroll writes expected — the corrector/MVCP covers it; the
+     * prepend transaction observes the outcome per the N2d rules). Returns the
+     * number of revealed rows.
+     */
+    const revealEntrySliceWindow = React.useCallback((): number => {
+        const sliceWindow = entrySliceWindowRef.current;
+        if (!sliceWindow || sliceWindow.sessionId !== props.sessionId) return 0;
+        const withheldCount = entrySliceWithheldCountRef.current;
+        if (withheldCount <= 0) {
+            entrySliceWindowRef.current = null;
+            setEntrySliceWindow(null);
+            return 0;
+        }
+        // Clear the window ref before beginning the transaction: begin may preempt an
+        // open entry transaction whose close hook re-enters this reveal (no-op then).
+        // The capture still reads the pre-reveal listData — the data growth only
+        // commits on the next render and the transaction observes it (commit armed).
+        entrySliceWindowRef.current = null;
+        setEntrySliceWindow(null);
+        const transaction = beginNativePrependTransaction();
+        if (
+            transaction &&
+            nativePrependTransactionRef.current === transaction &&
+            !transaction.isClosed()
+        ) {
+            nativePrependCommitArmedRef.current = true;
+        }
+        return withheldCount;
+    }, [beginNativePrependTransaction, props.sessionId]);
+    revealEntrySliceWindowRef.current = revealEntrySliceWindow;
 
     const computeNativePrependObservation = React.useCallback((transaction: PrependTransaction): PrependOutcome => {
         const node = listRef.current;
@@ -3668,6 +4885,9 @@ const ChatListInternal = React.memo((props: {
                 contentHeight: listContentHeightRef.current,
                 layoutHeight: listLayoutHeightRef.current,
             },
+            // N2d.1: a misalignment fully explained by corrections the vendor corrector already
+            // applied classifies mvcp-preserved (zero writes) instead of double-correcting.
+            correctorCoverage: transaction.correctorCoverage(),
         });
     }, []);
 
@@ -3817,17 +5037,13 @@ const ChatListInternal = React.memo((props: {
             reason: 'anchor-captured' | 'anchor-capture-empty' | 'anchor-capture-dropped',
             anchorItemOffsetPx?: number,
         ) => {
-            recordTranscriptViewportTelemetryEvent({
+            recordViewportTelemetryEvent({
                 type: 'anchor-capture',
-                sessionId,
-                platform: telemetryPlatform,
-                listImplementation: telemetryListImplementation,
                 mode: 'user-unpinned',
                 reason,
                 distanceFromBottom: typeof state.offsetY === 'number' ? state.offsetY : undefined,
                 anchorItemOffsetPx,
-                timestampMs: Date.now(),
-            }, sync.getSyncTuning());
+            }, { sessionId });
         };
         if (viewportAnchorCaptureGenerationRef.current !== generation) {
             recordCaptureOutcome('anchor-capture-dropped');
@@ -3855,7 +5071,7 @@ const ChatListInternal = React.memo((props: {
             ...state,
             anchor,
         });
-    }, [telemetryListImplementation, telemetryPlatform]);
+    }, [recordViewportTelemetryEvent]);
 
     const scheduleViewportAnchorCapture = React.useCallback((
         state: TranscriptViewportChangeState,
@@ -3934,17 +5150,13 @@ const ChatListInternal = React.memo((props: {
         // Capture against the still-mounted list synchronously; the render-phase exit flush
         // defers only the emit so it never writes to the sync store mid-render.
         const anchor = scheduled.captureAnchor();
-        recordTranscriptViewportTelemetryEvent({
+        recordViewportTelemetryEvent({
             type: 'anchor-capture',
-            sessionId: scheduled.sessionId,
-            platform: telemetryPlatform,
-            listImplementation: telemetryListImplementation,
             mode: 'user-unpinned',
             reason: anchor ? 'anchor-captured' : 'anchor-capture-empty',
             distanceFromBottom: typeof scheduled.state.offsetY === 'number' ? scheduled.state.offsetY : undefined,
             anchorItemOffsetPx: anchor?.itemOffsetPx,
-            timestampMs: Date.now(),
-        }, sync.getSyncTuning());
+        }, { sessionId: scheduled.sessionId });
         const emit = scheduled.emit;
         const state = scheduled.state;
         if (options?.deferEmit === true) {
@@ -3954,7 +5166,7 @@ const ChatListInternal = React.memo((props: {
             return;
         }
         emit?.({ ...state, anchor });
-    }, [telemetryListImplementation, telemetryPlatform]);
+    }, [recordViewportTelemetryEvent]);
 
     React.useLayoutEffect(() => {
         flushViewportAnchorCaptureRef.current = flushScheduledViewportAnchorCapture;
@@ -4029,10 +5241,10 @@ const ChatListInternal = React.memo((props: {
 
     const resolvePendingWebPrependRefreshOptions = React.useCallback((strategy: 'anchor' | 'item' | 'growth' | 'none') => {
         if (strategy === 'anchor') {
-            return { recaptureAnchor: true, recaptureItem: true } as const;
+            return { adoptCurrentAnchorPosition: true, recaptureAnchor: true, recaptureItem: true } as const;
         }
         if (strategy === 'item') {
-            return { recaptureItem: true } as const;
+            return { adoptCurrentAnchorPosition: true, recaptureItem: true } as const;
         }
         return { preserveBaselineMetrics: true } as const;
     }, []);
@@ -4070,9 +5282,16 @@ const ChatListInternal = React.memo((props: {
         }
         if (!anchorMessageId) return null;
 
-        const index = itemsRef.current.findIndex((item) => {
+        // Two-pass like resolveTranscriptViewportAnchorIndex (N2c): exact message-owning
+        // rows (incl. per-unit tool rows) win; the group header cap is the containment
+        // fallback for tools hidden behind a collapsed preview.
+        const items = itemsRef.current;
+        const owningIndex = items.findIndex((item) => {
             if (item.kind === 'message') {
                 return item.messageId === anchorMessageId;
+            }
+            if (item.kind === 'tool-group-tool') {
+                return item.toolMessageId === anchorMessageId;
             }
             if (item.kind === 'tool-calls-group') {
                 return item.toolMessageIds.includes(anchorMessageId);
@@ -4091,8 +5310,12 @@ const ChatListInternal = React.memo((props: {
             }
             return false;
         });
+        if (owningIndex >= 0) return owningIndex;
 
-        return index >= 0 ? index : null;
+        const containingIndex = items.findIndex((item) => (
+            item.kind === 'tool-group-header' && item.toolMessageIds.includes(anchorMessageId)
+        ));
+        return containingIndex >= 0 ? containingIndex : null;
     }, []);
 
     const resolvePendingWebPrependRecoveryIndex = React.useCallback((pendingAnchor: WebTranscriptPrependAnchor | null): number | null => {
@@ -4104,12 +5327,25 @@ const ChatListInternal = React.memo((props: {
             if (Platform.OS !== 'web' || listImplementation !== 'flash_v2') return false;
             const index = resolvePendingWebPrependRecoveryIndex(pendingAnchor);
             if (index == null) return false;
+            const target = resolveWebColdListScrollTarget({
+                fullIndex: index,
+                coldCount: shouldUseWebHotColdSplit
+                    ? transcriptHotColdSegments.coldItems.length
+                    : listDataRef.current.length,
+                reason: 'prepend-recovery',
+            });
             try {
+                if (target.kind === 'pin_to_bottom') {
+                    return executeViewportCommand(resolveViewportCommand({
+                        type: 'jump-to-bottom',
+                        sessionId: props.sessionId,
+                    }));
+                }
                 return executeViewportCommand(resolveViewportCommand({
                     type: 'restore-anchor',
                     sessionId: props.sessionId,
                     reason: 'prepend-restore',
-                    index,
+                    index: target.index,
                     animated: false,
                 }));
             } catch {
@@ -4121,6 +5357,8 @@ const ChatListInternal = React.memo((props: {
             props.sessionId,
             resolvePendingWebPrependRecoveryIndex,
             resolveViewportCommand,
+            shouldUseWebHotColdSplit,
+            transcriptHotColdSegments.coldItems.length,
         ]);
 
     const attemptPendingWebPrependIndexRecovery = React.useCallback((): boolean => {
@@ -4142,10 +5380,13 @@ const ChatListInternal = React.memo((props: {
             if (Date.now() <= pendingWebPrependAnchorRef.current.expiresAtMs) {
                 scheduleRetry();
             } else {
-                pendingWebPrependIndexRecoveryRef.current = false;
-                clearWebPrependRangeReserve();
+                clearWebPrependRestoreWindow('abandoned-identity');
                 // Plan E2: recovery window expired without remounting the anchor row.
-                recordRestoreDecisionTelemetry('skipped', { mode: 'restore-anchor' });
+                recordRestoreDecisionTelemetry('skipped', {
+                    mode: 'restore-anchor',
+                    programmaticWebWrite: false,
+                    webTrigger: 'prepend-restore',
+                });
             }
             return false;
         }
@@ -4156,8 +5397,7 @@ const ChatListInternal = React.memo((props: {
         recordWebPrependRestoreOutcome(retryRestoreResult);
         const retryMetrics = resolveWebScrollMetrics();
         if (!retryMetrics) {
-            pendingWebPrependAnchorRef.current = null;
-            clearWebPrependRangeReserve();
+            clearWebPrependRestoreWindowState();
             return true;
         }
         updateWebPrependRangeReserve(retryAnchor, retryMetrics);
@@ -4176,6 +5416,8 @@ const ChatListInternal = React.memo((props: {
         }
         return true;
         }, [
+            clearWebPrependRestoreWindow,
+            clearWebPrependRestoreWindowState,
             listImplementation,
             recordRestoreDecisionTelemetry,
             recordWebPrependRestoreOutcome,
@@ -4183,6 +5425,7 @@ const ChatListInternal = React.memo((props: {
             resolveWebScrollMetrics,
             restoreWebPrependAnchorThroughViewportCommand,
             tryScrollPendingWebPrependItemIntoView,
+            updateWebPrependRangeReserve,
     ]);
 
     const schedulePendingWebPrependIndexRecovery = React.useCallback(() => {
@@ -4263,6 +5506,87 @@ const ChatListInternal = React.memo((props: {
                 />
             ));
         }
+        if (item.kind === 'tool-group-header') {
+            const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, item.isReadOnlyContext === true);
+            const headerToolMessageIds = item.toolMessageIds;
+            const headerGroupId = item.groupId;
+            return wrapTranscriptItemForAnchor(item, (
+                <ToolCallsGroupUnitHeaderRowWithSessionCommon
+                    sessionId={props.sessionId}
+                    groupId={item.groupId}
+                    metadata={props.metadata}
+                    interaction={interaction}
+                    toolMessages={resolveToolCallMessagesForIds(item.toolMessageIds)}
+                    expanded={item.expanded}
+                    setExpanded={(expanded: boolean) => setToolCallsGroupExpanded({
+                        toolCallsGroupId: headerGroupId,
+                        toolMessageIds: headerToolMessageIds,
+                        expanded,
+                    })}
+                    forkCommon={props.forkCommon}
+                    messageDisplayCommon={props.messageDisplayCommon}
+                    toolChromeCommon={props.toolChromeCommon}
+                    toolRouteCommon={toolRouteCommonRef.current}
+                />
+            ));
+        }
+        if (item.kind === 'tool-group-expand') {
+            const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, item.isReadOnlyContext === true);
+            const expandToolMessageIds = item.toolMessageIds;
+            const expandGroupId = item.groupId;
+            return wrapTranscriptItemForAnchor(item, (
+                <ToolCallsGroupUnitExpandRowWithSessionCommon
+                    sessionId={props.sessionId}
+                    groupId={item.groupId}
+                    metadata={props.metadata}
+                    interaction={interaction}
+                    hiddenCount={item.hiddenCount}
+                    setExpanded={(expanded: boolean) => setToolCallsGroupExpanded({
+                        toolCallsGroupId: expandGroupId,
+                        toolMessageIds: expandToolMessageIds,
+                        expanded,
+                    })}
+                    forkCommon={props.forkCommon}
+                    messageDisplayCommon={props.messageDisplayCommon}
+                    toolChromeCommon={props.toolChromeCommon}
+                    toolRouteCommon={toolRouteCommonRef.current}
+                />
+            ));
+        }
+        if (item.kind === 'tool-group-tool') {
+            const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, item.isReadOnlyContext === true);
+            const toolMessage = getTurnMessageById(item.toolMessageId);
+            return wrapTranscriptItemForAnchor(item, toolMessage?.kind === 'tool-call' ? (
+                <ToolCallsGroupUnitToolRowWithSessionCommon
+                    sessionId={props.sessionId}
+                    groupId={item.groupId}
+                    metadata={props.metadata}
+                    interaction={interaction}
+                    message={toolMessage}
+                    expanded={item.expanded}
+                    approvalRequests={props.approvalRequests}
+                    forkCommon={props.forkCommon}
+                    messageDisplayCommon={props.messageDisplayCommon}
+                    toolChromeCommon={props.toolChromeCommon}
+                    toolRouteCommon={toolRouteCommonRef.current}
+                />
+            ) : null);
+        }
+        if (item.kind === 'tool-group-footer') {
+            const interaction = deriveReadOnlyTranscriptInteraction(props.interaction, item.isReadOnlyContext === true);
+            return wrapTranscriptItemForAnchor(item, (
+                <ToolCallsGroupUnitFooterRowWithSessionCommon
+                    sessionId={props.sessionId}
+                    groupId={item.groupId}
+                    metadata={props.metadata}
+                    interaction={interaction}
+                    forkCommon={props.forkCommon}
+                    messageDisplayCommon={props.messageDisplayCommon}
+                    toolChromeCommon={props.toolChromeCommon}
+                    toolRouteCommon={toolRouteCommonRef.current}
+                />
+            ));
+        }
         if (item.kind === 'turn') {
             const rowActiveThinkingMessageId = resolveTranscriptItemActiveThinkingMessageId(item, props.activeThinkingMessageId);
             const turnCreatedAt =
@@ -4303,7 +5627,16 @@ const ChatListInternal = React.memo((props: {
         if (item.kind === 'message') {
             const rowActiveThinkingMessageId = resolveTranscriptItemActiveThinkingMessageId(item, props.activeThinkingMessageId);
             const toolChromeMode = toolTimelineChromeMode === 'activity_feed' ? 'activity_feed' : 'cards';
-            const prev = listImplementation === 'flash_v2' ? itemsRef.current[index - 1] : undefined;
+            // N3.1: the chronologically-previous (older) row is index - 1 in standard
+            // orientation and index + 1 under inverted (rendered order is newest-first).
+            const olderNeighborIndex = resolveOlderNeighborRenderedIndex(
+                index,
+                itemsRef.current.length,
+                listOrientationRef.current,
+            );
+            const prev = listImplementation === 'flash_v2' && olderNeighborIndex != null
+                ? itemsRef.current[olderNeighborIndex]
+                : undefined;
             const shouldTightenToolStack =
                 listImplementation === 'flash_v2' &&
                 toolChromeMode === 'activity_feed' &&
@@ -4339,7 +5672,7 @@ const ChatListInternal = React.memo((props: {
             ));
         }
         return null;
-      }, [expandedToolCallsAnchorMessageIds, getTurnMessageById, getTurnMessageOrigin, listImplementation, props.activeThinkingMessageId, props.approvalRequests, props.forkCommon, props.interaction, props.messageDisplayCommon, props.metadata, props.rollbackRanges, props.sessionId, props.toolChromeCommon, resolveCreatedAtForMessageId, resolveKindForMessageId, resolveRollbackActionForMessage, resolveThinkingExpanded, setThinkingExpanded, setToolCallsGroupExpanded, toolTimelineChromeMode, wrapTranscriptItemForAnchor]);
+      }, [expandedToolCallsAnchorMessageIds, getTurnMessageById, getTurnMessageOrigin, listImplementation, props.activeThinkingMessageId, props.approvalRequests, props.forkCommon, props.interaction, props.messageDisplayCommon, props.metadata, props.rollbackRanges, props.sessionId, props.toolChromeCommon, resolveCreatedAtForMessageId, resolveKindForMessageId, resolveRollbackActionForMessage, resolveThinkingExpanded, resolveToolCallMessagesForIds, setThinkingExpanded, setToolCallsGroupExpanded, toolTimelineChromeMode, wrapTranscriptItemForAnchor]);
     const renderTranscriptItemAtIndex = React.useCallback((item: ChatTranscriptListItem, index: number) => {
         return renderItem({ item, index });
     }, [renderItem]);
@@ -4376,10 +5709,33 @@ const ChatListInternal = React.memo((props: {
             showOlderLoadSpinner();
         }
         try {
+            if (
+                preservePrependViewport &&
+                entrySliceWindowRef.current?.sessionId === props.sessionId
+            ) {
+                // N2b.2: a user-triggered older load while the slice window is still
+                // active reveals the withheld LOCAL rows first (one prepend-observed
+                // commit, no network) — the next load paginates normally.
+                const revealed = revealEntrySliceWindowRef.current();
+                if (revealed > 0) {
+                    return {
+                        loaded: revealed,
+                        // The top guard already excluded `false`; null means unknown → assume more.
+                        hasMore: hasMoreOlderRef.current ?? true,
+                        status: 'loaded',
+                    };
+                }
+            }
             inFlightWebPrependAnchorRef.current = preservePrependViewport
                 ? captureCurrentWebPrependAnchor()
                 : null;
-            const nativePrependTransaction = preservePrependViewport
+            // In inverted native mode, real older-history loads append at the rendered data end
+            // (visual top). They are not prepends from the list's raw-offset perspective, so the
+            // standard native prepend fallback would be a second, wrong scroll owner.
+            const shouldOpenNativePrependTransaction =
+                preservePrependViewport &&
+                listOrientationRef.current !== 'inverted';
+            const nativePrependTransaction = shouldOpenNativePrependTransaction
                 ? beginNativePrependTransaction()
                 : null;
 
@@ -4398,7 +5754,11 @@ const ChatListInternal = React.memo((props: {
             if (Platform.OS === 'web' && listImplementation === 'flash_v2' && preservePrependViewport && result.loaded > 0) {
                 // Plan E2: capture outcome — a restore window opens ('pending') or the capture
                 // was skipped (pinned/non-scrollable viewport) and the prepend rides bottom-follow.
-                recordRestoreDecisionTelemetry(webPrependAnchor ? 'pending' : 'skipped', { mode: 'restore-anchor' });
+                recordRestoreDecisionTelemetry(webPrependAnchor ? 'pending' : 'skipped', {
+                    mode: 'restore-anchor',
+                    programmaticWebWrite: false,
+                    webTrigger: 'prepend-restore',
+                });
             }
             if (webPrependAnchor && result.loaded > 0) {
                 pendingWebPrependAnchorRef.current = refreshWebTranscriptPrependAnchor(
@@ -4509,6 +5869,7 @@ const ChatListInternal = React.memo((props: {
         isFillDone: () => initialFillStatusRef.current === 'done',
         isTransactionOpen: () => viewportCommandController.activeOwner() !== 'follow',
     });
+    olderPaginationSnapshotRef.current = olderPagination.getSnapshot();
     resetOlderPaginationRef.current = olderPagination.reset;
     const onOlderPaginationScrollObservation = olderPagination.onScrollObservation;
 
@@ -4517,19 +5878,100 @@ const ChatListInternal = React.memo((props: {
         layoutHeight: number;
         contentHeight: number;
         distanceFromBottom: number;
+        webMetrics?: WebTranscriptScrollMetrics | null;
+        trigger?: 'scroll' | 'edge-reached';
     }>) => {
         if (listImplementation !== 'flash_v2') return;
-        const scrollable = params.layoutHeight > 0 && params.contentHeight > params.layoutHeight + 16;
+        const usesWebDomMetrics = Platform.OS === 'web' && params.webMetrics != null;
+        const layoutHeight = usesWebDomMetrics ? params.webMetrics!.clientHeight : params.layoutHeight;
+        const contentHeight = usesWebDomMetrics ? params.webMetrics!.scrollHeight : params.contentHeight;
+        const offsetY = usesWebDomMetrics ? params.webMetrics!.scrollTop : params.offsetY;
+        const distanceFromBottom = usesWebDomMetrics
+            ? getWebTranscriptDistanceFromBottom(params.webMetrics!)
+            : params.distanceFromBottom;
+        const scrollable = usesWebDomMetrics
+            ? isWebTranscriptScrollable(params.webMetrics!, 16)
+            : layoutHeight > 0 && contentHeight > layoutHeight + 16;
         // The follow-mode gate stays consumer-side (Lane D contract): no top prefetch while
         // the native mode machine reports 'following' or the viewport wants the bottom.
         const followGateOpen = Platform.OS === 'web'
-            ? !(wantsPinnedRef.current && params.distanceFromBottom <= pinThresholdPx)
+            ? !(wantsPinnedRef.current && distanceFromBottom <= pinThresholdPx)
             : bottomFollowModeStateRef.current.mode !== 'following' && !wantsPinnedRef.current;
         onOlderPaginationScrollObservation({
-            offsetY: params.offsetY,
+            offsetY,
             scrollable: scrollable && followGateOpen,
+            trigger: params.trigger,
         });
-    }, [listImplementation, onOlderPaginationScrollObservation, pinThresholdPx]);
+        if (Platform.OS === 'web') {
+            const snapshot = olderPagination.getSnapshot();
+            recordViewportTelemetryEvent({
+                type: 'scroll-observed',
+                mode: resolveViewportTelemetryMode(),
+                reason: 'observed',
+                offsetY,
+                layoutHeight,
+                contentHeight,
+                distanceFromBottom,
+                ...resolveWebViewportTelemetryDiagnostics({
+                    metrics: params.webMetrics,
+                    flashListContentHeight: params.contentHeight,
+                    flashListLayoutHeight: params.layoutHeight,
+                    paginationPhase: snapshot.phase,
+                    paginationSuspendedReasons: snapshot.suspendedReasons,
+                    programmaticWebWrite: false,
+                    scrollable: scrollable && followGateOpen,
+                    trigger: params.trigger ?? 'scroll',
+                }),
+            });
+        }
+    }, [
+        listImplementation,
+        olderPagination,
+        onOlderPaginationScrollObservation,
+        pinThresholdPx,
+        recordViewportTelemetryEvent,
+        resolveViewportTelemetryMode,
+        resolveWebViewportTelemetryDiagnostics,
+    ]);
+
+    /**
+     * FlashList can miss onStartReached (#1785); the older visual edge feeds one
+     * more canonical-space observation to the pagination machine. The callback
+     * source itself is authoritative: under inverted data-start is visual bottom,
+     * and stale ref offsets from a previous frame must never turn that bottom
+     * callback into an older-page load.
+     */
+    const observePaginationEdgeReachedNudge = React.useCallback((visualEdge: 'older' | 'newer') => {
+        if (visualEdge !== 'older') return;
+        const liveWebMetrics = Platform.OS === 'web' ? resolveWebScrollMetrics() : null;
+        const rawEdgeOffset = liveWebMetrics
+            ? liveWebMetrics.scrollTop
+            : (() => {
+                try {
+                    const value = listRef.current?.getAbsoluteLastScrollOffset?.();
+                    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+                } catch {
+                    return null;
+                }
+            })();
+        if (typeof rawEdgeOffset !== 'number') return;
+        const layoutH = liveWebMetrics?.clientHeight ?? listLayoutHeightRef.current;
+        const contentH = liveWebMetrics?.scrollHeight ?? listContentHeightRef.current;
+        const canonicalEdgeOffset = toCanonicalScrollOffset({
+            offsetY: rawEdgeOffset,
+            contentHeight: contentH,
+            layoutHeight: layoutH,
+            orientation: listOrientationRef.current,
+        });
+        observeOlderPaginationScroll({
+            offsetY: canonicalEdgeOffset,
+            layoutHeight: layoutH,
+            contentHeight: contentH,
+            distanceFromBottom: Math.max(0, Math.trunc(contentH - layoutH - canonicalEdgeOffset)),
+            webMetrics: liveWebMetrics,
+            trigger: 'edge-reached',
+        });
+    }, [observeOlderPaginationScroll, resolveWebScrollMetrics]);
 
     React.useLayoutEffect(() => {
         if (Platform.OS !== 'web' || listImplementation !== 'flash_v2') return;
@@ -4539,11 +5981,13 @@ const ChatListInternal = React.memo((props: {
         if (pendingAnchor.userIntentAtMs !== lastUserScrollIntentAtMsRef.current) {
             const metrics = resolveWebScrollMetrics();
             if (!metrics || !isWebTranscriptScrollable(metrics, 1)) {
-                pendingWebPrependAnchorRef.current = null;
-                pendingWebPrependIndexRecoveryRef.current = false;
-                clearWebPrependRangeReserve();
+                clearWebPrependRestoreWindowState();
                 // Plan E2: the scroller went away/unscrollable — the restore window is disposed.
-                recordRestoreDecisionTelemetry('skipped', { mode: 'restore-anchor' });
+                recordRestoreDecisionTelemetry('skipped', {
+                    mode: 'restore-anchor',
+                    programmaticWebWrite: false,
+                    webTrigger: 'prepend-restore',
+                });
                 return;
             }
             pendingAnchor = refreshWebTranscriptPrependAnchor(pendingAnchor, metrics, {
@@ -4555,11 +5999,13 @@ const ChatListInternal = React.memo((props: {
             pendingWebPrependIndexRecoveryRef.current = false;
         }
         if (Date.now() > pendingAnchor.expiresAtMs) {
-            pendingWebPrependAnchorRef.current = null;
-            pendingWebPrependIndexRecoveryRef.current = false;
-            clearWebPrependRangeReserve();
+            clearWebPrependRestoreWindow('abandoned-identity');
             // Plan E2: the stabilization window expired; the restore window closes silently no more.
-            recordRestoreDecisionTelemetry('skipped', { mode: 'restore-anchor' });
+            recordRestoreDecisionTelemetry('skipped', {
+                mode: 'restore-anchor',
+                programmaticWebWrite: false,
+                webTrigger: 'prepend-restore',
+            });
             return;
         }
 
@@ -4567,9 +6013,7 @@ const ChatListInternal = React.memo((props: {
         recordWebPrependRestoreOutcome(restoreResult);
         const metrics = resolveWebScrollMetrics();
         if (!metrics) {
-            pendingWebPrependAnchorRef.current = null;
-            pendingWebPrependIndexRecoveryRef.current = false;
-            clearWebPrependRangeReserve();
+            clearWebPrependRestoreWindowState();
             return;
         }
         updateWebPrependRangeReserve(pendingAnchor, metrics);
@@ -4583,7 +6027,7 @@ const ChatListInternal = React.memo((props: {
         if (pendingWebPrependIndexRecoveryRef.current && pendingWebPrependAnchorRef.current) {
             attemptPendingWebPrependIndexRecovery();
         }
-    }, [attemptPendingWebPrependIndexRecovery, clearWebPrependRangeReserve, listContentHeight, listData.length, listImplementation, props.sessionId, recordRestoreDecisionTelemetry, recordWebPrependRestoreOutcome, resolvePendingWebPrependRefreshOptions, resolveWebScrollMetrics, restoreWebPrependAnchorThroughViewportCommand, updateWebPrependRangeReserve]);
+    }, [attemptPendingWebPrependIndexRecovery, clearWebPrependRestoreWindow, clearWebPrependRestoreWindowState, listContentHeight, listData.length, listImplementation, props.sessionId, recordRestoreDecisionTelemetry, recordWebPrependRestoreOutcome, resolvePendingWebPrependRefreshOptions, resolveWebScrollMetrics, restoreWebPrependAnchorThroughViewportCommand, updateWebPrependRangeReserve]);
 
         const tryPinToBottomDom = React.useCallback((reason: TranscriptViewportTelemetryScrollReason = 'initial-open'): boolean => {
             if (reason === 'jump-to-bottom') {
@@ -4653,6 +6097,12 @@ const ChatListInternal = React.memo((props: {
                 for (const toolMessageId of item.toolMessageIds) {
                     addSeq(resolveSeqForMessageId(toolMessageId));
                 }
+                return seqs;
+            }
+            // N2c per-unit rows: a tool unit resolves its OWN seq; header/expand/footer
+            // caps resolve none, so the nearest surviving anchor lands on a real row.
+            if (item.kind === 'tool-group-tool') {
+                addSeq(item.seq ?? resolveSeqForMessageId(item.toolMessageId));
                 return seqs;
             }
             if (item.kind === 'turn') {
@@ -4774,7 +6224,7 @@ const ChatListInternal = React.memo((props: {
                     ? 'not-ready'
                     : 'skipped',
             {
-                mode: writeContext?.kind === 'anchor'
+                mode: writeContext?.kind === 'anchor' || writeContext?.kind === 'slice-anchor'
                     ? 'restore-anchor'
                     : writeContext?.kind === 'bottom'
                         ? 'follow-bottom'
@@ -4793,6 +6243,12 @@ const ChatListInternal = React.memo((props: {
                 // keeps the reveal off the same frame as the final write. The deadline timer
                 // always fires, so this can never hang.
                 scheduleNativePaintReleaseForEntryRestore({ force: true });
+            }
+            if (writeContext?.kind === 'slice-anchor') {
+                // N2b.2: the entry phase is over (any outcome) — reveal the withheld
+                // older rows as one prepend-observed commit so scroll room above the
+                // anchor exists again (the window must never stay stranded).
+                revealEntrySliceWindowRef.current();
             }
         }
     }, [
@@ -4821,25 +6277,20 @@ const ChatListInternal = React.memo((props: {
         clearEntryRestoreDeadlineTimeout();
         const writeContext = entryRestoreWriteContextRef.current;
         closeEntryViewportOwnership('preempted');
-        recordTranscriptViewportTelemetryEvent({
+        recordViewportTelemetryEvent({
             type: 'restore-decision',
-            mode: writeContext?.kind === 'anchor'
+            mode: writeContext?.kind === 'anchor' || writeContext?.kind === 'slice-anchor'
                 ? 'restore-anchor'
                 : writeContext?.kind === 'bottom'
                     ? 'follow-bottom'
                     : 'restore-distance',
             reason: 'skipped',
-            sessionId: transaction.sessionId,
-            platform: telemetryPlatform,
-            listImplementation: telemetryListImplementation,
             offsetY: writeContext?.distanceFromBottom,
-            timestampMs: Date.now(),
-        }, sync.getSyncTuning());
+        }, { sessionId: transaction.sessionId });
     }, [
         clearEntryRestoreDeadlineTimeout,
         closeEntryViewportOwnership,
-        telemetryListImplementation,
-        telemetryPlatform,
+        recordViewportTelemetryEvent,
     ]);
     disposeEntryRestoreTransactionForExitRef.current = disposeEntryRestoreTransactionForExit;
 
@@ -5075,10 +6526,45 @@ const ChatListInternal = React.memo((props: {
         contentHeight: number;
         distanceFromBottom: number;
         offsetY: number;
+        rawOffsetY?: number;
     }>): { status: 'aligned' | 'misaligned' } | null => {
         const writeContext = entryRestoreWriteContextRef.current;
         if (!writeContext || writeContext.sessionId !== props.sessionId) return null;
         const tolerancePx = Math.max(pinThresholdPx, 2);
+        if (writeContext.kind === 'slice-anchor' && writeContext.anchor) {
+            // N2b.2: zero-write entries confirm only when the visible anchor row
+            // is still sitting at its saved pixel offset.
+            const anchorIndex = resolveTranscriptViewportAnchorIndex({
+                anchor: writeContext.anchor,
+                items: listDataRef.current,
+            });
+            if (anchorIndex == null) return null;
+            const layout = (() => {
+                try {
+                    return listRef.current?.getLayout?.(anchorIndex) ?? null;
+                } catch {
+                    return null;
+                }
+            })();
+            const visibleRange = (() => {
+                try {
+                    return listRef.current?.computeVisibleIndices?.() ?? null;
+                } catch {
+                    return null;
+                }
+            })();
+            const status = resolveNativeSliceEntryObservation({
+                anchorIndex,
+                anchorLayout: layout,
+                absoluteScrollOffset: params.rawOffsetY ?? params.offsetY,
+                contentHeight: params.contentHeight,
+                itemOffsetPx: writeContext.anchor.itemOffsetPx,
+                layoutHeight: listLayoutHeightRef.current,
+                tolerancePx,
+                visibleRange,
+            });
+            return status === 'inconclusive' ? null : { status };
+        }
         if (writeContext.kind === 'anchor' && writeContext.anchor) {
             const anchorIndex = resolveTranscriptViewportAnchorIndex({
                 anchor: writeContext.anchor,
@@ -5128,6 +6614,9 @@ const ChatListInternal = React.memo((props: {
     }>) => {
         const writeContext = entryRestoreWriteContextRef.current;
         if (!writeContext || writeContext.sessionId !== props.sessionId) return;
+        // N2b.2: slice entries are observe-only — the transaction never directs a
+        // correction, and the host must never write for them either.
+        if (writeContext.kind === 'slice-anchor') return;
         if (writeContext.kind === 'anchor' && writeContext.anchor) {
             const anchorIndex = resolveTranscriptViewportAnchorIndex({
                 anchor: writeContext.anchor,
@@ -5169,6 +6658,71 @@ const ChatListInternal = React.memo((props: {
             };
         }
     }, [executeViewportCommand, props.sessionId, resolveNearestSurvivingViewportAnchorIndex, resolveViewportCommand]);
+
+    /**
+     * N2b.2: layout-driven confirmation for slice entries — a write-free entry produces
+     * NO scroll events, so the open observe-only transaction is verified from layout/
+     * content commits by reading the anchor row position straight off the list ref.
+     */
+    const verifyNativeSliceEntryRestoreTransaction = React.useCallback(() => {
+        if (Platform.OS === 'web' || listImplementation !== 'flash_v2') return;
+        const transaction = entryRestoreTransactionRef.current;
+        const writeContext = entryRestoreWriteContextRef.current;
+        if (!transaction || transaction.isClosed() || transaction.sessionId !== props.sessionId) return;
+        if (writeContext?.kind !== 'slice-anchor' || !writeContext.anchor) return;
+        const anchorIndex = resolveTranscriptViewportAnchorIndex({
+            anchor: writeContext.anchor,
+            items: listDataRef.current,
+        });
+        if (anchorIndex == null) return;
+        const node = listRef.current;
+        const layout = (() => {
+            try {
+                return node?.getLayout?.(anchorIndex) ?? null;
+            } catch {
+                return null;
+            }
+        })();
+        const absoluteScrollOffset = (() => {
+            try {
+                const value = node?.getAbsoluteLastScrollOffset?.();
+                return typeof value === 'number' ? value : Number.NaN;
+            } catch {
+                return Number.NaN;
+            }
+        })();
+        const status = resolveNativeSliceEntryObservation({
+            anchorIndex,
+            anchorLayout: layout,
+            absoluteScrollOffset,
+            contentHeight: listContentHeightRef.current,
+            itemOffsetPx: writeContext.anchor.itemOffsetPx,
+            layoutHeight: listLayoutHeightRef.current,
+            tolerancePx: Math.max(pinThresholdPx, 2),
+            visibleRange: (() => {
+                try {
+                    return node?.computeVisibleIndices?.() ?? null;
+                } catch {
+                    return null;
+                }
+            })(),
+        });
+        if (status === 'inconclusive') return;
+        transaction.onObservation({ status }, Date.now());
+        if (transaction.isClosed()) {
+            const confirmed = transaction.outcome() === 'confirmed';
+            finishEntryRestoreTransaction(transaction);
+            if (confirmed) {
+                updateNativeViewportPaintObserved(true);
+            }
+        }
+    }, [
+        finishEntryRestoreTransaction,
+        listImplementation,
+        pinThresholdPx,
+        props.sessionId,
+        updateNativeViewportPaintObserved,
+    ]);
 
     /**
      * KEEP-INLINE legacy escape hatch (Lane A review F2 contract): `flatlist_legacy` keeps its
@@ -5272,7 +6826,7 @@ const ChatListInternal = React.memo((props: {
         const distanceFromBottom = typeof entryViewport.offsetY === 'number' && Number.isFinite(entryViewport.offsetY)
             ? Math.max(0, Math.trunc(entryViewport.offsetY))
             : 0;
-        const target = resolveEntryRestoreTarget({
+        const resolveParams = {
             snapshot: { shouldFollowBottom: false, offsetY: distanceFromBottom, anchor },
             items,
             contentMeasured: { contentHeight, layoutHeight },
@@ -5285,7 +6839,188 @@ const ChatListInternal = React.memo((props: {
                     ? resolveSeqForMessageId(anchor.messageId) ?? null
                     : null
             ),
-        });
+        };
+
+        /**
+         * N2b.2: maps the slice target's durable identity (server id + seq for hydrated
+         * persisted anchors; rendered id for in-memory captures) to a rendered anchor
+         * the row resolution understands. Returns null when no rendered row owns it.
+         */
+        const resolveEntrySliceRenderedAnchor = (
+            sliceTarget: EntryRestoreSliceTarget,
+        ): SessionViewportAnchorSnapshot | null => {
+            const baseAnchor: SessionViewportAnchorSnapshot = {
+                kind: anchor?.kind ?? 'message',
+                messageId: sliceTarget.anchorMessageId,
+                itemId: anchor?.itemId ?? sliceTarget.anchorMessageId,
+                itemOffsetPx: sliceTarget.anchorItemOffsetPx,
+                capturedAtMs: anchor?.capturedAtMs ?? Date.now(),
+            };
+            if (resolveTranscriptViewportAnchorIndex({ anchor: baseAnchor, items: listDataRef.current }) != null) {
+                return baseAnchor;
+            }
+            // Rendered ids are runtime-local: map the persisted server id (realID),
+            // then the seq, to the rendered message (durable-identity lesson, N2b.1).
+            const state = getStorage().getState();
+            const session = state?.sessionMessages?.[props.sessionId];
+            const messagesById: Record<string, Message | undefined> =
+                session?.messagesById ?? session?.messagesMap ?? {};
+            let renderedId: string | null = null;
+            for (const message of Object.values(messagesById)) {
+                if (message?.realID === sliceTarget.anchorMessageId) {
+                    renderedId = message.id;
+                    break;
+                }
+            }
+            if (renderedId == null && sliceTarget.anchorSeq != null) {
+                for (const message of Object.values(messagesById)) {
+                    if (
+                        typeof message?.seq === 'number' &&
+                        Math.trunc(message.seq) === sliceTarget.anchorSeq
+                    ) {
+                        renderedId = message.id;
+                        break;
+                    }
+                }
+            }
+            if (renderedId == null) return null;
+            return { ...baseAnchor, messageId: renderedId, itemId: renderedId };
+        };
+
+        /** N2b.2: applies the slice window + the observe-only entry transaction. */
+        const applyEntrySliceWindow = (
+            sliceTarget: EntryRestoreSliceTarget,
+        ): 'applied' | 'materializing' | 'degraded' => {
+            const renderedAnchor = resolveEntrySliceRenderedAnchor(sliceTarget);
+            const sliceIndex = renderedAnchor != null
+                ? resolveTranscriptViewportAnchorIndex({ anchor: renderedAnchor, items: listDataRef.current })
+                : null;
+            if (renderedAnchor == null || sliceIndex == null) {
+                if (canRequestBoundedEntryViewportMaterialization() && requestBoundedEntryViewportMaterialization()) {
+                    recordRestoreDecisionTelemetry('missing-anchor', {
+                        mode: 'restore-anchor',
+                        offsetY: distanceFromBottom,
+                        contentHeight,
+                        layoutHeight,
+                    });
+                    return 'materializing';
+                }
+                return 'degraded';
+            }
+
+            if (!canUseWriteFreeEntrySliceForAnchorOffset(sliceTarget.anchorItemOffsetPx)) {
+                const restorePlan = planNativeTranscriptViewportAnchorRestore({
+                    index: sliceIndex,
+                    itemOffsetPx: sliceTarget.anchorItemOffsetPx,
+                });
+                if (restorePlan.status !== 'planned') return 'degraded';
+                const fallbackNowMs = Date.now();
+                const fallbackDeadlineMs = resolveEntryRestoreDeadlineMs();
+                const target = {
+                    kind: 'anchor' as const,
+                    index: restorePlan.index,
+                    viewOffset: restorePlan.viewOffset,
+                };
+                const issued = issueEntryRestoreAnchorWrite(target.index, target.viewOffset);
+                if (!issued) {
+                    recordRestoreDecisionTelemetry('not-ready', {
+                        mode: 'restore-anchor',
+                        offsetY: distanceFromBottom,
+                        contentHeight,
+                        layoutHeight,
+                    });
+                    return 'materializing';
+                }
+                const transaction = createEntryRestoreTransaction({
+                    sessionId: props.sessionId,
+                    target,
+                    nowMs: fallbackNowMs,
+                    deadlineMs: fallbackDeadlineMs,
+                });
+                entryRestoreTransactionRef.current = transaction;
+                entryRestoreWriteContextRef.current = {
+                    anchor: renderedAnchor,
+                    createdAtMs: fallbackNowMs,
+                    distanceFromBottom,
+                    issuedContentHeight: contentHeight,
+                    issuedLayoutHeight: layoutHeight,
+                    kind: 'anchor',
+                    sessionId: props.sessionId,
+                    targetOffsetY: null,
+                    targetOffsetYWasClamped: false,
+                };
+                armEntryRestoreDeadline(transaction, fallbackDeadlineMs);
+                updateNativeInitialViewportPendingObservation(true);
+                recordRestoreDecisionTelemetry('pending', {
+                    mode: 'restore-anchor',
+                    offsetY: distanceFromBottom,
+                    contentHeight,
+                    layoutHeight,
+                    anchorIndex: target.index,
+                    anchorRestoreViewOffset: target.viewOffset,
+                });
+                return 'applied';
+            }
+
+            const anchorRowId = listDataRef.current[sliceIndex]?.id;
+            if (typeof anchorRowId !== 'string' || anchorRowId.length === 0) return 'degraded';
+
+            const sliceNowMs = Date.now();
+            const sliceDeadlineMs = resolveEntryRestoreDeadlineMs();
+            entrySliceWindowRef.current = { sessionId: props.sessionId, anchorRowId };
+            setEntrySliceWindow(entrySliceWindowRef.current);
+            const transaction = createEntryRestoreTransaction({
+                sessionId: props.sessionId,
+                // Post-slice the anchor is the window head; this target is the
+                // OBSERVATION target only — observe-only transactions never write.
+                target: { kind: 'anchor', index: 0, viewOffset: 0 },
+                nowMs: sliceNowMs,
+                deadlineMs: sliceDeadlineMs,
+                writePolicy: 'observe-only',
+            });
+            entryRestoreTransactionRef.current = transaction;
+            entryRestoreWriteContextRef.current = {
+                anchor: renderedAnchor,
+                createdAtMs: sliceNowMs,
+                distanceFromBottom,
+                issuedContentHeight: contentHeight,
+                issuedLayoutHeight: layoutHeight,
+                kind: 'slice-anchor',
+                sessionId: props.sessionId,
+                targetOffsetY: null,
+                targetOffsetYWasClamped: false,
+            };
+            armEntryRestoreDeadline(transaction, sliceDeadlineMs);
+            updateNativeInitialViewportPendingObservation(true);
+            recordRestoreDecisionTelemetry('pending', {
+                mode: 'restore-anchor',
+                offsetY: distanceFromBottom,
+                contentHeight,
+                layoutHeight,
+            });
+            return 'applied';
+        };
+
+        const sliceCapable =
+            Platform.OS !== 'web' &&
+            listImplementation === 'flash_v2' &&
+            entrySliceDegradedSessionRef.current !== props.sessionId;
+        if (sliceCapable) {
+            const sliceResolved = resolveEntryRestoreTarget({
+                ...resolveParams,
+                slice: { hostCanBuildAnchorWindow: true },
+            });
+            if (sliceResolved.kind === 'slice') {
+                const sliceOutcome = applyEntrySliceWindow(sliceResolved);
+                if (sliceOutcome !== 'degraded') return;
+                // Identity unfindable within the bounded budget: this entry falls back
+                // to the existing write pipeline (distance one-shot stays the ONLY
+                // degraded identity-less path).
+                entrySliceDegradedSessionRef.current = props.sessionId;
+            }
+        }
+
+        const target = resolveEntryRestoreTarget(resolveParams);
 
         if (target.kind === 'none' && (target.reason === 'awaiting-fill-settle' || target.reason === 'content-unmeasured')) {
             // Wait verdict (type-split per Lane A review): re-resolve on the next
@@ -5459,8 +7194,10 @@ const ChatListInternal = React.memo((props: {
         attemptEntryRestore();
         if (Platform.OS === 'web') {
             verifyWebEntryRestoreTransaction();
+        } else {
+            verifyNativeSliceEntryRestoreTransaction();
         }
-    }, [attemptEntryRestore, listContentHeight, listData.length, listImplementation, listLayoutHeight, props.sessionId, verifyWebEntryRestoreTransaction]);
+    }, [attemptEntryRestore, listContentHeight, listData.length, listImplementation, listLayoutHeight, props.sessionId, verifyNativeSliceEntryRestoreTransaction, verifyWebEntryRestoreTransaction]);
 
     const captureWebBottomFollowPreviousMetrics = React.useCallback((): WebTranscriptScrollMetrics | null => {
         if (Platform.OS !== 'web' || listImplementation !== 'flash_v2') return null;
@@ -5526,11 +7263,14 @@ const ChatListInternal = React.memo((props: {
             !hasRearmedNativeBottomFollow() &&
             Date.now() - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_AUTO_PIN_DELAY_MS
         ) return false;
-        const shouldSkipNativeJsPinForStreamAppend =
+        const shouldSkipAutomaticNativeJsPin =
             !isExplicitNativeCommand &&
-            telemetryReason === 'stream-append';
+            (
+                telemetryReason === 'stream-append' ||
+                listOrientationRef.current === 'inverted'
+            );
         if (
-            !shouldSkipNativeJsPinForStreamAppend &&
+            !shouldSkipAutomaticNativeJsPin &&
             !isExplicitNativeCommand &&
             !(options?.force === true && telemetryReason === 'mount-settle') &&
             mountSettleCoordinatorRef.current?.getSnapshot().isMountSettleActive === true &&
@@ -5547,6 +7287,49 @@ const ChatListInternal = React.memo((props: {
         if (!Number.isFinite(contentHeight) || contentHeight <= 0) return false;
 
         const offset = Math.max(0, Math.trunc(contentHeight - layoutHeight));
+        // Inverted cold opens establish the visual bottom at first paint via
+        // startRenderingFromBottom. The JS pin writes nothing on inverted
+        // (shouldSkipAutomaticNativeJsPin), so the "initial bottom viewport applied" condition is
+        // satisfied the moment the viewport is measured — there is no later offset-at-bottom
+        // observation to wait for. Treating inverted like an already-at-bottom (offset <= 0) entry
+        // closes the entry viewport transaction at first paint, which arms the MVCP threshold (the
+        // only inverted bottom-pin authority) and breaks the cold-open follow-bottom deadlock.
+        const invertedFirstPaintEstablishesBottom =
+            shouldSkipAutomaticNativeJsPin && listOrientationRef.current === 'inverted';
+        // Inverted follow-bottom bottom-reach + maintenance (device-proven on session
+        // cmqbym9nh0m1ztmwgdjd8rsqw: shouldFollowBottom=true yet the list opened ~17000px from the
+        // bottom). On an inverted FlashList, scrollToOffset({offset: 0}) is a no-op and MVCP's
+        // autoscrollToBottomThreshold only MAINTAINS a bottom you already reached — neither TRAVELS to
+        // the newest row. So inverted bottom-follow is owned by an explicit pin-bottom command, whose
+        // perform now commands scrollToIndex(0) on inverted. Re-issue it on every automatic
+        // content/layout pin while in `following` mode: the list reaches the bottom as the cold-open
+        // content settles AND stays pinned as new content streams in. The user-intent delay guard
+        // above plus the `following` mode check keep it from fighting a deliberate scroll-up.
+        const invertedFollowBottomNeedsExplicitPin =
+            invertedFirstPaintEstablishesBottom &&
+            wantsPinnedRef.current &&
+            bottomFollowModeStateRef.current.mode === 'following';
+        if (invertedFollowBottomNeedsExplicitPin) {
+            if (!hasNativeInitialViewportAppliedForCurrentSession()) {
+                pendingNativeMountSettleBottomPinRef.current = false;
+                markNativeInitialViewportAppliedForCurrentSession();
+            }
+            // Only command the bottom when the viewport is measurably OFF it. When already pinned at the
+            // inverted visual bottom the native list holds position, so no write is issued — keeping
+            // steady-state streaming write-free and only re-pinning when content growth (or a stale
+            // cold-open layout) has pushed the viewport away from the newest row.
+            const distanceFromInvertedBottom = readCurrentNativeDistanceFromBottom();
+            if (distanceFromInvertedBottom != null && distanceFromInvertedBottom > pinThresholdPx) {
+                executeViewportCommand(resolveViewportCommand({
+                    type: 'pin-bottom',
+                    sessionId: props.sessionId,
+                    reason: telemetryReason,
+                    mode: 'follow-bottom',
+                    animated: false,
+                }));
+            }
+            return true;
+        }
         const shouldDeferInitialViewportAppliedUntilObserved =
             options?.markInitialViewportApplied === 'when-scrollable';
         const shouldMarkInitialViewportApplied =
@@ -5557,18 +7340,18 @@ const ChatListInternal = React.memo((props: {
             !hasNativeInitialViewportAppliedForCurrentSession() &&
             nativeMountSettleStable;
         const shouldSkipUnstableAutomaticRetryUntilObserved =
-            !shouldSkipNativeJsPinForStreamAppend &&
+            !shouldSkipAutomaticNativeJsPin &&
             !isExplicitNativeCommand &&
             offset > 0 &&
             pendingNativeMountSettleBottomPinRef.current &&
             telemetryReason === 'initial-open';
         const shouldSkipLateInitialOpenAfterAutomaticNativePin =
-            !shouldSkipNativeJsPinForStreamAppend &&
+            !shouldSkipAutomaticNativeJsPin &&
             !isExplicitNativeCommand &&
             telemetryReason === 'initial-open' &&
             nativeAutomaticBottomPinCommandSessionRef.current === props.sessionId;
         const shouldSkipDefaultNativeMaterializationPin =
-            !shouldSkipNativeJsPinForStreamAppend &&
+            !shouldSkipAutomaticNativeJsPin &&
             !isExplicitNativeCommand &&
             !(
                 telemetryReason === 'content-size-change' &&
@@ -5581,7 +7364,7 @@ const ChatListInternal = React.memo((props: {
                 telemetryReason === 'content-size-change'
             );
         const shouldSkipDuplicateAutomaticRetryUntilObserved =
-            !shouldSkipNativeJsPinForStreamAppend &&
+            !shouldSkipAutomaticNativeJsPin &&
             !isExplicitNativeCommand &&
             !(options?.force === true && telemetryReason === 'mount-settle') &&
             offset > 0 &&
@@ -5630,12 +7413,25 @@ const ChatListInternal = React.memo((props: {
             return true;
         }
 
-        if (
-            shouldSkipNativeJsPinForStreamAppend &&
+        const streamAppendAlreadyOwnsContentVersion =
             lastNativeStreamAppendPinRef.current?.sessionId === props.sessionId &&
-            lastNativeStreamAppendPinRef.current.contentHeight === contentHeight
-        ) {
+            lastNativeStreamAppendPinRef.current.contentHeight === contentHeight;
+        if (shouldSkipAutomaticNativeJsPin && streamAppendAlreadyOwnsContentVersion) {
             // Invariant F: never two follow commands for the same content version.
+            return true;
+        }
+        if (
+            !isExplicitNativeCommand &&
+            telemetryReason === 'mount-settle' &&
+            streamAppendAlreadyOwnsContentVersion
+        ) {
+            // The current content version was already claimed by the stream-append
+            // MVCP-only owner. Mount settle must not add a JS scroll write for the
+            // same height or it recreates a second competing bottom-follow writer.
+            if (shouldMarkInitialViewportApplied) {
+                pendingNativeMountSettleBottomPinRef.current = false;
+                markNativeInitialViewportAppliedForCurrentSession();
+            }
             return true;
         }
         if (!executeViewportCommand(resolveViewportCommand({
@@ -5647,27 +7443,27 @@ const ChatListInternal = React.memo((props: {
             wantsPinned: wantsPinnedRef.current,
             reason: telemetryReason,
             targetOffsetY: offset,
-            skipNativeJsPin: shouldSkipNativeJsPinForStreamAppend,
+            skipNativeJsPin: shouldSkipAutomaticNativeJsPin,
         }))) {
             return false;
         }
-        if (shouldSkipNativeJsPinForStreamAppend) {
+        if (shouldSkipAutomaticNativeJsPin && telemetryReason === 'stream-append') {
             lastNativeStreamAppendPinRef.current = {
                 contentHeight,
                 sessionId: props.sessionId,
             };
         }
-        if (!shouldSkipNativeJsPinForStreamAppend) {
+        if (!shouldSkipAutomaticNativeJsPin) {
             lastNativePinOffsetRef.current = offset;
         }
-        if (!isExplicitNativeCommand && !shouldSkipNativeJsPinForStreamAppend) {
+        if (!isExplicitNativeCommand && !shouldSkipAutomaticNativeJsPin) {
             lastNativeBottomFollowPinCommandRef.current = {
                 sessionId: props.sessionId,
                 offsetY: offset,
                 writtenAtMs: Date.now(),
             };
         }
-        if (!isExplicitNativeCommand && !shouldSkipNativeJsPinForStreamAppend) {
+        if (!isExplicitNativeCommand && !shouldSkipAutomaticNativeJsPin) {
             nativeAutomaticBottomPinCommandSessionRef.current = props.sessionId;
         }
         if (telemetryReason === 'content-size-change') {
@@ -5675,12 +7471,17 @@ const ChatListInternal = React.memo((props: {
         }
         if (
             shouldMarkInitialViewportApplied ||
-            (shouldDeferInitialViewportAppliedUntilObserved && offset <= 0)
+            (shouldDeferInitialViewportAppliedUntilObserved &&
+                (offset <= 0 || invertedFirstPaintEstablishesBottom))
         ) {
             pendingNativeMountSettleBottomPinRef.current = false;
             markNativeInitialViewportAppliedForCurrentSession();
         }
-        if (shouldDeferInitialViewportAppliedUntilObserved && offset > 0) {
+        if (
+            shouldDeferInitialViewportAppliedUntilObserved &&
+            offset > 0 &&
+            !invertedFirstPaintEstablishesBottom
+        ) {
             pendingNativeMountSettleBottomPinRef.current = true;
             updateNativeInitialViewportPendingObservation(true);
         }
@@ -5993,11 +7794,20 @@ const ChatListInternal = React.memo((props: {
         if (listImplementation !== 'flash_v2') return;
         const waitMs = resolveAutoPinWaitMs(reason);
         if (waitMs === null) return;
-        if (scheduledPinRef.current) return;
+        if (scheduledPinRef.current) {
+            const scheduled = scheduledPinRef.current;
+            const shouldSupersedeStaleNativePin =
+                Platform.OS !== 'web' &&
+                usesNativeFlashListBottomMaintenance &&
+                reason === 'stream-append' &&
+                scheduled.reason !== 'stream-append';
+            if (!shouldSupersedeStaleNativePin) return;
+            cancelScheduledPinToBottom();
+        }
 
         const raf = (globalThis as any)?.requestAnimationFrame as undefined | ((cb: () => void) => any);
         if (waitMs === 0 && typeof raf === 'function') {
-            const handle: { kind: 'raf'; id: any; previousWebMetrics: WebTranscriptScrollMetrics | null } = { kind: 'raf', id: 0, previousWebMetrics };
+            const handle: ScheduledPinToBottom = { kind: 'raf', id: 0, previousWebMetrics, reason };
             scheduledPinRef.current = handle;
             handle.id = raf(() => {
                 if (scheduledPinRef.current !== handle) return;
@@ -6013,7 +7823,7 @@ const ChatListInternal = React.memo((props: {
             return;
         }
 
-        const handle: { kind: 'timeout'; id: any; previousWebMetrics: WebTranscriptScrollMetrics | null } = { kind: 'timeout', id: null, previousWebMetrics };
+        const handle: ScheduledPinToBottom = { kind: 'timeout', id: null, previousWebMetrics, reason };
         scheduledPinRef.current = handle;
         handle.id = setTimeout(() => {
             if (scheduledPinRef.current !== handle) return;
@@ -6028,6 +7838,7 @@ const ChatListInternal = React.memo((props: {
         }, waitMs);
     }, [
         applyWebBottomFollowAdjustment,
+        cancelScheduledPinToBottom,
         listImplementation,
         pinToBottom,
         pinToBottomRespectingNativeMountSettle,
@@ -6147,6 +7958,13 @@ const ChatListInternal = React.memo((props: {
         transcriptHotColdSegments.coldItems.length,
         transcriptHotColdSegments.hotItems,
     ]);
+    // N3.2: in an inverted FlashList the header slot renders at the data start =
+    // VISUAL BOTTOM, so the visual-top/visual-bottom nodes swap slots there.
+    const orientedFlashListEdgeSlots = React.useMemo(() => resolveOrientedListEdgeSlots({
+        orientation: listOrientation,
+        visualTopNode: listHeaderNode,
+        visualBottomNode: flashListFooterNode,
+    }), [flashListFooterNode, listHeaderNode, listOrientation]);
 
     React.useEffect(() => {
         return () => {
@@ -6415,8 +8233,10 @@ const ChatListInternal = React.memo((props: {
 
     const tryAutoExpandNewestToolCallsGroup = React.useCallback((): boolean => {
         const previewCount = resolveToolCallsCollapsedPreviewCount();
-        const items = itemsRef.current;
-        const newestFirst = listImplementation === 'flatlist_legacy';
+        // The visitor needs turn/tool-calls-group shapes, so it scans the
+        // PRE-decomposition source (always oldest-first) rather than the rendered
+        // (possibly per-unit decomposed, possibly legacy-reversed) list data.
+        const items = preDecompositionItemsRef.current;
         const shouldAutoExpandGroup = (toolMessageIds: readonly string[]): boolean => (
             shouldAutoExpandToolCallsGroupForShortTranscript({
                 toolMessageCount: toolMessageIds.length,
@@ -6450,12 +8270,6 @@ const ChatListInternal = React.memo((props: {
             return false;
         };
 
-        if (newestFirst) {
-            for (let i = 0; i < items.length; i += 1) {
-                if (visitItem(items[i])) return true;
-            }
-            return false;
-        }
         for (let i = items.length - 1; i >= 0; i -= 1) {
             if (visitItem(items[i])) return true;
         }
@@ -6463,7 +8277,6 @@ const ChatListInternal = React.memo((props: {
     }, [
         applyToolCallsGroupExpanded,
         expandedToolCallsAnchorMessageIds,
-        listImplementation,
         props.maxTurnEntriesPerListItem,
         resolveToolCallsCollapsedPreviewCount,
     ]);
@@ -6534,9 +8347,10 @@ const ChatListInternal = React.memo((props: {
                 },
                 scrollToIndex: (index) => {
                     if (shouldUseWebHotColdSplit) {
-                        const decision = resolveWebHotColdScrollDecision({
+                        const decision = resolveWebColdListScrollTarget({
                             fullIndex: index,
                             coldCount: transcriptHotColdSegments.coldItems.length,
+                            reason: 'jump-to-seq',
                         });
                         if (decision.kind === 'pin_to_bottom') {
                             pinToBottom('jump-to-seq');
@@ -6618,6 +8432,10 @@ const ChatListInternal = React.memo((props: {
                 // If the transcript is scrollable and we have at least one visible committed message,
                 // stop prefetching older pages.
                 if (isScrollable() && props.committedMessagesCount > 0) break;
+                // N2b.2: the slice decided WHAT to fill — a sliced window is its own fill
+                // verdict (under-filled sliced entries stay write-free by construction;
+                // filling above the anchor would only grow the withheld range).
+                if (entrySliceWindowRef.current?.sessionId === props.sessionId) break;
                 if (Date.now() - startedAtMs >= budgetMs) break;
 
                 const result = await loadOlder({ preservePrependViewport: false, showLoadingIndicator: false });
@@ -6695,7 +8513,7 @@ const ChatListInternal = React.memo((props: {
               )}
           testID="transcript-chat-list"
           data={listData}
-          extraData={transcriptMessageSelection.selectionVersion}
+          extraData={transcriptListExtraData}
           inverted={true}
           key={props.sessionId}
                       nativeID={chatListNativeId}
@@ -6791,10 +8609,39 @@ const ChatListInternal = React.memo((props: {
                         flatListPreviousScrollOffset !== null && y < flatListPreviousScrollOffset;
                     const flatListRecentUserIntent =
                         isTrusted || nowMs - lastUserScrollIntentAtMsRef.current < TRANSCRIPT_SCROLL_USER_INTENT_RECENT_MS;
+                    const flatListNativeAwayGestureStillOpen =
+                        Platform.OS !== 'web' &&
+                        bottomFollowModeStateRef.current.dragSession?.trusted === true &&
+                        bottomFollowModeStateRef.current.dragSession.sawAwayMovement === true;
+                    if (
+                        flatListNativeAwayGestureStillOpen &&
+                        !isTrusted &&
+                        nativeDistanceFromBottom <= pinThresholdPx
+                    ) {
+                        if (nativeListDragActiveRef.current) {
+                            updateNativeBottomFollowModeFromScrollObservation({
+                                distanceFromBottom: nativeDistanceFromBottom,
+                                isTrusted,
+                                movedAwayFromBottom: flatListMovedAwayFromBottom,
+                                movedTowardBottom: flatListMovedTowardBottom,
+                                recentUserIntent: flatListRecentUserIntent,
+                            });
+                        }
+                        return;
+                    }
                     const followIntent = resolveTranscriptBottomFollowIntent({
+                        canRearmBottom:
+                            !flatListNativeAwayGestureStillOpen ||
+                            (isTrusted && flatListMovedTowardBottom),
                         // Plan B6 trusted-gate: on native only trusted scrolls release follow;
                         // web keeps gesture-derived recent intent as release authority.
-                        canRelease: Platform.OS === 'web' ? flatListRecentUserIntent : isTrusted,
+                        canRelease: Platform.OS === 'web'
+                            ? flatListRecentUserIntent
+                            : isTrusted &&
+                                (
+                                    listOrientationRef.current !== 'inverted' ||
+                                    nativeDistanceFromBottom > pinThresholdPx
+                                ),
                         direction: 'toward-zero',
                         distanceFromBottom: y,
                         pinThresholdPx,
@@ -6915,17 +8762,20 @@ const ChatListInternal = React.memo((props: {
                             )}
                         testID="transcript-chat-list"
                       data={listData}
-                      extraData={transcriptMessageSelection.selectionVersion}
+                      inverted={isInvertedNativeList ? true : undefined}
+                      extraData={transcriptListExtraData}
                       key={props.sessionId}
                       nativeID={chatListNativeId}
                       keyExtractor={keyExtractor}
                         overrideProps={nativeFlashListScrollOverrideProps}
                         getItemType={getItemType}
                         drawDistance={flashListDrawDistance}
-                      onLoad={recordFirstListPaint}
+                      onLoad={handleFlashListLoad}
                       maintainVisibleContentPosition={
                           flashListMaintainVisibleContentPosition
                       }
+                      onViewableItemsChanged={shouldAttachNativeViewabilityTelemetry ? handleNativeViewableItemsChanged : undefined}
+                      viewabilityConfig={nativeViewabilityConfig}
                       onLayout={(e: LayoutChangeEvent) => {
                           const layout = e?.nativeEvent?.layout;
                           recordListLayoutWidth(layout?.width);
@@ -6944,6 +8794,10 @@ const ChatListInternal = React.memo((props: {
                                               contentHeight: listContentHeightRef.current,
                                           });
                                       }
+                                      recordNativeVisibleWindowTelemetry('layout-change', {
+                                          layoutHeight: h,
+                                          contentHeight: listContentHeightRef.current,
+                                      });
                                       observeMountSettleMetrics();
                                       pinNativeInitialFollowBottomViewportIfReady('layout-change');
                                   if (Platform.OS !== 'web' && listImplementation === 'flash_v2') {
@@ -6953,6 +8807,7 @@ const ChatListInternal = React.memo((props: {
                                       // One transaction per entry: this only resolves while no
                                       // transaction exists yet (no E1 reapply on layout change).
                                       attemptEntryRestore();
+                                      verifyNativeSliceEntryRestoreTransaction();
                                   }
                                         if (layoutHeightChanged && listContentHeightRef.current > 0) {
                                             schedulePinToBottom(previousWebMetrics, 'layout-change');
@@ -7033,6 +8888,10 @@ const ChatListInternal = React.memo((props: {
                                               contentHeight: measuredContentHeight,
                                           });
                                       }
+                                      recordNativeVisibleWindowTelemetry(contentSizeScrollReason, {
+                                          layoutHeight: listLayoutHeightRef.current,
+                                          contentHeight: measuredContentHeight,
+                                      });
                                       observeMountSettleMetrics();
                                       pinNativeInitialFollowBottomViewportIfReady(contentSizeScrollReason);
                                       if (Platform.OS !== 'web' && listImplementation === 'flash_v2') {
@@ -7042,6 +8901,7 @@ const ChatListInternal = React.memo((props: {
                                       // One transaction per entry: content-size changes can only
                                       // resolve a not-yet-issued restore, never re-issue one (E1).
                                       attemptEntryRestore();
+                                      verifyNativeSliceEntryRestoreTransaction();
                                   }
                                         if (contentHeightChanged && listLayoutHeightRef.current > 0) {
                                             schedulePinToBottom(previousWebMetrics, contentSizeScrollReason);
@@ -7055,8 +8915,8 @@ const ChatListInternal = React.memo((props: {
                                 // is unavailable.
                                 const nativeEvent = e?.nativeEvent;
                                 const liveWebMetrics = Platform.OS === 'web' ? resolveWebScrollMetrics() : null;
-                                const y = liveWebMetrics ? liveWebMetrics.scrollTop : nativeEvent?.contentOffset?.y;
-                                if (typeof y !== 'number' || !Number.isFinite(y)) return;
+                                const rawObservedOffsetY = liveWebMetrics ? liveWebMetrics.scrollTop : nativeEvent?.contentOffset?.y;
+                                if (typeof rawObservedOffsetY !== 'number' || !Number.isFinite(rawObservedOffsetY)) return;
                                             const nowMs = Date.now();
                                             const isTrusted = (nativeEvent as any)?.isTrusted === true;
                               const eventLayoutH =
@@ -7069,28 +8929,46 @@ const ChatListInternal = React.memo((props: {
                                       : null;
                               const layoutH = eventLayoutH ?? listLayoutHeightRef.current;
                               const contentH = eventContentH ?? listContentHeightRef.current;
+                              // N3.2: ALL downstream observation logic reads CANONICAL standard-space
+                              // offsets (0 = oldest edge); inverted raw offsets map here, at the single
+                              // observation boundary (identity under standard orientation).
+                              const y = toCanonicalScrollOffset({
+                                  offsetY: rawObservedOffsetY,
+                                  contentHeight: contentH,
+                                  layoutHeight: layoutH,
+                                  orientation: listOrientationRef.current,
+                              });
                               const refDistanceFromBottom =
                                   layoutH > 0 && contentH >= layoutH
                                       ? Math.max(0, Math.trunc(contentH - layoutH - y))
                                       : 0;
-                                const refVisualBottomScrollOffset =
-                                    layoutH > 0 && contentH >= layoutH
-                                        ? Math.max(0, Math.trunc(contentH - layoutH))
-                                        : null;
+                              const refVisualBottomScrollOffset =
+                                  layoutH > 0 && contentH >= layoutH
+                                      ? Math.max(0, Math.trunc(contentH - layoutH))
+                                      : null;
                                     const recordNativeScrollObservation = (
                                         reason: TranscriptViewportTelemetryObservationReason = 'observed',
                                     ) => {
                                         if (Platform.OS === 'web') return;
                                         recordScrollObservedTelemetry({
                                             offsetY: y,
+                                            rawOffsetY: rawObservedOffsetY,
+                                            canonicalOffsetY: y,
                                             layoutHeight: layoutH,
                                             contentHeight: contentH,
                                             distanceFromBottom: refDistanceFromBottom,
                                             reason,
                                         });
+                                        recordNativeVisibleWindowTelemetry(reason, {
+                                            rawOffsetY: rawObservedOffsetY,
+                                            canonicalOffsetY: y,
+                                            layoutHeight: layoutH,
+                                            contentHeight: contentH,
+                                            distanceFromBottom: refDistanceFromBottom,
+                                        });
                                     };
                                     const shouldIgnoreInvalidNativeScroll = shouldIgnoreNativeInvalidScrollObservation(
-                                        y,
+                                        rawObservedOffsetY,
                                         refDistanceFromBottom,
                                         layoutH,
                                         contentH,
@@ -7149,6 +9027,7 @@ const ChatListInternal = React.memo((props: {
                                                 contentHeight: contentH,
                                                 distanceFromBottom: refDistanceFromBottom,
                                                 offsetY: y,
+                                                rawOffsetY: rawObservedOffsetY,
                                             });
                                             if (alignmentObservation == null) {
                                                 commitOpenEntryRestoreVisibleState();
@@ -7386,6 +9265,8 @@ const ChatListInternal = React.memo((props: {
                                     layoutHeight: layoutH,
                                     contentHeight: contentH,
                                     distanceFromBottom: effectiveDistanceFromBottom,
+                                    webMetrics: liveWebMetrics,
+                                    trigger: 'scroll',
                                 });
                                 if (loadOlderInFlight.current) {
                                     refreshInFlightWebPrependAnchor({
@@ -7405,7 +9286,50 @@ const ChatListInternal = React.memo((props: {
                                     flashListPreviousScrollOffset !== null &&
                                     typeof effectiveScrollOffset === 'number' &&
                                     effectiveScrollOffset > flashListPreviousScrollOffset;
+                                const nativeAwayGestureStillOpen =
+                                    Platform.OS !== 'web' &&
+                                    bottomFollowModeStateRef.current.dragSession?.trusted === true &&
+                                    bottomFollowModeStateRef.current.dragSession.sawAwayMovement === true;
+                                if (
+                                    nativeAwayGestureStillOpen &&
+                                    !isTrusted &&
+                                    effectiveDistanceFromBottom <= pinThresholdPx
+                                ) {
+                                    if (nativeListDragActiveRef.current) {
+                                        updateNativeBottomFollowModeFromScrollObservation({
+                                            distanceFromBottom: effectiveDistanceFromBottom,
+                                            isTrusted,
+                                            movedAwayFromBottom: flashListMovedAwayFromBottom,
+                                            movedTowardBottom: flashListMovedTowardBottom,
+                                            recentUserIntent,
+                                        });
+                                    }
+                                    // Bottom-follow finish: the away-gesture bail must keep read-only UI state
+                                    // honest (jump-button distance + pin badge) even while it declines to
+                                    // re-pin for the open trusted away-gesture — exactly as the precedent
+                                    // below does — otherwise the jump affordance freezes at a stale distance.
+                                    // BUT only when `effectiveDistanceFromBottom` is trustworthy: in the
+                                    // inverted model an active streaming session can glue the raw offset at 0,
+                                    // so an untrusted near-bottom frame after an away drag is STALE and must
+                                    // NOT hide the affordance (it would falsely report the user back at bottom).
+                                    // Non-inverted distance is reliable, so commit there. No `wantsPinned`
+                                    // write / mode change: release attribution stays with the away-gesture.
+                                    if (listOrientationRef.current !== 'inverted') {
+                                        lastPinOffsetForIntentRef.current = effectiveDistanceFromBottom;
+                                        commitJumpToBottomDistanceForVisibility(effectiveDistanceFromBottom);
+                                        commitScrollPinEvent({
+                                            type: 'scroll',
+                                            enabled: pinEnabled,
+                                            offsetY: effectiveDistanceFromBottom,
+                                            pinnedOffsetThresholdPx: pinThresholdPx,
+                                        });
+                                    }
+                                    return;
+                                }
                                 const followIntent = resolveTranscriptBottomFollowIntent({
+                                    canRearmBottom:
+                                        !nativeAwayGestureStillOpen ||
+                                        (isTrusted && flashListMovedTowardBottom),
                                     // Plan B6 trusted-gate: on native only trusted scrolls release
                                     // follow; web keeps gesture-derived recent intent as release
                                     // authority (wheel/pointer/streak paths own web unpinning).
@@ -7415,10 +9339,16 @@ const ChatListInternal = React.memo((props: {
                                     // without a drag still never releases.
                                     canRelease: Platform.OS === 'web'
                                         ? recentUserIntent
-                                        : isTrusted ||
+                                        : (
+                                            isTrusted ||
                                             (
                                                 nativeMomentumScrollActiveRef.current &&
                                                 bottomFollowModeStateRef.current.dragSession?.trusted === true
+                                            )
+                                        ) &&
+                                            (
+                                                listOrientationRef.current !== 'inverted' ||
+                                                refDistanceFromBottom > pinThresholdPx
                                             ),
                                     direction: 'toward-max',
                                     distanceFromBottom: effectiveDistanceFromBottom,
@@ -7557,34 +9487,26 @@ const ChatListInternal = React.memo((props: {
                             keyboardShouldPersistTaps="handled"
                             keyboardDismissMode="none"
                             renderItem={renderItem}
-	                              onStartReachedThreshold={flashListStartReachedThreshold}
-	                      onStartReached={() => {
-                          // FlashList can miss onStartReached (#1785); treat it as one more
-                          // scroll observation for the pagination machine.
-                          const startReachedOffset = Platform.OS === 'web'
-                              ? resolveWebScrollMetrics()?.scrollTop ?? null
-                              : (() => {
-                                  try {
-                                      const value = listRef.current?.getAbsoluteLastScrollOffset?.();
-                                      return typeof value === 'number' && Number.isFinite(value) ? value : null;
-                                  } catch {
-                                      return null;
-                                  }
-                              })();
-                          if (typeof startReachedOffset !== 'number') return;
-                          const layoutH = listLayoutHeightRef.current;
-                          const contentH = listContentHeightRef.current;
-                          observeOlderPaginationScroll({
-                              offsetY: startReachedOffset,
-                              layoutHeight: layoutH,
-                              contentHeight: contentH,
-                              distanceFromBottom: Math.max(0, Math.trunc(contentH - layoutH - startReachedOffset)),
-                          });
-                      }}
-	                              onScrollToIndexFailed={(info: { index: number; averageItemLength: number }) => {
+                            onStartReachedThreshold={flashListStartReachedThreshold}
+                            onStartReached={() => {
+                                observePaginationEdgeReachedNudge(listOrientation === 'inverted' ? 'newer' : 'older');
+                            }}
+                            onEndReachedThreshold={flashListStartReachedThreshold}
+                            onEndReached={() => {
+                                observePaginationEdgeReachedNudge(listOrientation === 'inverted' ? 'older' : 'newer');
+                            }}
+                            onScrollToIndexFailed={(info: { index: number; averageItemLength: number }) => {
                                       if (handleNativeRestoreIndexFailure(info.index)) return;
                                       if (props.jumpToSeq == null) return;
-	                                  const offset = Math.max(0, Math.trunc(info.averageItemLength * info.index));
+	                                  // The averageItemLength estimate approximates a RAW offset of the
+	                                  // rendered index; commands carry CANONICAL offsets (N3.2 seam).
+	                                  const rawEstimatedOffset = Math.max(0, Math.trunc(info.averageItemLength * info.index));
+	                                  const offset = toCanonicalScrollOffset({
+	                                      offsetY: rawEstimatedOffset,
+	                                      contentHeight: listContentHeightRef.current,
+	                                      layoutHeight: listLayoutHeightRef.current,
+	                                      orientation: listOrientationRef.current,
+	                                  });
 	                                      executeViewportCommand(resolveViewportCommand({
 	                                      type: 'scroll-offset',
 	                                      sessionId: props.sessionId,
@@ -7594,10 +9516,8 @@ const ChatListInternal = React.memo((props: {
 	                                  animated: true,
 	                              }));
 	                          }}
-                      ListHeaderComponent={listHeaderNode}
-                      ListFooterComponent={
-                            flashListFooterNode
-                        }
+                      ListHeaderComponent={orientedFlashListEdgeSlots.listHeaderNode}
+                      ListFooterComponent={orientedFlashListEdgeSlots.listFooterNode}
                   />
                   </LayoutCommitObserver>
               )}

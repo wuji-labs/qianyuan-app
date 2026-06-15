@@ -5,26 +5,46 @@ import { t } from '@/text';
 import { buildConnectedServiceAccountSwitchMessage } from './connectedServiceAccountSwitchMessage';
 
 describe('buildConnectedServiceAccountSwitchMessage', () => {
-    it('renders a group-driven switch using display labels and selection kinds (not raw profile ids)', () => {
+    it('renders a group-driven switch as a group switch between profile labels', () => {
         const message = buildConnectedServiceAccountSwitchMessage({
             event: {
                 serviceId: 'claude-subscription',
                 groupId: 'team-pool',
+                groupLabel: 'Team pool',
                 fromProfileId: 'batiplus',
                 toProfileId: 'batiplus',
             },
             labelsByKey: { 'claude-subscription/batiplus': 'leeroy' },
         });
 
-        // Regression: a group(active=batiplus,label=leeroy)->profile(batiplus) switch must not surface
-        // the raw profile id on either endpoint, so it must never read "batiplus to batiplus".
         expect(message).not.toContain('batiplus');
+        expect(message).not.toContain('from group');
+        expect(message).not.toContain('to profile');
+        expect(message).toContain('Switched Claude group Team pool');
         expect(message).toContain('leeroy');
-        expect(message).toContain(t('message.connectedServiceSwitchGroupEndpoint', { group: 'Claude', profile: 'leeroy' }));
-        expect(message).toContain(t('message.connectedServiceSwitchProfileEndpoint', { profile: 'leeroy' }));
+        expect(message).toContain('from leeroy to leeroy');
     });
 
     it('uses labels carried by the transcript event when settings labels are not hydrated', () => {
+        const message = buildConnectedServiceAccountSwitchMessage({
+            event: {
+                serviceId: 'claude-subscription',
+                groupId: 'team-pool',
+                groupLabel: 'Team pool',
+                fromProfileId: 'batiplus',
+                toProfileId: 'batiplus',
+                fromProfileLabel: 'leeroy',
+                toProfileLabel: 'leeroy',
+            },
+            labelsByKey: undefined,
+        });
+
+        expect(message).not.toContain('batiplus');
+        expect(message).toContain('Switched Claude group Team pool');
+        expect(message).toContain('from leeroy to leeroy');
+    });
+
+    it('falls back to the group id for older group switch events without a group label', () => {
         const message = buildConnectedServiceAccountSwitchMessage({
             event: {
                 serviceId: 'claude-subscription',
@@ -37,9 +57,8 @@ describe('buildConnectedServiceAccountSwitchMessage', () => {
             labelsByKey: undefined,
         });
 
-        expect(message).not.toContain('batiplus');
-        expect(message).toContain(t('message.connectedServiceSwitchGroupEndpoint', { group: 'Claude', profile: 'leeroy' }));
-        expect(message).toContain(t('message.connectedServiceSwitchProfileEndpoint', { profile: 'leeroy' }));
+        expect(message).toContain('Switched Claude group team-pool');
+        expect(message).not.toContain('group Claude');
     });
 
     it('describes both endpoints as profiles for a direct (non-group) switch', () => {
@@ -53,8 +72,9 @@ describe('buildConnectedServiceAccountSwitchMessage', () => {
             labelsByKey: { 'openai-codex/work': 'Work', 'openai-codex/backup': 'Backup' },
         });
 
-        expect(message).toContain(t('message.connectedServiceSwitchProfileEndpoint', { profile: 'Work' }));
-        expect(message).toContain(t('message.connectedServiceSwitchProfileEndpoint', { profile: 'Backup' }));
+        expect(message).toContain('Switched Codex account');
+        expect(message).toContain('from Work to Backup');
+        expect(message).not.toContain('group Codex');
     });
 
     it('falls back to the native CLI-auth label when an endpoint profile is missing', () => {

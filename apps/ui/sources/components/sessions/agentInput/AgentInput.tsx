@@ -1515,8 +1515,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     const handleComposerFocus = React.useCallback(() => {
         setIsInputFocused(true);
+        const focusedActiveWord = findActiveWord(
+            inputStateRef.current.text,
+            inputStateRef.current.selection,
+            props.autocompletePrefixes,
+        );
+        if (focusedActiveWord) {
+            setActiveWordState((currentActiveWord) => (
+                areActiveWordsEqual(currentActiveWord, focusedActiveWord) ? currentActiveWord : focusedActiveWord
+            ));
+            setHasAutocompleteTextInteraction(true);
+        }
         messageHistory.warmup();
-    }, [messageHistory]);
+    }, [messageHistory, props.autocompletePrefixes]);
 
     const handleComposerBlur = React.useCallback(() => {
         setIsInputFocused(false);

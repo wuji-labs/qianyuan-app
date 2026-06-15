@@ -22,6 +22,7 @@ export type SessionListRenderableStoreUpdatePlan = Readonly<{
     missingCount: number;
     noopPatchCount: number;
     listViewFieldChangeCount: number;
+    listViewRowRefreshSessionIds: readonly string[];
     attentionPromotionFieldChangeCount: number;
     staleMetadataPreservedCount: number;
     stalePendingFlagsPreservedCount: number;
@@ -32,6 +33,11 @@ export type SessionListRenderableStoreUpdatePlan = Readonly<{
 }>;
 
 type DidListViewFieldsChange = (
+    previous: SessionListRenderableSession | undefined,
+    next: SessionListRenderableSession,
+) => boolean;
+
+type DidListViewRowFieldsChange = (
     previous: SessionListRenderableSession | undefined,
     next: SessionListRenderableSession,
 ) => boolean;
@@ -70,6 +76,7 @@ function planSessionListRenderableIncomingRows(input: Readonly<{
     removeOmittedPreviousRenderables: boolean;
     rebuildOnAttentionPromotionFieldsChange?: boolean;
     didListViewFieldsChange?: DidListViewFieldsChange;
+    didListViewRowFieldsChange?: DidListViewRowFieldsChange;
 }>): SessionListRenderableStoreUpdatePlan {
     const previousRenderables = input.previousRenderables;
     const previousIds = Object.keys(previousRenderables);
@@ -81,6 +88,7 @@ function planSessionListRenderableIncomingRows(input: Readonly<{
     let changedCount = 0;
     let removedCount = 0;
     let listViewFieldChangeCount = 0;
+    const listViewRowRefreshSessionIds: string[] = [];
     let attentionPromotionFieldChangeCount = 0;
     let staleMetadataPreservedCount = 0;
     let stalePendingFlagsPreservedCount = 0;
@@ -110,6 +118,9 @@ function planSessionListRenderableIncomingRows(input: Readonly<{
         const didListViewFieldsChange = input.didListViewFieldsChange
             ? input.didListViewFieldsChange(previousRenderable, nextRenderable)
             : didSessionListRenderableStructuralFieldsChange(previousRenderable, nextRenderable);
+        const didListViewRowFieldsChange = input.didListViewRowFieldsChange
+            ? input.didListViewRowFieldsChange(previousRenderable, nextRenderable)
+            : false;
         const didAttentionPromotionFieldsChange = didSessionListRenderableAttentionPromotionFieldsChange(previousRenderable, nextRenderable);
 
         if (!previousRenderable || nextRenderable !== previousRenderable) {
@@ -117,6 +128,9 @@ function planSessionListRenderableIncomingRows(input: Readonly<{
             changedCount += 1;
             if (didListViewFieldsChange) {
                 listViewFieldChangeCount += 1;
+            }
+            if (!didListViewFieldsChange && didListViewRowFieldsChange) {
+                listViewRowRefreshSessionIds.push(incomingRenderable.id);
             }
             if (didAttentionPromotionFieldsChange) {
                 attentionPromotionFieldChangeCount += 1;
@@ -167,6 +181,7 @@ function planSessionListRenderableIncomingRows(input: Readonly<{
         missingCount: 0,
         noopPatchCount: 0,
         listViewFieldChangeCount,
+        listViewRowRefreshSessionIds,
         attentionPromotionFieldChangeCount,
         staleMetadataPreservedCount,
         stalePendingFlagsPreservedCount,
@@ -183,6 +198,7 @@ export function planSessionListRenderableReplacement(input: Readonly<{
     isSessionListViewDataUninitialized: boolean;
     rebuildOnAttentionPromotionFieldsChange?: boolean;
     didListViewFieldsChange?: DidListViewFieldsChange;
+    didListViewRowFieldsChange?: DidListViewRowFieldsChange;
 }>): SessionListRenderableStoreUpdatePlan {
     return planSessionListRenderableIncomingRows({
         ...input,
@@ -196,6 +212,7 @@ export function planSessionListRenderableMerge(input: Readonly<{
     isSessionListViewDataUninitialized: boolean;
     rebuildOnAttentionPromotionFieldsChange?: boolean;
     didListViewFieldsChange?: DidListViewFieldsChange;
+    didListViewRowFieldsChange?: DidListViewRowFieldsChange;
 }>): SessionListRenderableStoreUpdatePlan {
     return planSessionListRenderableIncomingRows({
         ...input,
@@ -209,6 +226,7 @@ export function planSessionListRenderablePatches(input: Readonly<{
     isSessionListViewDataUninitialized: boolean;
     rebuildOnAttentionPromotionFieldsChange?: boolean;
     didListViewFieldsChange?: DidListViewFieldsChange;
+    didListViewRowFieldsChange?: DidListViewRowFieldsChange;
 }>): SessionListRenderableStoreUpdatePlan {
     const previousRenderables = input.previousRenderables;
     let nextRenderables = previousRenderables;
@@ -216,6 +234,7 @@ export function planSessionListRenderablePatches(input: Readonly<{
     let missingCount = 0;
     let noopPatchCount = 0;
     let listViewFieldChangeCount = 0;
+    const listViewRowRefreshSessionIds: string[] = [];
     let attentionPromotionFieldChangeCount = 0;
     let needsSessionListViewDataRebuild = input.isSessionListViewDataUninitialized;
     let didImmediateWarmCacheRelevantRenderableChange = false;
@@ -243,9 +262,15 @@ export function planSessionListRenderablePatches(input: Readonly<{
         const didListViewFieldsChange = input.didListViewFieldsChange
             ? input.didListViewFieldsChange(previousRenderable, nextRenderable)
             : didSessionListRenderableStructuralFieldsChange(previousRenderable, nextRenderable);
+        const didListViewRowFieldsChange = input.didListViewRowFieldsChange
+            ? input.didListViewRowFieldsChange(previousRenderable, nextRenderable)
+            : false;
         const didAttentionPromotionFieldsChange = didSessionListRenderableAttentionPromotionFieldsChange(previousRenderable, nextRenderable);
         if (didListViewFieldsChange) {
             listViewFieldChangeCount += 1;
+        }
+        if (!didListViewFieldsChange && didListViewRowFieldsChange) {
+            listViewRowRefreshSessionIds.push(sessionId);
         }
         if (didAttentionPromotionFieldsChange) {
             attentionPromotionFieldChangeCount += 1;
@@ -282,6 +307,7 @@ export function planSessionListRenderablePatches(input: Readonly<{
         missingCount,
         noopPatchCount,
         listViewFieldChangeCount,
+        listViewRowRefreshSessionIds,
         attentionPromotionFieldChangeCount,
         staleMetadataPreservedCount: 0,
         stalePendingFlagsPreservedCount: 0,

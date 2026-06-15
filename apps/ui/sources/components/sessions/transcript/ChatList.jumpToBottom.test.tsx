@@ -53,6 +53,9 @@ vi.mock('@/sync/sync', () => ({
     loadOlderMessages: vi.fn(),
     loadNewerMessages: vi.fn(),
     hasDeferredNewerMessages: () => false,
+    // C6/D3: sync owns the deferred-newer drain decision; the list supplies geometry only. No
+    // deferred backlog here, so this no-ops.
+    maybeDrainDeferredNewerMessages: () => {},
     getSyncTuning: () => ({
       transcriptForwardPrefetchThresholdPx: 0,
       transcriptBackwardPrefetchThresholdPx: 0,

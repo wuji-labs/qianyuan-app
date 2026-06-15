@@ -430,8 +430,6 @@ export function restoreWebTranscriptPrependAnchor(
                     return { didAdjustScroll: false, strategy: 'none' };
                 }
             }
-            const growthResult = restoreFromScrollHeightGrowth();
-            if (growthResult) return growthResult;
             return { didAdjustScroll: false, strategy: 'anchor' };
         }
     }
@@ -453,19 +451,20 @@ export function restoreWebTranscriptPrependAnchor(
                     return { didAdjustScroll: false, strategy: 'none' };
                 }
             }
-            const growthResult = restoreFromScrollHeightGrowth();
-            if (growthResult) return growthResult;
             return { didAdjustScroll: false, strategy: 'item' };
         }
     }
 
-    return restoreFromScrollHeightGrowth() ?? { didAdjustScroll: false, strategy: 'none' };
+    const growthResult = restoreFromScrollHeightGrowth();
+    if (growthResult) return growthResult;
+    return { didAdjustScroll: false, strategy: 'none' };
 }
 
 export function refreshWebTranscriptPrependAnchor(
     anchor: WebTranscriptPrependAnchor,
     metrics: WebTranscriptScrollMetrics,
     options?: Readonly<{
+        adoptCurrentAnchorPosition?: boolean;
         recaptureAnchor?: boolean;
         recaptureItem?: boolean;
         resetExpiry?: boolean;
@@ -475,6 +474,11 @@ export function refreshWebTranscriptPrependAnchor(
 ): WebTranscriptPrependAnchor {
     const shouldRecaptureAnchor = options?.recaptureAnchor === true;
     const shouldRecaptureItem = options?.recaptureItem === true || shouldRecaptureAnchor;
+    const shouldRetargetAnchorForUserIntent =
+        shouldRecaptureAnchor &&
+        typeof options?.userIntentAtMs === 'number' &&
+        Number.isFinite(options.userIntentAtMs) &&
+        options.userIntentAtMs !== anchor.userIntentAtMs;
     let anchorTestId = anchor.anchorTestId;
     let anchorTop = anchor.anchorTop;
     let itemTestId = anchor.itemTestId;
@@ -483,11 +487,29 @@ export function refreshWebTranscriptPrependAnchor(
         const scan = createTrackedAnchorScan(metrics.element);
         if (scan) {
             if (shouldRecaptureAnchor) {
-                anchorTestId = (scan.bestStable ?? scan.bestAny)?.testId ?? null;
-                anchorTop = resolveScannedAnchorTop(scan, anchorTestId);
+                const currentAnchorStillMounted =
+                    shouldRetargetAnchorForUserIntent !== true &&
+                    anchor.anchorTestId != null &&
+                    scan.byTestId.has(anchor.anchorTestId);
+                if (currentAnchorStillMounted && options?.adoptCurrentAnchorPosition === true) {
+                    anchorTop = resolveScannedAnchorTop(scan, anchor.anchorTestId);
+                } else if (!currentAnchorStillMounted) {
+                    anchorTestId = (scan.bestStable ?? scan.bestAny)?.testId ?? null;
+                    anchorTop = resolveScannedAnchorTop(scan, anchorTestId);
+                }
             }
             itemTestId = resolvePreferredItemAnchorTestIdFromScan(metrics.element, scan, anchorTestId);
             itemTop = resolveScannedAnchorTop(scan, itemTestId);
+            if (
+                shouldRetargetAnchorForUserIntent !== true &&
+                anchor.itemTestId != null &&
+                scan.byTestId.has(anchor.itemTestId)
+            ) {
+                itemTestId = anchor.itemTestId;
+                itemTop = options?.adoptCurrentAnchorPosition === true
+                    ? resolveScannedAnchorTop(scan, anchor.itemTestId)
+                    : anchor.itemTop;
+            }
         } else {
             if (shouldRecaptureAnchor) {
                 anchorTestId = null;

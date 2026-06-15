@@ -451,6 +451,41 @@ describe('TranscriptEventRow', () => {
         expect(serialized).not.toContain('provider_account_adoption_mismatch)');
     });
 
+    it('uses a precise diagnostic instead of raw unsupported-service switch failure context', async () => {
+        const event = parseProtocolValidAgentEvent({
+            type: 'connected-service-account-switch-attempt',
+            ok: false,
+            action: 'hot_applied',
+            attemptedContinuityMode: 'hot_apply',
+            outcome: 'failed',
+            outcomeAction: 'none',
+            errorCode: 'unsupported_service',
+            diagnostic: {
+                code: 'runtime_auth_recovery_superseded',
+                failurePhase: 'runtime_auth_recovery',
+                source: 'runtime_auth_recovery',
+                serviceId: 'openai-codex',
+                agentId: 'codex',
+                retryable: false,
+                suggestedActions: ['open_connected_accounts'],
+                diagnostics: {
+                    reason: 'generation_stale',
+                },
+            },
+        });
+
+        const screen = await renderScreen(
+            <TranscriptEventRow
+                event={event}
+            />,
+        );
+
+        const serialized = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByProps({ testID: 'transcript-event-connected-service-account-switch-attempt' })).toBeTruthy();
+        expect(serialized).toContain(t('connectedServices.diagnostics.status.runtime_auth_recovery_superseded'));
+        expect(serialized).not.toContain('unsupported_service');
+    });
+
     it('uses explicit failed outcome fields before legacy successful switch-attempt actions', async () => {
         const event = parseProtocolValidAgentEvent({
             type: 'connected-service-account-switch-attempt',

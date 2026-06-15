@@ -1,6 +1,7 @@
 import type { MachineDisplayRenderable } from '../../domains/machines/machineDisplayRenderable';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
 import {
+    didSessionListRenderableEmbeddedListRowFieldsChange,
     didSessionListRenderableStructuralFieldsChange,
     type SessionListRenderableSession,
 } from '../../domains/session/listing/sessionListRenderable';
@@ -104,6 +105,31 @@ export function didSessionListRenderableListViewFieldsChangeForSettings(
         || isSessionListDateGroupingForRenderable(next, settings);
 }
 
+export function refreshSessionListViewDataRowsForRenderables(input: Readonly<{
+    sessionListViewData: SessionListViewItem[] | null;
+    renderables: Record<string, SessionListRenderableSession>;
+    sessionIds: readonly string[];
+}>): SessionListViewItem[] | null {
+    if (!input.sessionListViewData || input.sessionIds.length === 0) {
+        return input.sessionListViewData;
+    }
+    const ids = new Set(input.sessionIds);
+    let changed = false;
+    const next = input.sessionListViewData.map((item) => {
+        if (item.type !== 'session') return item;
+        const sessionId = String(item.session.id ?? '').trim();
+        if (!sessionId || !ids.has(sessionId)) return item;
+        const renderable = input.renderables[sessionId];
+        if (!renderable || renderable === item.session) return item;
+        changed = true;
+        return {
+            ...item,
+            session: renderable,
+        };
+    });
+    return changed ? next : input.sessionListViewData;
+}
+
 export function shouldRebuildOnSessionPlacementFieldsChange(settings: SessionListRenderableCommitSettings): boolean {
     return normalizeSessionListAttentionPromotionMode(settings.sessionListAttentionPromotionModeV1) !== 'off'
         || normalizeSessionListWorkingPlacementMode(settings.sessionListWorkingPlacementModeV1) !== 'off';
@@ -140,6 +166,7 @@ export function planSessionListRenderableReplacementCommit(input: Readonly<{
             shouldRebuildOnSessionPlacementFieldsChange(input.state.settings),
         didListViewFieldsChange: (previous, next) =>
             didSessionListRenderableListViewFieldsChangeForSettings(previous, next, input.state.settings),
+        didListViewRowFieldsChange: didSessionListRenderableEmbeddedListRowFieldsChange,
     });
 }
 
@@ -155,6 +182,7 @@ export function planSessionListRenderableMergeCommit(input: Readonly<{
             shouldRebuildOnSessionPlacementFieldsChange(input.state.settings),
         didListViewFieldsChange: (previous, next) =>
             didSessionListRenderableListViewFieldsChangeForSettings(previous, next, input.state.settings),
+        didListViewRowFieldsChange: didSessionListRenderableEmbeddedListRowFieldsChange,
     });
 }
 
@@ -170,6 +198,7 @@ export function planSessionListRenderablePatchesCommit(input: Readonly<{
             shouldRebuildOnSessionPlacementFieldsChange(input.state.settings),
         didListViewFieldsChange: (previous, next) =>
             didSessionListRenderableListViewFieldsChangeForSettings(previous, next, input.state.settings),
+        didListViewRowFieldsChange: didSessionListRenderableEmbeddedListRowFieldsChange,
     });
 }
 
@@ -194,26 +223,63 @@ export function applySessionListRenderableCommitPlan<S extends SessionListRender
     const build = () => buildSessionListViewDataForRenderableState(nextStateBase, {
         serverId: targetServerId,
     });
-    const sessionListViewData = input.plan.needsSessionListViewDataRebuild
+    const rebuiltSessionListViewData = input.plan.needsSessionListViewDataRebuild
         ? input.measureListRebuild
             ? input.measureListRebuild(build)
             : build()
-        : input.state.sessionListViewData;
+        : null;
+    const sessionListViewData = input.plan.needsSessionListViewDataRebuild
+        ? shouldUpdateActiveView
+            ? rebuiltSessionListViewData
+            : input.state.sessionListViewData
+        : shouldUpdateActiveView
+            ? refreshSessionListViewDataRowsForRenderables({
+                sessionListViewData: input.state.sessionListViewData,
+                renderables: input.plan.nextRenderables,
+                sessionIds: input.plan.listViewRowRefreshSessionIds,
+            })
+            : input.state.sessionListViewData;
+    const cacheServerId = targetServerId ?? activeServerId;
+    const previousCachedSessionListViewData = cacheServerId
+        ? input.state.sessionListViewDataByServerId[cacheServerId] ?? null
+        : null;
+    const refreshedCachedSessionListViewData = input.plan.needsSessionListViewDataRebuild
+        ? rebuiltSessionListViewData
+        : refreshSessionListViewDataRowsForRenderables({
+            sessionListViewData: previousCachedSessionListViewData,
+            renderables: input.plan.nextRenderables,
+            sessionIds: input.plan.listViewRowRefreshSessionIds,
+        });
+    const didRefreshCachedSessionListViewData = refreshedCachedSessionListViewData !== previousCachedSessionListViewData;
+    const didRefreshActiveSessionListViewData = sessionListViewData !== input.state.sessionListViewData;
+    let sessionListViewDataByServerId = input.state.sessionListViewDataByServerId;
+    if (input.plan.needsSessionListViewDataRebuild && rebuiltSessionListViewData) {
+        sessionListViewDataByServerId = targetServerId
+            ? setServerSessionListCache(
+                input.state.sessionListViewDataByServerId,
+                targetServerId,
+                rebuiltSessionListViewData,
+            )
+            : setActiveServerSessionListCache(
+                input.state.sessionListViewDataByServerId,
+                rebuiltSessionListViewData,
+        );
+    } else if (cacheServerId && didRefreshCachedSessionListViewData && refreshedCachedSessionListViewData) {
+        sessionListViewDataByServerId = setServerSessionListCache(
+            input.state.sessionListViewDataByServerId,
+            cacheServerId,
+            refreshedCachedSessionListViewData,
+        );
+    } else if (shouldUpdateActiveView && didRefreshActiveSessionListViewData && sessionListViewData) {
+        sessionListViewDataByServerId = setActiveServerSessionListCache(
+            input.state.sessionListViewDataByServerId,
+            sessionListViewData,
+        );
+    }
 
     return {
         ...nextStateBase,
-        sessionListViewData: shouldUpdateActiveView ? sessionListViewData : input.state.sessionListViewData,
-        sessionListViewDataByServerId: input.plan.needsSessionListViewDataRebuild && sessionListViewData
-            ? targetServerId
-                ? setServerSessionListCache(
-                    input.state.sessionListViewDataByServerId,
-                    targetServerId,
-                    sessionListViewData,
-                )
-                : setActiveServerSessionListCache(
-                    input.state.sessionListViewDataByServerId,
-                    sessionListViewData,
-                )
-            : input.state.sessionListViewDataByServerId,
+        sessionListViewData,
+        sessionListViewDataByServerId,
     };
 }

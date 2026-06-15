@@ -987,6 +987,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                     raw: { role: 'user', content: { type: 'text', text: 'followed direct' } },
                 },
             ],
+            fromCursor: 'page-tail-cursor-1',
             nextCursor: 'tail-cursor-2',
             truncated: false,
         });
@@ -1016,6 +1017,77 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         }), expect.anything());
     });
 
+    it('does not advance a direct-session tail cursor from a discontinuous pushed delta', async () => {
+        const sessionId = 'direct_session_push_delta_cursor_gap';
+        storage.getState().applySessions([createDirectSession(sessionId)]);
+        machineDirectSessionTranscriptPageMock.mockResolvedValueOnce({
+            ok: true,
+            items: [
+                {
+                    id: 'direct-msg-1',
+                    createdAtMs: 1,
+                    raw: { role: 'user', content: { type: 'text', text: 'hello direct' } },
+                },
+            ],
+            nextCursor: 'older-cursor-1',
+            tailCursor: 'page-tail-cursor-1',
+            hasMore: false,
+        });
+
+        const { sync } = await import('./sync');
+        (sync as any).encryption = {
+            getSessionEncryption: () => null,
+        };
+        (sync as any).activeServerSessionIds = new Set<string>([sessionId]);
+        (sync as any).hasFetchedSessionsSnapshotForActiveServer = true;
+
+        await (sync as any).fetchMessages(sessionId);
+        (sync as any).handleEphemeralUpdate({
+            type: 'direct-session-transcript-delta',
+            sessionId,
+            items: [
+                {
+                    id: 'direct-msg-3',
+                    createdAtMs: 3,
+                    raw: { role: 'user', content: { type: 'text', text: 'later pushed direct' } },
+                },
+            ],
+            fromCursor: 'background-tail-cursor-late',
+            nextCursor: 'tail-cursor-3',
+            truncated: false,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        machineDirectSessionTranscriptReadAfterMock.mockResolvedValueOnce({
+            ok: true,
+            items: [
+                {
+                    id: 'direct-msg-2',
+                    createdAtMs: 2,
+                    raw: { role: 'user', content: { type: 'text', text: 'missed direct' } },
+                },
+            ],
+            nextCursor: 'tail-cursor-3',
+            truncated: false,
+        });
+        await (sync as any).refreshSessionMessages(sessionId);
+
+        expect(machineDirectSessionTranscriptReadAfterMock).toHaveBeenCalledTimes(1);
+        expect(machineDirectSessionTranscriptReadAfterMock).toHaveBeenCalledWith(expect.objectContaining({
+            machineId: 'machine-1',
+            remoteSessionId: 'vendor-session-1',
+            cursor: 'page-tail-cursor-1',
+        }), expect.anything());
+
+        const sessionMessages = storage.getState().sessionMessages[sessionId];
+        const orderedTexts = (sessionMessages?.messageIdsOldestFirst ?? [])
+            .map((id) => sessionMessages?.messagesById[id])
+            .filter((message): message is NonNullable<typeof message> => Boolean(message))
+            .filter((message) => message.kind === 'user-text')
+            .map((message) => message.text);
+        expect(orderedTexts).toEqual(['hello direct', 'missed direct', 'later pushed direct']);
+    });
+
     it('emits activity ready notifications for pushed direct-session transcript deltas when voice is suppressed', async () => {
         const sessionId = 'direct_session_push_ready_notification';
         storage.getState().applySessions([createDirectSession(sessionId)]);
@@ -1042,6 +1114,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                     },
                 },
             ],
+            fromCursor: 'tail',
             nextCursor: 'ready-tail-cursor-1',
             truncated: false,
         });
@@ -1078,6 +1151,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
                     },
                 },
             ],
+            fromCursor: 'tail',
             nextCursor: 'agent-reply-tail-cursor-1',
             truncated: false,
         });

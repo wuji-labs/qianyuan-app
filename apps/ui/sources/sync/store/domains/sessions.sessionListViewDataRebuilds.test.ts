@@ -442,61 +442,82 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
         expect(readSessionListSessionById(next, 's1')?.updatedAt).toBe(300);
     });
 
-    it('keeps sessionListViewData stable for attention-only updates when attention promotion is disabled', async () => {
+    it('refreshes embedded rows without rebuilding for unread updates when attention promotion is disabled', async () => {
         vi.doMock('../../runtime/orchestration/projectManager', () => ({
             projectManager: { updateSessions: vi.fn() },
         }));
         mockSessionPersistenceBoundaries();
 
+        const { syncPerformanceTelemetry } = await import('@/sync/runtime/syncPerformanceTelemetry');
         const { createSessionsDomain } = await import('./sessions');
         const { get, domain } = createHarness(createSessionsDomain, {
             settings: { sessionListAttentionPromotionModeV1: 'off' },
         });
 
-        domain.applySessions([
-            {
-                id: 's1',
-                seq: 1,
-                createdAt: 1,
-                updatedAt: 1,
-                active: false,
-                activeAt: 1,
-                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
-                metadataVersion: 1,
-                agentState: null,
-                agentStateVersion: 0,
-                thinking: false,
-                thinkingAt: 0,
-                presence: 'online',
-                latestReadyEventSeq: null,
-                latestReadyEventAt: null,
-            } as any,
-        ]);
+        syncPerformanceTelemetry.configure({
+            enabled: true,
+            slowThresholdMs: 1_000_000,
+            flushIntervalMs: 60_000,
+        });
+        syncPerformanceTelemetry.reset();
 
-        const initial = get().sessionListViewData;
-        expect(Array.isArray(initial)).toBe(true);
+        try {
+            domain.applySessions([
+                {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: false,
+                    activeAt: 1,
+                    metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                    latestReadyEventSeq: null,
+                    latestReadyEventAt: null,
+                } as any,
+            ]);
 
-        domain.applySessions([
-            {
-                id: 's1',
-                seq: 1,
-                createdAt: 1,
-                updatedAt: 1,
-                active: false,
-                activeAt: 1,
-                metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
-                metadataVersion: 1,
-                agentState: null,
-                agentStateVersion: 0,
-                thinking: false,
-                thinkingAt: 0,
-                presence: 'online',
-                latestReadyEventSeq: 2,
-                latestReadyEventAt: 2,
-            } as any,
-        ]);
+            const initial = get().sessionListViewData;
+            expect(Array.isArray(initial)).toBe(true);
+            syncPerformanceTelemetry.reset();
 
-        expect(get().sessionListViewData).toBe(initial);
+            domain.applySessions([
+                {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: false,
+                    activeAt: 1,
+                    metadata: { machineId: 'm1', path: '/home/u/repo', homeDir: '/home/u' },
+                    metadataVersion: 1,
+                    agentState: null,
+                    agentStateVersion: 0,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                    latestReadyEventSeq: 2,
+                    latestReadyEventAt: 2,
+                } as any,
+            ]);
+
+            const next = get().sessionListViewData;
+            expect(next).not.toBe(initial);
+            expect(readSessionListSessionById(next, 's1')?.latestReadyEventSeq).toBe(2);
+
+            const changedEvent = syncPerformanceTelemetry
+                .snapshot()
+                .events.find((candidate) => candidate.name === 'sync.store.sessions.apply.changed');
+            expect(changedEvent?.fields.listRebuild).toBe(0);
+            expect(changedEvent?.fields.listRowRefreshes).toBe(1);
+        } finally {
+            syncPerformanceTelemetry.configure({ enabled: false });
+        }
     });
 
     it('rebuilds sessionListViewData for attention-only updates when attention promotion uses a global section', async () => {
@@ -1615,7 +1636,7 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
                         path: '/home/u/repo',
                         homeDir: '/home/u',
                         name: 'Updated title',
-                        summaryText: 'Updated non-reachability summary',
+                        summary: { text: 'Updated non-reachability summary', updatedAt: 11 },
                     },
                     metadataVersion: 2,
                     agentState: null,
@@ -1626,13 +1647,17 @@ describe('sessions domain: sessionListViewData rebuild gating', () => {
                 } as any,
             ]);
 
-            expect(get().sessionListViewData).toBe(initialListViewData);
+            const nextListViewData = get().sessionListViewData;
+            expect(nextListViewData).not.toBe(initialListViewData);
+            expect(readSessionListSessionById(nextListViewData, 's1')?.metadata?.name).toBe('Updated title');
+            expect(readSessionListSessionById(nextListViewData, 's1')?.metadata?.summaryText).toBe('Updated non-reachability summary');
 
             const events = syncPerformanceTelemetry.snapshot().events;
             const changedEvent = events.find((candidate) => candidate.name === 'sync.store.sessions.apply.changed');
             expect(changedEvent?.fields.changedSessions).toBe(1);
             expect(changedEvent?.fields.changedRenderables).toBe(1);
             expect(changedEvent?.fields.listRebuild).toBe(0);
+            expect(changedEvent?.fields.listRowRefreshes).toBe(1);
             expect(changedEvent?.fields.projectManagerUpdate).toBe(0);
             expect(changedEvent?.fields.reachablePeerReevaluation).toBe(0);
             expect(events.find((candidate) => candidate.name === 'sync.store.sessions.apply.reachablePeers')).toBeUndefined();

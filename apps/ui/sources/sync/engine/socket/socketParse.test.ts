@@ -134,13 +134,29 @@ describe('socketParse', () => {
                     raw: { role: 'user', content: { type: 'text', text: 'Hello direct' } },
                 },
             ],
+            fromCursor: 'tail-cursor-0',
             nextCursor: 'tail-cursor-1',
             truncated: false,
         });
 
         expect(res).not.toBeNull();
         expect(res?.type).toBe('direct-session-transcript-delta');
+        expect((res as any)?.fromCursor).toBe('tail-cursor-0');
         expect((res as any)?.nextCursor).toBe('tail-cursor-1');
+    });
+
+    it('rejects non-truncated direct-session cursor advancement without fromCursor', () => {
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const res = parseEphemeralUpdate({
+            type: 'direct-session-transcript-delta',
+            sessionId: 's1',
+            items: [],
+            nextCursor: 'tail-cursor-1',
+            truncated: false,
+        });
+
+        expect(res).toBeNull();
+        consoleErrorSpy.mockRestore();
     });
 
     it('returns null for invalid ephemeral payloads', () => {

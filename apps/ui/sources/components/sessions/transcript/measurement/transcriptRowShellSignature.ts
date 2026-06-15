@@ -1,5 +1,6 @@
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 import type { TranscriptTurn } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
+import type { TranscriptToolGroupUnitItem } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurnUnits';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import type { Message } from '@/sync/domains/messages/messageTypes';
 
@@ -8,7 +9,6 @@ import type {
     TranscriptItemHeightValiditySignature,
 } from './transcriptItemHeightCache';
 
-const TRANSCRIPT_ROW_TYPE_LONG_TEXT_MIN_CHARS = 512;
 const TRANSCRIPT_COLLAPSED_TOOL_GROUP_SIGNATURE_PREVIEW_COUNT = 15;
 
 export type TranscriptRowShellItem =
@@ -17,7 +17,17 @@ export type TranscriptRowShellItem =
         kind: 'turn';
         id: string;
         turn: TranscriptTurn;
-    };
+    }
+    | TranscriptToolGroupUnitItem;
+
+function isToolGroupUnitItem(item: TranscriptRowShellItem): item is TranscriptToolGroupUnitItem {
+    return (
+        item.kind === 'tool-group-header' ||
+        item.kind === 'tool-group-expand' ||
+        item.kind === 'tool-group-tool' ||
+        item.kind === 'tool-group-footer'
+    );
+}
 
 export function resolveTranscriptItemActiveThinkingMessageId(
     item: TranscriptRowShellItem,
@@ -43,6 +53,7 @@ export function resolveTranscriptRowItemType(params: Readonly<{
         return resolveMessageRowType(params.getMessageById(item.messageId), params.activeThinkingMessageId);
     }
     if (item.kind === 'tool-calls-group') return 'tool-group';
+    if (isToolGroupUnitItem(item)) return item.kind;
     if (item.kind === 'pending-queue') return 'pending-action';
     if (item.kind === 'action-draft') return 'pending-action';
     if (item.kind === 'fork-divider') return 'fork-divider';
@@ -57,7 +68,7 @@ export function resolveTranscriptRowItemType(params: Readonly<{
         }
         return 'turn:text';
     }
-    return 'message:agent-short';
+    return 'message:agent';
 }
 
 export function buildTranscriptRowShellSignature(params: Readonly<{
@@ -129,6 +140,66 @@ export function buildTranscriptRowShellSignature(params: Readonly<{
                 'thinking:none',
             ].join('|'),
             rowState: messageStates.includes('tool-progress') ? 'tool-progress' : 'stable',
+        };
+    }
+
+    // Per-unit tool-group rows (N2c): deliberately SMALL structural keys so the height
+    // cache stays valid across sibling churn — caps key on group facts only, tool rows
+    // key on their OWN message revision plus group expansion.
+    if (item.kind === 'tool-group-header') {
+        return {
+            ...base,
+            structuralKey: buildStableJsonSignature({
+                groupId: item.groupId,
+                count: item.toolMessageIds.length,
+                status: buildToolStatusSummary({
+                    getMessageById: params.getMessageById,
+                    toolMessageIds: item.toolMessageIds,
+                }),
+                expanded: item.expanded,
+            }),
+            expansionKey: [item.expanded ? 'tools:expanded' : 'tools:collapsed', 'thinking:none'].join('|'),
+            rowState: 'stable',
+        };
+    }
+
+    if (item.kind === 'tool-group-expand') {
+        return {
+            ...base,
+            structuralKey: buildStableJsonSignature({
+                groupId: item.groupId,
+                hiddenCount: item.hiddenCount,
+            }),
+            expansionKey: 'tools:collapsed|thinking:none',
+            rowState: 'stable',
+        };
+    }
+
+    if (item.kind === 'tool-group-tool') {
+        const message = params.getMessageById(item.toolMessageId);
+        return {
+            ...base,
+            structuralKey: buildStableJsonSignature({
+                groupId: item.groupId,
+                groupExpanded: item.expanded,
+                messageRevision: buildMessageShellStructuralKey(item.toolMessageId, message),
+            }),
+            expansionKey: [item.expanded ? 'tools:expanded' : 'tools:collapsed', 'thinking:none'].join('|'),
+            rowState: resolveMessageRowState({
+                activeThinkingMessageId: params.activeThinkingMessageId,
+                isLatestCommittedActivity: item.toolMessageId === params.latestCommittedActivityKey,
+                message,
+                sessionActive: params.sessionActive,
+            }),
+        };
+    }
+
+    if (item.kind === 'tool-group-footer') {
+        return {
+            ...base,
+            structuralKey: buildStableJsonSignature({ groupId: item.groupId }),
+            expansionKey: 'tools:none|thinking:none',
+            rowState: 'stable',
         };
     }
 
@@ -228,27 +299,24 @@ function collectMessageIdsFromTurn(turn: TranscriptTurn): string[] {
     return ids;
 }
 
-function resolveMessageTextLength(message: Message | null): number {
-    if (!message) return 0;
-    const text = 'text' in message ? message.text : null;
-    return typeof text === 'string' ? text.length : 0;
-}
-
+/**
+ * C1 (T2): the FlashList recycle type must be SHAPE-only, never SIZE-based. A length-gated
+ * short/long split flips the type mid-stream (at the old 512-char threshold), remounting the cell
+ * into a different recycle pool and stranding it at an unmeasured estimate for >=1 frame — the prime
+ * overlap trigger. Thinking is kept as a genuinely distinct rendered shell shape; only the size flip
+ * was the bug. See `.reviews/2026-06-14-091335-transcript-deep-audit/subagents/19-design-C1-measurement.md`.
+ */
 function resolveMessageRowType(message: Message | null, activeThinkingMessageId: string | null): string {
-    if (!message) return 'message:agent-short';
+    if (!message) return 'message:agent';
     if (message.kind === 'tool-call') return 'message:tool';
     if (message.kind === 'agent-text') {
         if (message.isThinking === true || message.id === activeThinkingMessageId) return 'message:thinking';
-        return resolveMessageTextLength(message) >= TRANSCRIPT_ROW_TYPE_LONG_TEXT_MIN_CHARS
-            ? 'message:agent-long'
-            : 'message:agent-short';
+        return 'message:agent';
     }
     if (message.kind === 'user-text') {
-        return resolveMessageTextLength(message) >= TRANSCRIPT_ROW_TYPE_LONG_TEXT_MIN_CHARS
-            ? 'message:user-long'
-            : 'message:user-short';
+        return 'message:user';
     }
-    return 'message:agent-short';
+    return 'message:agent';
 }
 
 function buildMessageShellStructuralKey(messageId: string, message: Message | null): string {

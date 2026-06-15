@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveWebHotColdScrollDecision } from './resolveWebHotColdScrollDecision';
+import {
+    resolveWebColdListScrollTarget,
+    resolveWebHotColdScrollDecision,
+} from './resolveWebHotColdScrollDecision';
 
 describe('resolveWebHotColdScrollDecision', () => {
     it('scrolls to the cold index when the target is within cold items', () => {
@@ -14,5 +17,25 @@ describe('resolveWebHotColdScrollDecision', () => {
 
     it('pins to bottom when there are no cold items', () => {
         expect(resolveWebHotColdScrollDecision({ fullIndex: 0, coldCount: 0 })).toEqual({ kind: 'pin_to_bottom' });
+    });
+
+    it('maps every web scrollToIndex target through the cold-list data boundary', () => {
+        expect(resolveWebColdListScrollTarget({
+            fullIndex: 12,
+            coldCount: 5,
+            reason: 'prepend-recovery',
+        })).toEqual({ kind: 'cold', index: 4, fullIndex: 12, reason: 'prepend-recovery' });
+
+        expect(resolveWebColdListScrollTarget({
+            fullIndex: 1,
+            coldCount: 5,
+            reason: 'jump-to-seq',
+        })).toEqual({ kind: 'cold', index: 1, fullIndex: 1, reason: 'jump-to-seq' });
+
+        expect(resolveWebColdListScrollTarget({
+            fullIndex: 1,
+            coldCount: 0,
+            reason: 'prepend-recovery',
+        })).toEqual({ kind: 'pin_to_bottom', fullIndex: 1, reason: 'prepend-recovery' });
     });
 });

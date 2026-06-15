@@ -207,6 +207,12 @@ function withTurnId(turn: TranscriptTurn, id: string): TranscriptTurn {
  * turn's id; embedded tool-group child ids follow. When several previous turns merge into one
  * rebuilt turn, the bottom-most previously-rendered id wins — that is the key FlashList has on
  * screen. Fresh turns (no contained predecessor) keep `turn:<firstMessageId>` derivation.
+ *
+ * The same containment rule applies one level down to tool-group ids (plan N2c): group ids embed
+ * the first tool message id, so a prepend that extends a consecutive tool run upward would
+ * otherwise re-key the group (and every per-tool virtualization unit derived from it). A rebuilt
+ * `tool_calls` content that fully contains a previously-emitted group's tools keeps that group's
+ * id; merge collisions resolve to the bottom-most previously-rendered group id.
  */
 function applyStickyTurnIdsFromPreviousBuild(params: Readonly<{
     previousTurns: readonly TranscriptTurn[];
@@ -217,13 +223,55 @@ function applyStickyTurnIdsFromPreviousBuild(params: Readonly<{
 
     const previousTurnIndexByMessageId = new Map<string, number>();
     const previousTurnMessageCounts: number[] = [];
+    const previousGroupIndexByToolMessageId = new Map<string, number>();
+    const previousGroupToolCounts: number[] = [];
+    const previousGroupIds: string[] = [];
     params.previousTurns.forEach((previousTurn, previousIndex) => {
         const messageIds = collectTurnMessageIds(previousTurn);
         previousTurnMessageCounts.push(messageIds.length);
         for (const messageId of messageIds) {
             previousTurnIndexByMessageId.set(messageId, previousIndex);
         }
+        for (const content of previousTurn.content) {
+            if (content.kind !== 'tool_calls' || content.toolMessageIds.length === 0) continue;
+            const groupIndex = previousGroupIds.length;
+            previousGroupIds.push(content.id);
+            previousGroupToolCounts.push(content.toolMessageIds.length);
+            for (const toolMessageId of content.toolMessageIds) {
+                previousGroupIndexByToolMessageId.set(toolMessageId, groupIndex);
+            }
+        }
     });
+
+    const withStickyGroupIds = (turn: TranscriptTurn): TranscriptTurn => {
+        if (previousGroupIds.length === 0) return turn;
+        let didChange = false;
+        const content = turn.content.map((entry) => {
+            if (entry.kind !== 'tool_calls') return entry;
+            const containedToolCountByGroupIndex = new Map<number, number>();
+            for (const toolMessageId of entry.toolMessageIds) {
+                const groupIndex = previousGroupIndexByToolMessageId.get(toolMessageId);
+                if (groupIndex == null) continue;
+                containedToolCountByGroupIndex.set(
+                    groupIndex,
+                    (containedToolCountByGroupIndex.get(groupIndex) ?? 0) + 1,
+                );
+            }
+            let stickyGroupIndex: number | null = null;
+            for (const [groupIndex, containedToolCount] of containedToolCountByGroupIndex) {
+                if (containedToolCount !== previousGroupToolCounts[groupIndex]) continue;
+                if (stickyGroupIndex == null || groupIndex > stickyGroupIndex) {
+                    stickyGroupIndex = groupIndex;
+                }
+            }
+            if (stickyGroupIndex == null) return entry;
+            const stickyGroupId = previousGroupIds[stickyGroupIndex]!;
+            if (entry.id === stickyGroupId) return entry;
+            didChange = true;
+            return { ...entry, id: stickyGroupId };
+        });
+        return didChange ? { ...turn, content } : turn;
+    };
 
     return turns.map((turn) => {
         const containedMessageCountByPreviousIndex = new Map<number, number>();
@@ -243,8 +291,10 @@ function applyStickyTurnIdsFromPreviousBuild(params: Readonly<{
                 stickyPreviousIndex = previousIndex;
             }
         }
-        if (stickyPreviousIndex == null) return turn;
-        return withTurnId(turn, params.previousTurns[stickyPreviousIndex]!.id);
+        const stickyTurn = stickyPreviousIndex == null
+            ? turn
+            : withTurnId(turn, params.previousTurns[stickyPreviousIndex]!.id);
+        return withStickyGroupIds(stickyTurn);
     });
 }
 

@@ -419,6 +419,8 @@ describe('transcript viewport telemetry', () => {
             anchorCorrectionAttempt: 1,
             anchorCorrectionTargetOffsetY: 2048,
             anchorRestoreViewOffset: -64,
+            correctorAppliedDiffTotalPx: 2944.5,
+            correctorEventCount: 3,
             anchorMessageId: 'must-not-leak',
             timestampMs: 222,
         });
@@ -435,9 +437,124 @@ describe('transcript viewport telemetry', () => {
             anchorCorrectionAttempt: 1,
             anchorCorrectionTargetOffsetY: 2048,
             anchorRestoreViewOffset: -64,
+            correctorAppliedDiffTotalPx: 2944.5,
+            correctorEventCount: 3,
         });
         expect(telemetry.snapshot().events[0]).not.toHaveProperty('anchorMessageId');
         expect(telemetry.snapshot().events[0]?.sessionId).not.toBe('session-raw');
+    });
+
+    it('preserves closed web pagination and restore diagnostics without accepting row content', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record({
+            type: 'scroll-observed',
+            sessionId: 'session-raw',
+            platform: 'web',
+            listImplementation: 'flash_v2',
+            mode: 'user-unpinned',
+            reason: 'observed',
+            offsetY: 0,
+            layoutHeight: 100,
+            contentHeight: 120,
+            distanceFromBottom: 20,
+            trigger: 'edge-reached',
+            domScrollTop: 0,
+            domScrollHeight: 1200,
+            domClientHeight: 600,
+            flashListContentHeight: 120,
+            flashListLayoutHeight: 100,
+            scrollable: true,
+            paginationPhase: 'armed',
+            paginationSuspendedReasons: ['transaction-open', 'free-form transcript text'],
+            coldCount: 42,
+            hotCount: 3,
+            firstVisibleAnchorTestId: 'transcript-item-tool-group-footer:g1',
+            pendingWebPrependAnchorKind: 'stable',
+            pendingWebPrependAnchorId: 'transcript-anchor-tool-group-tool-1',
+            pendingWebPrependAnchorIndex: 39,
+            programmaticWebWrite: false,
+            text: 'transcript text must not leak',
+            commandOutput: 'secret output must not leak',
+            timestampMs: 222,
+        });
+
+        expect(telemetry.snapshot().events[0]).toMatchObject({
+            type: 'scroll-observed',
+            platform: 'web',
+            mode: 'user-unpinned',
+            reason: 'observed',
+            offsetY: 0,
+            trigger: 'edge-reached',
+            domScrollTop: 0,
+            domScrollHeight: 1200,
+            domClientHeight: 600,
+            flashListContentHeight: 120,
+            flashListLayoutHeight: 100,
+            scrollable: true,
+            paginationPhase: 'armed',
+            paginationSuspendedReasons: ['transaction-open'],
+            coldCount: 42,
+            hotCount: 3,
+            firstVisibleAnchorTestId: 'transcript-item-tool-group-footer:g1',
+            pendingWebPrependAnchorKind: 'stable',
+            pendingWebPrependAnchorId: 'transcript-anchor-tool-group-tool-1',
+            pendingWebPrependAnchorIndex: 39,
+            programmaticWebWrite: false,
+        });
+        expect(telemetry.snapshot().events[0]).not.toHaveProperty('text');
+        expect(telemetry.snapshot().events[0]).not.toHaveProperty('commandOutput');
+        expect(telemetry.snapshot().events[0]?.sessionId).not.toBe('session-raw');
+    });
+
+    it('preserves an empty web pagination suspended-reasons array as an explicit diagnostic', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record({
+            type: 'scroll-observed',
+            sessionId: 'session-raw',
+            platform: 'web',
+            listImplementation: 'flash_v2',
+            mode: 'user-unpinned',
+            reason: 'observed',
+            trigger: 'scroll',
+            domScrollTop: 240,
+            domScrollHeight: 1200,
+            domClientHeight: 600,
+            flashListContentHeight: 1180,
+            flashListLayoutHeight: 580,
+            scrollable: true,
+            distanceFromBottom: 360,
+            paginationPhase: 'idle',
+            paginationSuspendedReasons: [],
+            coldCount: 42,
+            hotCount: 0,
+            pendingWebPrependAnchorKind: 'none',
+            programmaticWebWrite: false,
+            timestampMs: 222,
+        });
+
+        expect(telemetry.snapshot().events[0]).toMatchObject({
+            paginationSuspendedReasons: [],
+        });
     });
 
     it('accepts transaction-outcome observation reasons', async () => {
@@ -562,6 +679,113 @@ describe('transcript viewport telemetry', () => {
         expect(snapshot.droppedCount).toBe(0);
     });
 
+    it('records native visible-window diagnostics for inverted flash_v2 traces', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record({
+            type: 'visible-window-observed',
+            sessionId: 'session-secret',
+            platform: 'ios',
+            listImplementation: 'flash_v2',
+            mode: 'follow-bottom',
+            orientation: 'inverted',
+            rawOffsetY: 0,
+            canonicalOffsetY: 1500,
+            offsetY: 1500,
+            distanceFromBottom: 0,
+            contentHeight: 2000,
+            layoutHeight: 500,
+            bottomFollowMode: 'following',
+            dragSessionTrusted: true,
+            nativeMomentumActive: false,
+            mvcpPolicy: 'disabled',
+            isAtRawBottom: true,
+            hasVisibleRows: true,
+            firstVisibleItemId: 'row:newest',
+            lastVisibleItemId: 'row:oldest',
+            blankAreaPx: 0,
+            visibleWindowSource: 'ref-compute',
+            blankAreaSource: 'none',
+            reason: 'observed',
+            timestampMs: 123,
+        });
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events).toHaveLength(1);
+        expect(snapshot.events[0]).toMatchObject({
+            type: 'visible-window-observed',
+            sessionId: expect.stringMatching(/^session:/),
+            platform: 'ios',
+            listImplementation: 'flash_v2',
+            mode: 'follow-bottom',
+            orientation: 'inverted',
+            rawOffsetY: 0,
+            canonicalOffsetY: 1500,
+            offsetY: 1500,
+            distanceFromBottom: 0,
+            contentHeight: 2000,
+            layoutHeight: 500,
+            bottomFollowMode: 'following',
+            dragSessionTrusted: true,
+            nativeMomentumActive: false,
+            mvcpPolicy: 'disabled',
+            isAtRawBottom: true,
+            hasVisibleRows: true,
+            firstVisibleItemId: 'row:newest',
+            lastVisibleItemId: 'row:oldest',
+            blankAreaPx: 0,
+            visibleWindowSource: 'ref-compute',
+            blankAreaSource: 'none',
+            reason: 'observed',
+        });
+        expect(snapshot.events[0]?.sessionId).not.toBe('session-secret');
+    });
+
+    it('omits invalid native diagnostic enum values without dropping the legacy event', async () => {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+
+        const telemetry = createTranscriptViewportTelemetry({
+            enabled: true,
+            now: () => 100,
+        }) as {
+            record: (event: unknown) => void;
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
+
+        telemetry.record(buildScrollWriteEvent({
+            orientation: 'SECRET_ORIENTATION',
+            bottomFollowMode: 'SECRET_MODE',
+            mvcpPolicy: 'SECRET_POLICY',
+            dragSessionTrusted: true,
+            nativeMomentumActive: true,
+            isAtRawBottom: false,
+            hasVisibleRows: false,
+        }));
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events).toHaveLength(1);
+        expect(snapshot.events[0]?.type).toBe('scroll-write');
+        expect(snapshot.events[0]).not.toHaveProperty('orientation');
+        expect(snapshot.events[0]).not.toHaveProperty('bottomFollowMode');
+        expect(snapshot.events[0]).not.toHaveProperty('mvcpPolicy');
+        expect(snapshot.events[0]).toMatchObject({
+            dragSessionTrusted: true,
+            nativeMomentumActive: true,
+            isAtRawBottom: false,
+            hasVisibleRows: false,
+        });
+    });
+
     it('drops unknown transaction-outcome lookalike reasons', async () => {
         const module = await loadTelemetryModule();
         const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
@@ -665,14 +889,18 @@ describe('transcript viewport telemetry', () => {
         expect(telemetry.snapshot()).toEqual({ events: [], droppedCount: 0 });
     });
 
-    it('does not expose the dev getter in production or while disabled', async () => {
+    it('exposes the dev getter while disabled but never in production', async () => {
         const module = await loadTelemetryModule();
         const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
         const installTranscriptViewportTelemetryGlobal = requireFunction(module, 'installTranscriptViewportTelemetryGlobal');
 
-        const disabled = createTranscriptViewportTelemetry({ enabled: false }) as unknown;
+        const disabled = createTranscriptViewportTelemetry({ enabled: false }) as {
+            snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+        };
         installTranscriptViewportTelemetryGlobal(disabled as never, { isDev: true } as never);
-        expect((globalThis as Record<string, unknown>)[GLOBAL_KEY]).toBeUndefined();
+        const getter = (globalThis as Record<string, unknown>)[GLOBAL_KEY];
+        expect(typeof getter).toBe('function');
+        expect((getter as () => ReturnType<typeof disabled.snapshot>)()).toEqual({ events: [], droppedCount: 0 });
 
         const production = createTranscriptViewportTelemetry({ enabled: true }) as unknown;
         installTranscriptViewportTelemetryGlobal(production as never, { isDev: false } as never);
@@ -779,5 +1007,214 @@ describe('transcript viewport telemetry', () => {
         expect(snapshot.events).toHaveLength(1);
         expect(snapshot.events[0]?.sessionId).toMatch(/^session:/);
         expect(snapshot.events[0]?.sessionId).not.toBe('session-two');
+    });
+});
+
+describe('transcript viewport telemetry — N1 evidence events', () => {
+    type EvidenceTelemetry = {
+        record: (event: unknown) => void;
+        snapshot: () => { events: Array<Record<string, unknown>>; droppedCount: number };
+    };
+
+    async function createEvidenceTelemetry(): Promise<EvidenceTelemetry> {
+        const module = await loadTelemetryModule();
+        const createTranscriptViewportTelemetry = requireFunction(module, 'createTranscriptViewportTelemetry');
+        return createTranscriptViewportTelemetry({ enabled: true, now: () => 100 }) as EvidenceTelemetry;
+    }
+
+    const commonFields = {
+        sessionId: 'session-raw',
+        platform: 'ios',
+        listImplementation: 'flash_v2',
+        mode: 'user-unpinned',
+        timestampMs: 1000,
+    };
+
+    it('accepts offset-correction events with typed action, source, and diff (N1.1)', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        const actions = [
+            { correctionAction: 'pause-set', correctionSource: 'scroll-to-index' },
+            { correctionAction: 'pause-cleared', correctionSource: 'initial-scroll-index' },
+            { correctionAction: 'correction-applied', correctionDiffPx: -412.5 },
+            { correctionAction: 'correction-skipped-paused', correctionDiffPx: 87 },
+            { correctionAction: 'correction-skipped-animation', correctionDiffPx: 12 },
+        ];
+        for (const fields of actions) {
+            telemetry.record({ type: 'offset-correction', ...commonFields, ...fields });
+        }
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events.map((event) => event.correctionAction)).toEqual(
+            actions.map((fields) => fields.correctionAction),
+        );
+        expect(snapshot.events[2]?.correctionDiffPx).toBe(-412.5);
+        expect(snapshot.events[0]?.correctionSource).toBe('scroll-to-index');
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('drops offset-correction events with free-form action or source', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        telemetry.record({ type: 'offset-correction', ...commonFields, correctionAction: 'user typed text' });
+        telemetry.record({ type: 'offset-correction', ...commonFields });
+        telemetry.record({
+            type: 'offset-correction',
+            ...commonFields,
+            correctionAction: 'pause-set',
+            correctionSource: 'something-else',
+        });
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events).toHaveLength(1);
+        expect(snapshot.events[0]).toMatchObject({ correctionAction: 'pause-set' });
+        expect(snapshot.events[0]).not.toHaveProperty('correctionSource');
+    });
+
+    it('accepts row-measured events with kind, delta, and viewport relation (N1.2)', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        telemetry.record({
+            type: 'row-measured',
+            ...commonFields,
+            rowId: 'turn-abc',
+            rowKind: 'turn:tool',
+            rowHeightPx: 1410,
+            rowPreviousHeightPx: 980,
+            rowDeltaPx: 430,
+            rowMeasurePhase: 'remeasure',
+            rowViewportRelation: 'above',
+            offsetY: 5230,
+            layoutHeight: 700,
+        });
+        telemetry.record({
+            type: 'row-measured',
+            ...commonFields,
+            rowId: 'msg-1',
+            rowKind: 'message:agent',
+            rowHeightPx: 220,
+            rowMeasurePhase: 'first',
+            rowViewportRelation: 'inside',
+        });
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events[0]).toMatchObject({
+            type: 'row-measured',
+            rowId: 'turn-abc',
+            rowKind: 'turn:tool',
+            rowHeightPx: 1410,
+            rowPreviousHeightPx: 980,
+            rowDeltaPx: 430,
+            rowMeasurePhase: 'remeasure',
+            rowViewportRelation: 'above',
+        });
+        expect(snapshot.events[1]).toMatchObject({
+            rowMeasurePhase: 'first',
+            rowViewportRelation: 'inside',
+        });
+        expect(snapshot.events[1]).not.toHaveProperty('rowDeltaPx');
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('accepts row-measured and row-mutated events for the per-unit tool-group row kinds (N2c)', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        const unitKinds = ['tool-group-header', 'tool-group-expand', 'tool-group-tool', 'tool-group-footer'] as const;
+        for (const rowKind of unitKinds) {
+            telemetry.record({
+                type: 'row-measured',
+                ...commonFields,
+                rowId: `toolCalls:turn:u1:t1#${rowKind}`,
+                rowKind,
+                rowHeightPx: 48,
+                rowMeasurePhase: 'first',
+                rowViewportRelation: 'inside',
+            });
+        }
+        telemetry.record({
+            type: 'row-mutated',
+            ...commonFields,
+            rowId: 'toolCalls:turn:u1:t1#header',
+            rowKind: 'tool-group-header',
+            rowContentCount: 1,
+            rowPreviousContentCount: 1,
+        });
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events.map((event) => event.rowKind)).toEqual([...unitKinds, 'tool-group-header']);
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('drops row-measured events missing required fields or carrying free-form kinds', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        telemetry.record({
+            type: 'row-measured',
+            ...commonFields,
+            rowKind: 'turn:tool',
+            rowHeightPx: 100,
+            rowMeasurePhase: 'first',
+        });
+        telemetry.record({
+            type: 'row-measured',
+            ...commonFields,
+            rowId: 'row-1',
+            rowKind: 'free form sensitive text',
+            rowHeightPx: 100,
+            rowMeasurePhase: 'first',
+        });
+        telemetry.record({
+            type: 'row-measured',
+            ...commonFields,
+            rowId: 'row-1',
+            rowKind: 'turn:tool',
+            rowMeasurePhase: 'first',
+        });
+        telemetry.record({
+            type: 'row-measured',
+            ...commonFields,
+            rowId: 'row-1',
+            rowKind: 'turn:tool',
+            rowHeightPx: 100,
+            rowMeasurePhase: 'whenever',
+        });
+
+        expect(telemetry.snapshot().events).toHaveLength(0);
+    });
+
+    it('accepts row-mutated events with content-count transitions (N1.3)', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        telemetry.record({
+            type: 'row-mutated',
+            ...commonFields,
+            rowId: 'turn-abc',
+            rowKind: 'turn:tool',
+            rowContentCount: 14,
+            rowPreviousContentCount: 9,
+            rowViewportRelation: 'inside',
+            freeFormNote: 'must-not-leak',
+        });
+
+        const snapshot = telemetry.snapshot();
+        expect(snapshot.events[0]).toMatchObject({
+            type: 'row-mutated',
+            rowId: 'turn-abc',
+            rowKind: 'turn:tool',
+            rowContentCount: 14,
+            rowPreviousContentCount: 9,
+            rowViewportRelation: 'inside',
+        });
+        expect(snapshot.events[0]).not.toHaveProperty('freeFormNote');
+        expect(snapshot.droppedCount).toBe(0);
+    });
+
+    it('drops row-mutated events missing identity fields', async () => {
+        const telemetry = await createEvidenceTelemetry();
+
+        telemetry.record({ type: 'row-mutated', ...commonFields, rowKind: 'turn:tool' });
+        telemetry.record({ type: 'row-mutated', ...commonFields, rowId: 'row-1' });
+
+        expect(telemetry.snapshot().events).toHaveLength(0);
     });
 });

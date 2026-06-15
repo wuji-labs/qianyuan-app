@@ -144,4 +144,44 @@ describe('resolveConnectedServiceUxDiagnosticPresentation', () => {
         expect(presentation?.bodyKey).toBe(`connectedServices.diagnostics.body.${code}`);
         expect(presentation?.statusKey).toBe(`connectedServices.diagnostics.status.${code}`);
     });
+
+    it.each([
+        'runtime_auth_recovery_superseded',
+        'runtime_auth_generation_stale',
+        'hot_apply_unavailable',
+        'app_server_unavailable',
+        'provider_account_identity_unverified',
+        'quota_snapshot_stale',
+        'quota_fetch_disabled',
+        'quota_fetch_backoff',
+        'auth_surface_weakly_verified',
+    ] as const)('maps new recovery diagnostic %s through the central presentation resolver', (code) => {
+        const presentation = resolveConnectedServiceUxDiagnosticPresentation({
+            code,
+            failurePhase: code === 'hot_apply_unavailable'
+                ? 'hot_apply'
+                : code === 'app_server_unavailable' || code === 'provider_account_identity_unverified' || code === 'auth_surface_weakly_verified'
+                    ? 'post_switch_verification'
+                    : 'runtime_auth_recovery',
+            source: code === 'hot_apply_unavailable'
+                ? 'manual_auth_switch'
+                : code === 'app_server_unavailable'
+                    ? 'transcript_switch_attempt'
+                    : 'runtime_auth_recovery',
+            agentId: 'codex',
+            retryable: code !== 'auth_surface_weakly_verified',
+            suggestedActions: [CONNECTED_SERVICE_UX_DIAGNOSTIC_ACTIONS.retry],
+            diagnostics: {
+                reason: code,
+            },
+        });
+
+        expect(presentation).toMatchObject({
+            code,
+            titleKey: `connectedServices.diagnostics.title.${code}`,
+            bodyKey: `connectedServices.diagnostics.body.${code}`,
+            statusKey: `connectedServices.diagnostics.status.${code}`,
+            actions: [expect.objectContaining({ kind: 'retry' })],
+        });
+    });
 });

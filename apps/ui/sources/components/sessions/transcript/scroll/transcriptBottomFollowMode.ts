@@ -2,6 +2,7 @@ export type TranscriptBottomFollowMode = 'following' | 'escaping' | 'released';
 
 export type TranscriptBottomFollowDragSession = Readonly<{
     latestDistanceFromBottom: number | null;
+    returnedToBottom?: boolean;
     sawAwayMovement: boolean;
     trusted: boolean;
 }>;
@@ -37,6 +38,7 @@ export function resolveTranscriptBottomFollowMode(
             return {
                 dragSession: {
                     latestDistanceFromBottom: null,
+                    returnedToBottom: false,
                     sawAwayMovement: false,
                     trusted: true,
                 },
@@ -49,6 +51,7 @@ export function resolveTranscriptBottomFollowMode(
                 distanceFromBottom > normalizeDistance(event.pinThresholdPx);
             const dragSession = {
                 latestDistanceFromBottom: distanceFromBottom,
+                returnedToBottom: state.dragSession?.returnedToBottom === true,
                 sawAwayMovement: (state.dragSession?.sawAwayMovement ?? false) || sawAwayMovement,
                 trusted: true,
             };
@@ -81,6 +84,7 @@ export function resolveTranscriptBottomFollowMode(
                 return {
                     dragSession: {
                         latestDistanceFromBottom: distanceFromBottom,
+                        returnedToBottom: nearBottom || state.dragSession.returnedToBottom === true,
                         sawAwayMovement: state.dragSession.sawAwayMovement,
                         trusted: true,
                     },
@@ -91,6 +95,7 @@ export function resolveTranscriptBottomFollowMode(
                 return {
                     dragSession: {
                         latestDistanceFromBottom: distanceFromBottom,
+                        returnedToBottom: nearBottom || state.dragSession?.returnedToBottom === true,
                         sawAwayMovement: state.dragSession?.sawAwayMovement ?? false,
                         trusted: true,
                     },
@@ -104,6 +109,9 @@ export function resolveTranscriptBottomFollowMode(
             return {
                 dragSession: {
                     latestDistanceFromBottom: normalizeDistance(event.distanceFromBottom),
+                    returnedToBottom:
+                        normalizeDistance(event.distanceFromBottom) <= normalizeDistance(event.pinThresholdPx) ||
+                        state.dragSession?.returnedToBottom === true,
                     sawAwayMovement: state.dragSession?.sawAwayMovement ?? false,
                     trusted: state.dragSession?.trusted ?? false,
                 },
@@ -118,27 +126,31 @@ export function resolveTranscriptBottomFollowMode(
                 typeof distanceFromBottom === 'number' &&
                 normalizeDistance(distanceFromBottom) <= normalizeDistance(event.pinThresholdPx);
             const sawAwayMovement = event.sawAwayMovement || (state.dragSession?.sawAwayMovement ?? false);
-            if ((state.mode === 'escaping' || state.mode === 'released') && nearBottom) {
+            const nextTrustedDragSession = {
+                latestDistanceFromBottom:
+                    typeof distanceFromBottom === 'number' ? normalizeDistance(distanceFromBottom) : null,
+                returnedToBottom: state.dragSession?.returnedToBottom === true,
+                sawAwayMovement,
+                trusted: state.dragSession?.trusted ?? true,
+            };
+            const confirmedReturnToBottom =
+                nearBottom &&
+                (!sawAwayMovement || state.dragSession?.returnedToBottom === true);
+            if ((state.mode === 'escaping' || state.mode === 'released') && confirmedReturnToBottom) {
                 // The fling's momentum may still be pending at finger-up (hard flicks have
                 // short finger travel): keep the trusted session open as the release
                 // attribution window until momentum-settle closes it (plan B9).
                 return {
                     dragSession: {
-                        latestDistanceFromBottom:
-                            typeof distanceFromBottom === 'number' ? normalizeDistance(distanceFromBottom) : null,
-                        sawAwayMovement,
-                        trusted: state.dragSession?.trusted ?? true,
+                        ...nextTrustedDragSession,
+                        returnedToBottom: true,
                     },
                     mode: 'following',
                 };
             }
-            if (state.mode === 'escaping') {
+            if (state.mode === 'escaping' || (state.mode === 'released' && sawAwayMovement)) {
                 return {
-                    dragSession: {
-                        latestDistanceFromBottom: typeof distanceFromBottom === 'number' ? normalizeDistance(distanceFromBottom) : null,
-                        sawAwayMovement,
-                        trusted: state.dragSession?.trusted ?? true,
-                    },
+                    dragSession: nextTrustedDragSession,
                     mode: 'released',
                 };
             }

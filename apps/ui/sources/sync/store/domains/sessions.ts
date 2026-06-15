@@ -12,6 +12,7 @@ import {
     areSessionListRenderablesEqual,
     buildSessionListRenderableFromSession,
     didSessionListRenderableAttentionPromotionFieldsChange,
+    didSessionListRenderableEmbeddedListRowFieldsChange,
     didSessionListRenderableProjectGroupingFieldsChange,
     didSessionListRenderableReachabilityPeerFieldsChange,
     isSessionListRenderableWarmCacheProgressOnlyChange,
@@ -88,6 +89,7 @@ import {
     planSessionListRenderableMergeCommit,
     planSessionListRenderablePatchesCommit,
     planSessionListRenderableReplacementCommit,
+    refreshSessionListViewDataRowsForRenderables,
     shouldRebuildOnSessionPlacementFieldsChange,
 } from './sessionListRenderableCommit';
 import { clearAgentInputLocalUiStateForSession } from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
@@ -643,6 +645,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             let didImmediateWarmCacheRelevantRenderableChange = false;
             let didDeferredWarmCacheRelevantRenderableChange = false;
             let listViewFieldChangeCount = 0;
+            const listViewRowRefreshSessionIds: string[] = [];
             let attentionPromotionFieldChangeCount = 0;
             const rebuildOnAttentionPromotionFieldsChange =
                 shouldRebuildOnSessionPlacementFieldsChange(state.settings);
@@ -937,6 +940,12 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     if (didListViewFieldsChange) {
                         listViewFieldChangeCount += 1;
                     }
+                    if (
+                        !didListViewFieldsChange
+                        && didSessionListRenderableEmbeddedListRowFieldsChange(previousRenderable, mergedRenderable)
+                    ) {
+                        listViewRowRefreshSessionIds.push(session.id);
+                    }
                     if (didAttentionPromotionFieldsChange) {
                         attentionPromotionFieldChangeCount += 1;
                     }
@@ -1077,7 +1086,11 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                     () => ({ renderables: Object.keys(mergedRenderables).length }),
                     () => buildSessionListViewDataForState(nextStateBase),
                 )
-                : state.sessionListViewData;
+                : refreshSessionListViewDataRowsForRenderables({
+                    sessionListViewData: state.sessionListViewData,
+                    renderables: mergedRenderables,
+                    sessionIds: listViewRowRefreshSessionIds,
+                });
 
             if (needsProjectManagerUpdate) {
                 measureSessionApplyPhase(
@@ -1101,6 +1114,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 changedRenderables: changedRenderableCount,
                 reconciledSessionMessages: reconciledSessionMessageCount,
                 listRebuild: needsSessionListViewDataRebuild ? 1 : 0,
+                listRowRefreshes: listViewRowRefreshSessionIds.length,
                 listViewFieldChanges: listViewFieldChangeCount,
                 attentionPromotionFieldChanges: attentionPromotionFieldChangeCount,
                 projectManagerUpdate: needsProjectManagerUpdate ? 1 : 0,
@@ -1111,7 +1125,7 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
                 ...nextStateBase,
                 sessionsData: null,
                 sessionListViewData,
-                sessionListViewDataByServerId: needsSessionListViewDataRebuild && sessionListViewData
+                sessionListViewDataByServerId: (needsSessionListViewDataRebuild || sessionListViewData !== state.sessionListViewData) && sessionListViewData
                     ? setActiveServerSessionListCache(
                         state.sessionListViewDataByServerId,
                         sessionListViewData,

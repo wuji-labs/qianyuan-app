@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-    createTestTranscriptItemHeightCache,
-    type TranscriptItemHeightValiditySignature,
-} from './transcriptItemHeightCache';
+import { createTestTranscriptMeasurementReconciler } from './transcriptMeasurementReconciler';
+import type { TranscriptItemHeightValiditySignature } from './transcriptItemHeightCache';
 import { resolveTranscriptRowShellHeight } from './resolveTranscriptRowShellHeight';
 
 function stableSignature(
@@ -11,7 +9,7 @@ function stableSignature(
 ): TranscriptItemHeightValiditySignature {
     return {
         itemId: 'message-1',
-        kind: 'agent-text',
+        kind: 'message:agent',
         structuralKey: 'message-1:content-v1',
         widthBucket: 'width:400',
         fontScaleKey: 'font:1',
@@ -24,52 +22,53 @@ function stableSignature(
 }
 
 describe('resolveTranscriptRowShellHeight', () => {
-    it('returns a minHeight row-shell hint for a valid cached height', () => {
-        const cache = createTestTranscriptItemHeightCache();
+    it('returns an exact reservation for a valid cached stable height', () => {
+        const reconciler = createTestTranscriptMeasurementReconciler();
         const signature = stableSignature();
-        cache.set(signature, { heightPx: 184 });
+        reconciler.recordMeasuredHeight({ signature, heightPx: 184 });
 
-        const hint = resolveTranscriptRowShellHeight({ cache, signature });
+        const reservation = resolveTranscriptRowShellHeight({ reconciler, signature });
 
-        expect(hint).toEqual({ minHeight: 184 });
+        expect(reservation).toEqual({ kind: 'exact', minHeight: 184 });
     });
 
     it('does not expose FlashList estimate props', () => {
-        const cache = createTestTranscriptItemHeightCache();
+        const reconciler = createTestTranscriptMeasurementReconciler();
         const signature = stableSignature();
-        cache.set(signature, { heightPx: 184 });
+        reconciler.recordMeasuredHeight({ signature, heightPx: 184 });
 
-        const hint = resolveTranscriptRowShellHeight({ cache, signature });
+        const reservation = resolveTranscriptRowShellHeight({ reconciler, signature });
 
-        expect(hint).not.toHaveProperty('estimatedItemSize');
-        expect(hint).not.toHaveProperty('overrideItemLayout');
+        expect(reservation).not.toHaveProperty('estimatedItemSize');
+        expect(reservation).not.toHaveProperty('overrideItemLayout');
     });
 
-    it('returns undefined for a stale signature', () => {
-        const cache = createTestTranscriptItemHeightCache();
-        cache.set(stableSignature({ structuralKey: 'message-1:content-v1' }), { heightPx: 184 });
-
-        expect(
-            resolveTranscriptRowShellHeight({
-                cache,
-                signature: stableSignature({ structuralKey: 'message-1:content-v2' }),
-            }),
-        ).toBeUndefined();
-    });
-
-    it('returns undefined for unstable rows', () => {
-        const cache = createTestTranscriptItemHeightCache();
+    it('serves a monotonic floor reservation for a streaming row', () => {
+        const reconciler = createTestTranscriptMeasurementReconciler();
         const signature = stableSignature({ rowState: 'streaming' });
-        cache.set(signature, { heightPx: 184 });
+        reconciler.recordMeasuredHeight({ signature, heightPx: 184 });
 
-        expect(resolveTranscriptRowShellHeight({ cache, signature })).toBeUndefined();
+        expect(resolveTranscriptRowShellHeight({ reconciler, signature })).toEqual({ kind: 'floor', minHeight: 184 });
     });
 
-    it('returns undefined for invalid cached heights', () => {
-        const cache = createTestTranscriptItemHeightCache();
-        const signature = stableSignature();
-        cache.set(signature, { heightPx: 0 });
+    it('never serves a stale EXACT height when the stable content revision changes', () => {
+        const reconciler = createTestTranscriptMeasurementReconciler();
+        reconciler.recordMeasuredHeight({ signature: stableSignature({ structuralKey: 'message-1:content-v1' }), heightPx: 184 });
 
-        expect(resolveTranscriptRowShellHeight({ cache, signature })).toBeUndefined();
+        const reservation = resolveTranscriptRowShellHeight({
+            reconciler,
+            signature: stableSignature({ structuralKey: 'message-1:content-v2' }),
+        });
+
+        // The exact cache misses on a content change; a floor may still be served, but never a
+        // stale `exact` height that would compete with FlashList's authoritative re-measure.
+        expect(reservation?.kind).not.toBe('exact');
+    });
+
+    it('returns undefined for an unknown streaming row with no sample', () => {
+        const reconciler = createTestTranscriptMeasurementReconciler();
+        const signature = stableSignature({ rowState: 'streaming' });
+
+        expect(resolveTranscriptRowShellHeight({ reconciler, signature })).toBeUndefined();
     });
 });

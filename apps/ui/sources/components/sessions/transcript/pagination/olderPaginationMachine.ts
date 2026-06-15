@@ -11,8 +11,11 @@
  * - exactly one load in flight (`loading` phase is single-entry),
  * - arming requires an observed threshold EXIT -> ENTER transition; missing or
  *   invalid layout metrics count as OUTSIDE the threshold,
- * - loads are suspended while the offset is <= 0, while a viewport transaction
- *   is open, or while the initial fill is not done,
+ * - loads are suspended while the offset is < 0, while passive scroll reports
+ *   exact zero, while a viewport transaction is open, or while the initial fill
+ *   is not done,
+ * - explicit edge-reached triggers may use exact zero once so web callbacks that
+ *   fire only at `scrollTop === 0` do not starve,
  * - a caller-timed cooldown follows every load (and every error) before any
  *   re-arm,
  * - hasMore=false is terminal until `reset` (session change).
@@ -23,6 +26,8 @@
 export type OlderPaginationPhase = 'idle' | 'armed' | 'loading' | 'cooldown';
 
 export type OlderPaginationSuspendReason = 'negative-offset' | 'transaction-open' | 'fill-not-done';
+
+export type OlderPaginationScrollTrigger = 'scroll' | 'edge-reached';
 
 export type OlderPaginationState = Readonly<{
     phase: OlderPaginationPhase;
@@ -42,6 +47,7 @@ export type OlderPaginationScrollObservation = Readonly<{
     offsetY: number;
     thresholdPx: number;
     scrollable: boolean;
+    trigger?: OlderPaginationScrollTrigger;
 }>;
 
 export type OlderPaginationEvent =
@@ -89,19 +95,30 @@ function reduceScrollObserved(
         Number.isFinite(observation.offsetY) &&
         Number.isFinite(observation.thresholdPx) &&
         observation.thresholdPx > 0;
+    const trigger = observation.trigger ?? 'scroll';
+    const allowsExactEdge = trigger === 'edge-reached' && observation.offsetY === 0;
     const inside = validMetrics && observation.offsetY <= observation.thresholdPx;
-    const offsetNonPositive = !Number.isFinite(observation.offsetY) || observation.offsetY <= 0;
+    const offsetSuspended =
+        !Number.isFinite(observation.offsetY) ||
+        observation.offsetY < 0 ||
+        (observation.offsetY === 0 && !allowsExactEdge);
 
-    const suspendedReasons = withSuspendedReason(state.suspendedReasons, 'negative-offset', offsetNonPositive);
+    const suspendedReasons = withSuspendedReason(state.suspendedReasons, 'negative-offset', offsetSuspended);
     const exited = state.insideThreshold && !inside;
     const entered = !state.insideThreshold && inside;
-    const rearmEligible = state.rearmEligible || exited;
+    const exactEdgeRetryEligible =
+        allowsExactEdge &&
+        inside &&
+        state.insideThreshold &&
+        state.hasMore &&
+        (state.phase === 'cooldown' || state.phase === 'idle');
+    const rearmEligible = state.rearmEligible || exited || exactEdgeRetryEligible;
 
     let phase = state.phase;
     if (phase === 'armed' && !inside) {
         phase = 'idle';
     }
-    if (phase === 'idle' && entered && rearmEligible && state.hasMore) {
+    if (phase === 'idle' && (entered || exactEdgeRetryEligible) && rearmEligible && state.hasMore) {
         phase = 'armed';
     }
 

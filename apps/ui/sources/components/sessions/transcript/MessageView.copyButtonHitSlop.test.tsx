@@ -8,7 +8,7 @@ import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const platformState = vi.hoisted(() => ({
-    os: 'ios' as 'ios' | 'android',
+    os: 'ios' as 'ios' | 'android' | 'web',
 }));
 
 installMessageViewCommonModuleMocks({
@@ -159,6 +159,7 @@ describe('MessageView (copy button hitSlop)', () => {
     it.each([
         ['ios', true],
         ['android', true],
+        ['web', true],
     ] as const)(
         'sets transcript markdown selectability on %s to %s',
         async (platformOS, expectedSelectable) => {

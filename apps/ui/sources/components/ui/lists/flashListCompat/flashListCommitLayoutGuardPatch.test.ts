@@ -62,3 +62,47 @@ describe('flash-list commitLayout guard patch', () => {
     expect(distRecyclerView).toContain('hasCommittedOnceRef');
   });
 });
+
+describe('flash-list offset-correction hook patch (N1.1 evidence)', () => {
+  it('keeps the patch file carrying the offset-correction hook for the installed version', () => {
+    const flashListRoot = resolveFlashListRoot();
+    const pkg = JSON.parse(readFileSync(join(flashListRoot, 'package.json'), 'utf8')) as {
+      version: string;
+    };
+    const patchPath = resolve(
+      __dirname,
+      '../../../../../patches',
+      `@shopify+flash-list+${pkg.version}.patch`,
+    );
+    expect(existsSync(patchPath), `expected patch file at ${patchPath}`).toBe(true);
+
+    const patchContent = readFileSync(patchPath, 'utf8');
+    expect(patchContent).toContain('HAPPIER PATCH(flash-list-offset-correction-hook)');
+    expect(patchContent).toContain('dist/recyclerview/hooks/useRecyclerViewController.js');
+  });
+
+  it('ships an installed useRecyclerViewController with corrector observability applied', () => {
+    const flashListRoot = resolveFlashListRoot();
+    const distController = readFileSync(
+      join(flashListRoot, 'dist/recyclerview/hooks/useRecyclerViewController.js'),
+      'utf8',
+    );
+
+    // Marker + the global slot the app-side bridge owns — always-on since N2d.1: the prepend
+    // transaction's corrector-deference signal rides this hook in production
+    // (sources/components/sessions/transcript/scroll/flashListOffsetCorrectionHook.ts).
+    expect(distController).toContain('HAPPIER PATCH(flash-list-offset-correction-hook)');
+    expect(distController).toContain('__HAPPIER_FLASHLIST_OFFSET_CORRECTION_HOOK__');
+
+    // Every pauseOffsetCorrection transition and every nonzero correction decision must notify:
+    // pause-set/pause-cleared from both imperative-scroll sites, and the applied/skipped split
+    // that quantifies D2 (self-inflicted pause overlap).
+    expect(distController).toContain('"pause-set"');
+    expect(distController).toContain('"pause-cleared"');
+    expect(distController).toContain('"scroll-to-index"');
+    expect(distController).toContain('"initial-scroll-index"');
+    expect(distController).toContain('"correction-applied"');
+    expect(distController).toContain('"correction-skipped-paused"');
+    expect(distController).toContain('"correction-skipped-animation"');
+  });
+});

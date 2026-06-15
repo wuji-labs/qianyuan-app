@@ -1,3 +1,5 @@
+import type { TranscriptListOrientation } from '../listOrientation';
+
 export type NativePassiveBottomDriftNoiseFloorRequest = Readonly<{
     configuredBottomDistanceNoiseFloorPx: number | null | undefined;
     pinThresholdPx: number;
@@ -9,6 +11,7 @@ export type NativeInvalidScrollObservationRequest = Readonly<{
     isWeb: boolean;
     layoutHeight: number;
     offsetY: number;
+    orientation: TranscriptListOrientation;
 }>;
 
 export type NativePassiveUnpinnedMovementRequest = Readonly<{
@@ -56,6 +59,7 @@ export function shouldIgnoreNativeInvalidScrollObservation(request: NativeInvali
     if (request.isWeb) return false;
     if (!Number.isFinite(request.offsetY)) return true;
     if (!Number.isFinite(request.distanceFromBottom)) return true;
+    if (request.orientation === 'inverted' && request.offsetY < 0) return true;
     if (request.offsetY >= 0) return false;
 
     const layoutHeight = typeof request.layoutHeight === 'number' && Number.isFinite(request.layoutHeight)

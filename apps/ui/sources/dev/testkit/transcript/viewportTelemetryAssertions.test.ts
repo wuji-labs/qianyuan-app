@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { TranscriptViewportTelemetryEvent } from '@/components/sessions/transcript/scroll/transcriptViewportTelemetry';
 
 import {
+    assertWebWregDiagnostics,
     assertNoSilentBails,
     assertOneOwnerPerPhase,
     assertScenario,
@@ -301,6 +302,57 @@ describe('assertScenario warm-reopen (invariant B)', () => {
 
         expect(() => assertScenario(events, 'warm-reopen')).toThrow(/confirm/i);
     });
+
+    it('passes a write-free anchored entry: slice decision pair with zero entry writes (N2b)', () => {
+        const events = [
+            decision({ reason: 'pending', mode: 'restore-anchor', timestampMs: 10 }),
+            decision({ reason: 'restored', mode: 'restore-anchor', timestampMs: 90 }),
+            observed({ offsetY: 0, timestampMs: 120 }),
+        ];
+
+        expect(() => assertScenario(events, 'warm-reopen')).not.toThrow();
+    });
+
+    it('fails when an anchored entry issues ANY entry write (N2b: anchored entry = 0 writes)', () => {
+        const events = [
+            decision({ reason: 'pending', mode: 'restore-anchor', timestampMs: 10 }),
+            scrollWrite({ reason: 'entry-restore', mode: 'restore-distance', targetOffsetY: 2123, timestampMs: 40 }),
+            decision({ reason: 'restored', mode: 'restore-anchor', timestampMs: 90 }),
+            observed({ offsetY: 2123, timestampMs: 120 }),
+        ];
+
+        expect(() => assertScenario(events, 'warm-reopen')).toThrow(/anchored entry/i);
+    });
+
+    it('fails any anchor-mode entry write outright (the slice path replaced them)', () => {
+        const events = [
+            scrollWrite({ reason: 'entry-restore', mode: 'restore-anchor', targetOffsetY: 2123, timestampMs: 50 }),
+            observed({ offsetY: 2123, timestampMs: 120 }),
+        ];
+
+        expect(() => assertScenario(events, 'warm-reopen')).toThrow(/anchored entry/i);
+    });
+
+    it('keeps the WEB anchor-mode entry write path intact (slice is native-only)', () => {
+        const events = [
+            decision({ reason: 'pending', mode: 'restore-anchor', platform: 'web', timestampMs: 10 }),
+            scrollWrite({ reason: 'entry-restore', mode: 'restore-anchor', platform: 'web', writer: 'web-dom-restore', targetOffsetY: 2123, timestampMs: 40 }),
+            decision({ reason: 'restored', mode: 'restore-anchor', platform: 'web', timestampMs: 90 }),
+            observed({ offsetY: 2123, platform: 'web', timestampMs: 120 }),
+        ];
+
+        expect(() => assertScenario(events, 'warm-reopen')).not.toThrow();
+    });
+
+    it('keeps the degraded distance budget: missing-anchor lookups followed by one distance write', () => {
+        const events = [
+            decision({ reason: 'missing-anchor', mode: 'restore-anchor', timestampMs: 10 }),
+            scrollWrite({ reason: 'entry-restore', mode: 'restore-distance', targetOffsetY: 2123, timestampMs: 60 }),
+            observed({ offsetY: 2123, timestampMs: 120 }),
+        ];
+
+        expect(() => assertScenario(events, 'warm-reopen')).not.toThrow();
+    });
 });
 
 describe('assertScenario prepend (invariant D)', () => {
@@ -437,5 +489,86 @@ describe('assertScenario owner write-target spread (invariant G)', () => {
         ];
 
         expect(() => assertScenario(events, 'warm-reopen')).toThrow(/distinct targets=3/);
+    });
+});
+
+describe('assertWebWregDiagnostics', () => {
+    it('fails when a web pagination trace omits required WREG diagnostics', () => {
+        const events: TranscriptViewportTelemetryEvent[] = [
+            observed({
+                platform: 'web',
+                listImplementation: 'flash_v2',
+                mode: 'user-unpinned',
+                reason: 'observed',
+                trigger: 'edge-reached',
+                domScrollTop: 0,
+                domScrollHeight: 1200,
+                // Missing domClientHeight, FlashList metrics, scrollability,
+                // pagination diagnostics, hot/cold counts, pending anchor,
+                // and programmatic-write evidence must block WREG.7.
+                timestampMs: 10,
+            }),
+        ];
+
+        expect(() => assertWebWregDiagnostics(events)).toThrow(/domClientHeight[\s\S]*paginationPhase[\s\S]*programmaticWebWrite/);
+    });
+
+    it('passes when web pagination and restore events carry the complete WREG diagnostic set', () => {
+        const events: TranscriptViewportTelemetryEvent[] = [
+            observed({
+                platform: 'web',
+                listImplementation: 'flash_v2',
+                mode: 'user-unpinned',
+                reason: 'observed',
+                offsetY: 0,
+                layoutHeight: 600,
+                contentHeight: 1200,
+                distanceFromBottom: 600,
+                trigger: 'edge-reached',
+                domScrollTop: 0,
+                domScrollHeight: 1200,
+                domClientHeight: 600,
+                flashListContentHeight: 1180,
+                flashListLayoutHeight: 580,
+                scrollable: true,
+                paginationPhase: 'armed',
+                paginationSuspendedReasons: [],
+                coldCount: 42,
+                hotCount: 3,
+                firstVisibleAnchorTestId: 'transcript-item-turn-1',
+                pendingWebPrependAnchorKind: 'none',
+                programmaticWebWrite: false,
+                timestampMs: 10,
+            }),
+            decision({
+                platform: 'web',
+                listImplementation: 'flash_v2',
+                mode: 'restore-anchor',
+                reason: 'restored',
+                trigger: 'prepend-restore',
+                offsetY: 180,
+                layoutHeight: 600,
+                contentHeight: 1600,
+                distanceFromBottom: 820,
+                domScrollTop: 180,
+                domScrollHeight: 1600,
+                domClientHeight: 600,
+                flashListContentHeight: 1580,
+                flashListLayoutHeight: 580,
+                scrollable: true,
+                paginationPhase: 'idle',
+                paginationSuspendedReasons: [],
+                coldCount: 48,
+                hotCount: 3,
+                firstVisibleAnchorTestId: 'transcript-item-turn-1',
+                pendingWebPrependAnchorKind: 'stable',
+                pendingWebPrependAnchorId: 'transcript-anchor-message-m1',
+                pendingWebPrependAnchorIndex: 2,
+                programmaticWebWrite: true,
+                timestampMs: 40,
+            }),
+        ];
+
+        expect(() => assertWebWregDiagnostics(events)).not.toThrow();
     });
 });

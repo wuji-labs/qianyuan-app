@@ -97,6 +97,53 @@ describe('resolveTranscriptJumpSeqIndex', () => {
         })).toBe(2);
     });
 
+    describe('tool-group unit rows (N2c)', () => {
+        // Rule implemented: a `tool-group-tool` unit resolves its OWN seq (item.seq first,
+        // resolver fallback); header/expand/footer caps resolve NO seqs, so a jump to a
+        // tool hidden behind the collapsed preview lands on the nearest loaded seq —
+        // an adjacent row of the same group.
+        const groupId = 'toolCalls:turn:b:msg-2400-tool';
+        const unitWindowItems = [
+            { id: 'msg:msg-2300', kind: 'message', messageId: 'msg-2300' },
+            { id: `${groupId}#header`, kind: 'tool-group-header', toolMessageIds: ['msg-2400-tool', 'msg-2500'] },
+            { id: `${groupId}#expand`, kind: 'tool-group-expand', toolMessageIds: ['msg-2400-tool', 'msg-2500'] },
+            { id: `${groupId}#tool:msg-2500`, kind: 'tool-group-tool', toolMessageId: 'msg-2500', seq: 2500 },
+            { id: `${groupId}#footer`, kind: 'tool-group-footer', toolMessageIds: ['msg-2400-tool', 'msg-2500'] },
+        ] as const;
+
+        it('resolves a tool unit by its own item seq', () => {
+            expect(resolveTranscriptJumpSeqIndex({
+                targetSeq: 2500,
+                items: unitWindowItems,
+                resolveSeqForMessageId,
+                hasMoreOlder: true,
+            })).toBe(3);
+        });
+
+        it('resolves a tool unit through the seq resolver when the item seq is absent', () => {
+            const items = [
+                { id: `${groupId}#tool:msg-2400-tool`, kind: 'tool-group-tool', toolMessageId: 'msg-2400-tool' },
+            ] as const;
+            expect(resolveTranscriptJumpSeqIndex({
+                targetSeq: 2401,
+                items,
+                resolveSeqForMessageId,
+                hasMoreOlder: true,
+            })).toBe(0);
+        });
+
+        it('lands a hidden collapsed tool on the nearest loaded seq instead of a cap row', () => {
+            // msg-2400-tool (seq 2401) has no own row: nearest-next loaded seq is the
+            // visible tail tool at index 3.
+            expect(resolveTranscriptJumpSeqIndex({
+                targetSeq: 2401,
+                items: unitWindowItems,
+                resolveSeqForMessageId,
+                hasMoreOlder: false,
+            })).toBe(3);
+        });
+    });
+
     it('returns null when nothing is resolvable yet', () => {
         expect(resolveTranscriptJumpSeqIndex({
             targetSeq: 10,

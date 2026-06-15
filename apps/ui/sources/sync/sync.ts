@@ -33,6 +33,7 @@ import {
     type SessionMessagesPaginationState,
 } from '@/sync/runtime/sessionMessagesPagination';
 import {
+    acknowledgeStaleTranscriptRepair,
     clearDeferredTranscriptStateForSession,
     createDeferredTranscriptState,
     hasStaleTranscriptMarkers,
@@ -40,6 +41,8 @@ import {
     markTranscriptDeferred,
     markTranscriptStale,
     readDeferredTranscriptDurableSeq,
+    readStaleTranscriptMessageIds,
+    readStaleTranscriptMinSeq,
     type DeferredTranscriptMarker,
     type DeferredTranscriptState,
 } from '@/sync/domains/session/realtime/deferredTranscriptState';
@@ -74,6 +77,13 @@ import {
     loadPendingAccountSettings,
     savePendingAccountSettings,
 } from './domains/state/accountSettingsPersistence';
+import {
+    deletePersistedSessionViewport,
+    loadPersistedSessionViewports,
+    upsertPersistedSessionViewport,
+} from './domains/state/sessionViewportPersistence';
+import { sessionViewportStorageKey } from './domains/state/sessionLocalStateKeys';
+import { getActiveServerAccountScope } from './domains/scope/activeServerAccountScope';
 import {
     areAccountSettingsScopesEqual,
     createAccountSettingsScope,
@@ -224,6 +234,7 @@ import {
     syncReliabilityTelemetry,
 } from '@/sync/runtime/syncReliabilityTelemetry';
 import { decideMessageCatchUpPolicy } from '@/sync/runtime/orchestration/messageCatchUpPolicy';
+import { resolveSessionLiveConsumption } from '@/sync/runtime/sessionLiveConsumption';
 import {
     isVersionSupported,
     MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION,
@@ -331,6 +342,8 @@ export type SessionViewportAnchorKind = 'message' | 'toolGroup' | 'item';
 export type SessionViewportAnchorSnapshot = Readonly<{
     kind: SessionViewportAnchorKind;
     messageId?: string | null;
+    /** Message seq stamped at persistence time; present on hydrated anchors (identity-first restore). */
+    seq?: number | null;
     itemId: string;
     itemOffsetPx: number;
     capturedAtMs: number;
@@ -697,6 +710,14 @@ class Sync {
       private directSessionHasMoreOlderBySessionId = new Map<string, boolean>();
       private directSessionTailCursorBySessionId = new Map<string, string | null>();
       private sessionViewport = new Map<string, SessionViewportSnapshot>();
+      private sessionViewportHydratedStorageKey: string | null = null;
+      /**
+       * Over-approximate set of sessionIds with a persisted viewport record,
+       * so hot-path live-tail marks skip the storage read when nothing can
+       * exist. Cap-eviction may leave stale ids; deleting an absent record
+       * is a no-op, so over-approximation stays correct.
+       */
+      private persistedSessionViewportIds = new Set<string>();
       private deferredForwardLoadingSessions = new Set<string>();
       private sessionDataKeys = new Map<string, Uint8Array>(); // Store session data encryption keys internally
       private sessionDataKeyEnvelopes = new Map<string, string>(); // Track wrapped DEK envelopes so unchanged keys can be reused safely
@@ -1538,6 +1559,9 @@ class Sync {
         this.sessionMessagesPaginationSupportedByKey.clear();
         this.directSessionTailCursorBySessionId.clear();
         this.sessionViewport.clear();
+        // Re-hydrate persisted viewport anchors for whichever scope becomes
+        // active next; persisted records themselves are scope-keyed and survive.
+        this.sessionViewportHydratedStorageKey = null;
         this.sessionByIdHydrationInFlight.clear();
         clearActiveViewingSessionsForServerScopeReset();
         clearMountedSessionRealtimeScmConsumerScopes();
@@ -1676,6 +1700,7 @@ class Sync {
 
 
         onSessionVisible = (sessionId: string) => {
+            this.ensureSessionViewportHydrated();
             const prevViewport = this.sessionViewport.get(sessionId);
             if (prevViewport) {
                 this.sessionViewport.set(sessionId, { ...prevViewport, lastUpdatedAt: Date.now() });
@@ -1683,8 +1708,17 @@ class Sync {
                 this.markSessionLiveTailIntent(sessionId);
             }
             if (hasStaleTranscriptMarkers(this.deferredTranscriptState, sessionId)) {
-                this.resetSessionTranscriptState(sessionId);
-                this.deferredTranscriptState = clearDeferredTranscriptStateForSession(this.deferredTranscriptState, sessionId);
+                // C6/D2a: a row was edited while hidden. Refetch only the stale region and merge
+                // it in place (applyMessages upserts) instead of wiping the whole transcript —
+                // the previous full reset discarded all paginated older history to repair an edit.
+                const staleMinSeq = readStaleTranscriptMinSeq(this.deferredTranscriptState, sessionId);
+                const staleMessageIds = readStaleTranscriptMessageIds(this.deferredTranscriptState, sessionId);
+                fireAndForget(this.refetchStaleTranscriptRegion(sessionId, {
+                    minSeq: staleMinSeq,
+                    messageIds: staleMessageIds,
+                }), {
+                    tag: 'Sync.onSessionVisible.staleRefetch',
+                });
             }
             if (hasDeferredSessionStateHydration(this.deferredSessionStateHydrationState, sessionId)) {
                 this.deferredSessionStateHydrationState = clearDeferredSessionStateHydration(
@@ -1696,6 +1730,11 @@ class Sync {
                 });
             }
             this.getOrCreateMessagesSync(sessionId).invalidateCoalesced();
+
+            // C6/D3: reopening a session is a reactive, list-independent bottom arrival. Drain any
+            // deferred-newer backlog here so newer-message catch-up never stalls waiting for a
+            // ChatList scroll event.
+            this.maybeDrainDeferredNewerMessages(sessionId, { isPinned: true, distanceFromBottomPx: 0 });
 
             // Notify voice assistant about session visibility
             const session = storage.getState().sessions[sessionId];
@@ -3456,12 +3495,18 @@ class Sync {
               concurrencyLimit
           );
 
-          // Catch up transcripts only for sessions that are already loaded locally.
+          // Catch up transcripts only for sessions that are already loaded locally AND are live
+          // content consumers right now. The catch-up policy already no-ops for hidden
+          // non-consumers (see fetchMessages); this filter just avoids enqueueing idle
+          // InvalidateSync units for every loaded-but-hidden session on each reconnect sweep.
           const loadedSessionIds: string[] = [];
           try {
               const sessions = storage.getState().sessionMessages;
               for (const sessionId of Object.keys(sessions)) {
-                  if (sessions[sessionId]?.isLoaded === true) {
+                  if (
+                      sessions[sessionId]?.isLoaded === true
+                      && resolveSessionLiveConsumption(sessionId).isFullContentConsumer
+                  ) {
                       loadedSessionIds.push(sessionId);
                   }
               }
@@ -4112,7 +4157,10 @@ class Sync {
 
             const decision = decideMessageCatchUpPolicy({
                 isForeground: this.isForeground && !this.pauseController.isPaused(),
-                isSessionVisible: true,
+                // Gate catch-up on the REAL live-content-consumer signal (visible OR voice/SCM
+                // consumer), read at decision time — the same fan-out realtime routing consumes.
+                // Hardcoding `true` here ran destructive off-screen resets on every reconnect.
+                isSessionVisible: resolveSessionLiveConsumption(sessionId).isFullContentConsumer,
                 isPinned,
                 materializedMaxSeq: afterSeq,
                 sessionSeqHint,
@@ -4172,7 +4220,6 @@ class Sync {
                       log,
                   });
               },
-              resetTranscriptState: () => this.resetSessionTranscriptState(sessionId),
               markLoaded: () => storage.getState().applyMessagesLoaded(sessionId),
               setDeferredForwardLoading: (deferred) => {
                   if (deferred) {
@@ -4421,9 +4468,30 @@ class Sync {
       }
 
       private resolveDirectSessionTranscriptDeltaCursor(ephemeralUpdate: Readonly<{
+          sessionId: string;
+          fromCursor?: string | null;
           nextCursor?: string | null;
           tailCursor?: string | null;
       }>): string | null | undefined {
+          const fromCursor = Object.prototype.hasOwnProperty.call(ephemeralUpdate, 'fromCursor')
+              ? (
+                  typeof ephemeralUpdate.fromCursor === 'string' && ephemeralUpdate.fromCursor.trim().length > 0
+                      ? ephemeralUpdate.fromCursor
+                      : null
+              )
+              : undefined;
+          if (fromCursor === undefined) {
+              return undefined;
+          }
+          if (fromCursor === null) {
+              return undefined;
+          }
+
+          const currentCursor = this.getDirectSessionTailCursor(ephemeralUpdate.sessionId);
+          if (currentCursor !== fromCursor) {
+              return undefined;
+          }
+
           if (typeof ephemeralUpdate.nextCursor === 'string' || ephemeralUpdate.nextCursor === null) {
               return ephemeralUpdate.nextCursor;
           }
@@ -4436,6 +4504,7 @@ class Sync {
       private async handleDirectSessionTranscriptEphemeralUpdate(ephemeralUpdate: Readonly<{
           sessionId: string;
           items: ReadonlyArray<DirectTranscriptRawMessageV1>;
+          fromCursor?: string | null;
           nextCursor?: string | null;
           tailCursor?: string | null;
           truncated?: boolean;
@@ -4454,15 +4523,11 @@ class Sync {
               return;
           }
 
+          const resolvedCursor = this.resolveDirectSessionTranscriptDeltaCursor(ephemeralUpdate);
           await this.applyDirectSessionTranscriptItems(
               ephemeralUpdate.sessionId,
               ephemeralUpdate.items,
-              {
-                  ...(Object.prototype.hasOwnProperty.call(ephemeralUpdate, 'nextCursor')
-                      || Object.prototype.hasOwnProperty.call(ephemeralUpdate, 'tailCursor')
-                      ? { nextCursor: this.resolveDirectSessionTranscriptDeltaCursor(ephemeralUpdate) }
-                      : {}),
-              },
+              resolvedCursor !== undefined ? { nextCursor: resolvedCursor } : undefined,
           );
       }
 
@@ -4884,6 +4949,8 @@ class Sync {
 
       public markSessionLiveTailIntent(sessionId: string): void {
           if (!sessionId) return;
+          this.ensureSessionViewportHydrated();
+          const hadDeferredForwardLoading = this.deferredForwardLoadingSessions.has(sessionId);
           this.sessionViewport.set(sessionId, {
               isPinned: true,
               offsetY: 0,
@@ -4891,11 +4958,20 @@ class Sync {
               lastUpdatedAt: Date.now(),
               source: 'default',
           });
-          this.deferredForwardLoadingSessions.delete(sessionId);
+          // Live-tail intent beats any stale persisted anchor across restarts
+          // (mirrors messageCatchUpPolicy precedence): absence of a persisted
+          // record IS the durable live-tail default.
+          if (this.persistedSessionViewportIds.delete(sessionId)) {
+              deletePersistedSessionViewport(sessionId, getActiveServerAccountScope());
+          }
+          if (hadDeferredForwardLoading) {
+              this.getOrCreateMessagesSync(sessionId).invalidateCoalesced();
+          }
       }
 
       public onSessionViewportChange(sessionId: string, state: SessionViewportChangeState): void {
           if (!sessionId) return;
+          this.ensureSessionViewportHydrated();
           if (state.shouldRestoreViewport !== true) {
               this.markSessionLiveTailIntent(sessionId);
               return;
@@ -4908,22 +4984,141 @@ class Sync {
               this.markSessionLiveTailIntent(sessionId);
               return;
           }
+          // N2b.5: passive observation emits carry no anchor field — merge by
+          // preserving the stored identity anchor and updating only the offset
+          // metadata. Only an explicit capture outcome (anchor object or null)
+          // or live-tail intent (above) may replace/clear the identity.
+          const anchor = state.anchor === undefined
+              ? this.sessionViewport.get(sessionId)?.anchor ?? null
+              : sanitizeSessionViewportAnchor(state.anchor);
+          const lastUpdatedAt = Date.now();
           this.sessionViewport.set(sessionId, {
               isPinned: false,
               offsetY: state.offsetY,
-              anchor: sanitizeSessionViewportAnchor(state.anchor),
-              lastUpdatedAt: Date.now(),
+              anchor,
+              lastUpdatedAt,
               source: 'observed',
           });
+          this.persistSessionViewport(sessionId, { offsetY: state.offsetY, anchor, lastUpdatedAt });
       }
 
       public getSessionViewport(sessionId: string): SessionViewportSnapshot | null {
           if (!sessionId) return null;
+          this.ensureSessionViewportHydrated();
           return this.sessionViewport.get(sessionId) ?? null;
+      }
+
+      /**
+       * Hydrates persisted per-session viewport anchors (N2b.1) into the
+       * in-memory map once per active server-account scope. The map stays the
+       * hot path; persistence is write-through on capture and delete-through
+       * on live-tail intent.
+       */
+      private ensureSessionViewportHydrated(): void {
+          const scope = getActiveServerAccountScope();
+          const storageKey = sessionViewportStorageKey(scope);
+          if (this.sessionViewportHydratedStorageKey === storageKey) return;
+          this.sessionViewportHydratedStorageKey = storageKey;
+          const persisted = loadPersistedSessionViewports(scope);
+          this.persistedSessionViewportIds = new Set(Object.keys(persisted));
+          for (const [sessionId, record] of Object.entries(persisted)) {
+              if (this.sessionViewport.has(sessionId)) continue;
+              this.sessionViewport.set(sessionId, {
+                  isPinned: record.isPinned,
+                  offsetY: record.offsetY,
+                  anchor: record.anchor
+                      ? {
+                          kind: record.anchor.kind,
+                          messageId: record.anchor.messageId,
+                          seq: record.anchor.seq,
+                          itemId: record.anchor.itemId,
+                          itemOffsetPx: record.anchor.itemOffsetPx,
+                          capturedAtMs: record.anchor.capturedAtMs,
+                      }
+                      : null,
+                  lastUpdatedAt: record.lastUpdatedAt,
+                  source: 'observed',
+              });
+          }
+      }
+
+      private persistSessionViewport(
+          sessionId: string,
+          snapshot: Readonly<{ offsetY: number; anchor: SessionViewportAnchorSnapshot | null; lastUpdatedAt: number }>,
+      ): void {
+          const capturedMessageId = snapshot.anchor?.messageId?.trim() ?? '';
+          const durable = capturedMessageId
+              ? this.resolveDurableSessionMessageIdentity(sessionId, capturedMessageId)
+              : null;
+          upsertPersistedSessionViewport(sessionId, {
+              isPinned: false,
+              offsetY: snapshot.offsetY,
+              lastUpdatedAt: snapshot.lastUpdatedAt,
+              // Identity-first: the persistence layer drops identity-less
+              // anchors, keeping offsetY as degraded fallback metadata only.
+              anchor: snapshot.anchor && durable
+                  ? {
+                      kind: snapshot.anchor.kind,
+                      messageId: durable.messageId,
+                      seq: snapshot.anchor.seq ?? durable.seq,
+                      itemId: snapshot.anchor.itemId,
+                      itemOffsetPx: snapshot.anchor.itemOffsetPx,
+                      capturedAtMs: snapshot.anchor.capturedAtMs,
+                  }
+                  : null,
+          }, getActiveServerAccountScope());
+          this.persistedSessionViewportIds.add(sessionId);
+      }
+
+      /**
+       * Rendered transcript message ids are runtime-local (reducer-allocated),
+       * so the durable anchor identity is the server message id (`realID`)
+       * plus the transcript `seq`. Accepts either a rendered id or a server id.
+       */
+      private resolveDurableSessionMessageIdentity(
+          sessionId: string,
+          messageId: string,
+      ): Readonly<{ messageId: string; seq: number | null }> {
+          const session = storage.getState().sessionMessages[sessionId];
+          const messagesById = session?.messagesById ?? {};
+          let message = messagesById[messageId] ?? null;
+          if (!message) {
+              for (const candidate of Object.values(messagesById)) {
+                  if (candidate?.realID === messageId) {
+                      message = candidate;
+                      break;
+                  }
+              }
+          }
+          if (!message) return { messageId, seq: null };
+          const realId = typeof message.realID === 'string' && message.realID.trim() ? message.realID.trim() : null;
+          const seq = typeof message.seq === 'number' && Number.isFinite(message.seq) ? message.seq : null;
+          return { messageId: realId ?? messageId, seq };
       }
 
       public hasDeferredNewerMessages(sessionId: string): boolean {
           return this.deferredForwardLoadingSessions.has(sessionId);
+      }
+
+      /**
+       * C6/D3: sync-owned reactive drain for the deferred-forward-loading backlog (mechanism B).
+       *
+       * The data layer accrues the backlog and must own when to release it. Previously the
+       * release lived only in ChatList.onScroll, so a list shell that did not reproduce those
+       * callbacks silently stalled newer-message catch-up. The list now only reports geometry;
+       * the threshold + decision + fetch are owned here. Drains when pinned or near the bottom
+       * (within the forward-prefetch threshold); a scrolled-up session is left deferred so the
+       * viewport is never yanked.
+       */
+      public maybeDrainDeferredNewerMessages(
+          sessionId: string,
+          viewport: Readonly<{ isPinned: boolean; distanceFromBottomPx: number }>,
+      ): void {
+          if (!sessionId || !this.hasDeferredNewerMessages(sessionId)) return;
+          const nearBottom = viewport.isPinned
+              || viewport.distanceFromBottomPx <= this.syncTuning.transcriptForwardPrefetchThresholdPx;
+          if (!nearBottom) return;
+          fireAndForget(this.loadNewerMessages(sessionId), { tag: 'Sync.maybeDrainDeferredNewerMessages' });
       }
 
       public async loadNewerMessages(sessionId: string): Promise<{
@@ -4987,6 +5182,59 @@ class Sync {
               return { loaded: 0, hasMore: true, status: 'loaded' };
           } finally {
               this.sessionMessagesLoadingNewerByKey.delete(pagingKey);
+          }
+      }
+
+      /**
+       * C6/D2a: re-materialize the stale (edited-while-hidden) region and merge it in place.
+       *
+       * Fetches newer messages from just below the lowest stale seq so the edited rows are
+       * re-pulled and upserted by applyMessages without dropping any other materialized row.
+       * Falls back to a coalesced catch-up invalidate when the stale seq is unknown (the
+       * catch-up policy then fetches-and-merges; it is non-destructive after D2b).
+       */
+      private async refetchStaleTranscriptRegion(
+          sessionId: string,
+          staleSnapshot: Readonly<{ minSeq: number | null; messageIds: readonly string[] }>,
+      ): Promise<void> {
+          const staleMinSeq = staleSnapshot.minSeq;
+          if (typeof staleMinSeq !== 'number' || !Number.isFinite(staleMinSeq) || staleMinSeq <= 0) {
+              this.getOrCreateMessagesSync(sessionId).invalidateCoalesced();
+              return;
+          }
+          if (this.hasFetchedSessionsSnapshotForActiveServer && !this.isSessionKnownOnResolvedOwnerServer(sessionId)) {
+              return;
+          }
+          const afterSeq = Math.max(0, Math.trunc(staleMinSeq) - 1);
+          const requestMessages = this.createSessionMessagesRequest(sessionId);
+          const session = storage.getState().sessions[sessionId] ?? null;
+          const sessionEncryptionMode = session?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
+          try {
+              await fetchAndApplyNewerMessages({
+                  sessionId,
+                  sessionEncryptionMode,
+                  afterSeq,
+                  limit: this.getSessionMessagesPageSize(),
+                  getSessionEncryption: (id) => this.encryption.getSessionEncryption(id),
+                  isSessionKnown: (id) => this.isSessionKnownOnResolvedOwnerServer(id),
+                  request: requestMessages,
+                  sessionReceivedMessages: this.sessionReceivedMessages,
+                  applyMessages: (sid, messages) => this.applyMessages(sid, messages, { notifyVoice: false }),
+                  onNormalizedMessages: (messages) => ingestWorkspaceMutationMessages(sessionId, messages),
+                  onTaskLifecycleEvent: (event) => this.applySessionThinkingFromTaskLifecycle(sessionId, event),
+                  onMessagesPage: (page) => {
+                      this.updateSessionMessagesPaginationFromPage(sessionId, { scope: 'main' }, page, { allowHasMoreInference: true, direction: 'newer' });
+                  },
+                  ...this.getMessageDecryptBatchOptions(),
+                  log,
+              });
+              this.deferredTranscriptState = acknowledgeStaleTranscriptRepair(
+                  this.deferredTranscriptState,
+                  sessionId,
+                  { messageIds: staleSnapshot.messageIds, minSeq: staleSnapshot.minSeq },
+              );
+          } catch (error) {
+              console.error('Failed to refetch stale transcript region:', error);
           }
       }
 

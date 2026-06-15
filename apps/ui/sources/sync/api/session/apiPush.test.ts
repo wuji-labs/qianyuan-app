@@ -88,6 +88,22 @@ describe('apiPush', () => {
         await expect(deletePushToken(credentials, 'ExponentPushToken[abc]')).resolves.toBeUndefined();
     });
 
+    it('deletePushToken omits the json content-type header on body-less delete requests', async () => {
+        const { deletePushToken } = await import('./apiPush');
+        mocks.serverFetch.mockResolvedValueOnce(jsonResponse({ success: true }));
+
+        await deletePushToken(credentials, 'ExponentPushToken[abc]');
+
+        const init = mocks.serverFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+        const headers = init?.headers as Record<string, string> | undefined;
+        expect(init?.method).toBe('DELETE');
+        expect(init?.body).toBeUndefined();
+        expect(headers).toEqual(expect.objectContaining({
+            Authorization: `Bearer ${credentials.token}`,
+        }));
+        expect(headers).not.toHaveProperty('Content-Type');
+    });
+
     it('registerPushToken uses reachability-supervised runtime fetch for explicit endpoints when retry is disabled', async () => {
         const { registerPushToken } = await import('./apiPush');
         mocks.runtimeFetchWithServerReachability.mockResolvedValueOnce(jsonResponse({ success: true }));

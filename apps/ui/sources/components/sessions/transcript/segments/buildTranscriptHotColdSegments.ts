@@ -6,6 +6,7 @@ type SegmentableTranscriptContentItem =
 type SegmentableTranscriptListItem =
     | { kind: 'message'; id: string; messageId: string }
     | { kind: 'tool-calls-group'; id: string; toolMessageIds: readonly string[] }
+    | { kind: 'tool-group-header' | 'tool-group-expand' | 'tool-group-tool' | 'tool-group-footer'; id: string; toolMessageIds: readonly string[] }
     | { kind: 'pending-queue'; id: string }
     | { kind: 'action-draft'; id: string }
     | { kind: 'turn'; id: string; turn: { userMessageId?: string | null; content: readonly SegmentableTranscriptContentItem[] } }
@@ -64,6 +65,20 @@ export function buildTranscriptHotColdSegments<T extends SegmentableTranscriptLi
         }
 
         if (item.kind === 'tool-calls-group') {
+            if (item.toolMessageIds.some((id: string) => params.expandedToolCallsAnchorMessageIds.has(id))) {
+                splitIndex = Math.min(splitIndex, index);
+            }
+            continue;
+        }
+
+        // Per-unit tool-group rows (N2c): every unit of an EXPANDED group joins the hot
+        // tail, mirroring the whole-card tool-calls-group rule above.
+        if (
+            item.kind === 'tool-group-header' ||
+            item.kind === 'tool-group-expand' ||
+            item.kind === 'tool-group-tool' ||
+            item.kind === 'tool-group-footer'
+        ) {
             if (item.toolMessageIds.some((id: string) => params.expandedToolCallsAnchorMessageIds.has(id))) {
                 splitIndex = Math.min(splitIndex, index);
             }

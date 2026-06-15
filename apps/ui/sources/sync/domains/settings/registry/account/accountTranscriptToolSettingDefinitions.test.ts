@@ -23,6 +23,17 @@ describe('ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS message actions', () => {
         expect(serializeCurrent?.(undefined)).toBe('small');
     });
 
+    it('defines the transcript list implementation enum including the inverted pilot', () => {
+        const definition = ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS.transcriptListImplementation;
+
+        expect(definition.default).toBe('flash_v2_inverted');
+        expect(definition.schema.safeParse('flash_v2').success).toBe(true);
+        expect(definition.schema.safeParse('flatlist_legacy').success).toBe(true);
+        expect(definition.schema.safeParse('flash_v2_inverted').success).toBe(true);
+        expect(definition.schema.safeParse('sectionlist').success).toBe(false);
+        expect(definition.analytics?.valueKind).toBe('enum');
+    });
+
     it('defines the bulk copy format enum', () => {
         const definition = ACCOUNT_TRANSCRIPT_TOOL_SETTING_DEFINITIONS.transcriptBulkCopyFormat;
 

@@ -86,6 +86,81 @@ describe('buildSessionListReachabilityModels', () => {
         });
     });
 
+    it('reuses cached reachability rows when unrelated session rows refresh', async () => {
+        const {
+            buildSessionListReachabilityModels,
+            createSessionListReachabilityModelsCache,
+        } = await import('./sessionListReachabilityModels');
+
+        mockStorageState = {
+            sessions: {},
+            machines: {},
+            getProjectForSession: () => null,
+        };
+        const unchanged = {
+            id: 'unchanged-session',
+            active: false,
+            updatedAt: 10,
+            metadata: {
+                machineId: 'machine-a',
+                path: '/Users/test/workspace/unchanged',
+                homeDir: '/Users/test',
+                host: 'a.local',
+            },
+        };
+        const refreshed = {
+            id: 'refreshed-session',
+            active: false,
+            updatedAt: 10,
+            metadata: {
+                machineId: 'machine-a',
+                path: '/Users/test/workspace/refreshed',
+                homeDir: '/Users/test',
+                host: 'a.local',
+            },
+        };
+        const machinesById = {
+            'machine-a': {
+                id: 'machine-a',
+                title: 'Machine A',
+                subtitle: 'a.local',
+                metadata: { host: 'a.local', displayName: 'Machine A' },
+            } as any,
+        };
+        const workspaceLabelsV1 = {};
+        const cache = createSessionListReachabilityModelsCache();
+        const first = buildSessionListReachabilityModels({
+            cache,
+            items: [
+                { type: 'session', serverId: 'server-a', session: unchanged } as any,
+                { type: 'session', serverId: 'server-a', session: refreshed } as any,
+            ],
+            machinesById,
+            workspaceLabelsV1,
+        });
+        const unchangedDisplay = first.reachableSessionDisplayByKey.get('server-a:unchanged-session');
+        const second = buildSessionListReachabilityModels({
+            cache,
+            items: [
+                { type: 'session', serverId: 'server-a', session: unchanged } as any,
+                {
+                    type: 'session',
+                    serverId: 'server-a',
+                    session: { ...refreshed, updatedAt: 11 },
+                } as any,
+            ],
+            machinesById,
+            workspaceLabelsV1,
+        });
+
+        expect(second).not.toBe(first);
+        expect(second.reachableSessionDisplayByKey.get('server-a:unchanged-session')).toBe(unchangedDisplay);
+        expect(second.reachableSessionDisplayByKey.get('server-a:refreshed-session')).toMatchObject({
+            machineId: 'machine-a',
+            workspaceSubtitle: 'refreshed',
+        });
+    });
+
     it('keeps reachability display scoped when two visible servers share a session id', async () => {
         const { buildSessionListReachabilityModels } = await import('./sessionListReachabilityModels');
 

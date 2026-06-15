@@ -12,12 +12,18 @@ function run(state: OlderPaginationState, events: readonly OlderPaginationEvent[
     return events.reduce(reduceOlderPagination, state);
 }
 
-function scrollObserved(params: Partial<{ offsetY: number; thresholdPx: number; scrollable: boolean }>): OlderPaginationEvent {
+function scrollObserved(params: Partial<{
+    offsetY: number;
+    thresholdPx: number;
+    scrollable: boolean;
+    trigger: 'scroll' | 'edge-reached';
+}>): OlderPaginationEvent {
     return {
         type: 'scrollObserved',
         offsetY: params.offsetY ?? 100,
         thresholdPx: params.thresholdPx ?? 400,
         scrollable: params.scrollable ?? true,
+        trigger: params.trigger ?? 'scroll',
     };
 }
 
@@ -110,11 +116,22 @@ describe('olderPaginationMachine', () => {
         expect(zeroThreshold.insideThreshold).toBe(false);
     });
 
-    it('suspends loads while the observed offset is <= 0 and resumes once positive', () => {
+    it('allows an explicit edge-reached trigger at exact zero to load once when eligible', () => {
+        const atExactEdge = run(createInitialOlderPaginationState(), [
+            scrollObserved({ offsetY: 0, trigger: 'edge-reached' }),
+        ]);
+        expect(atExactEdge.suspendedReasons.has('negative-offset')).toBe(false);
+        expect(atExactEdge.phase).toBe('armed');
+        expect(shouldLoadNow(atExactEdge)).toBe(true);
+    });
+
+    it('keeps passive scroll observations at exact zero suspended so parked-at-top scrolls cannot burst', () => {
         const atTop = run(createInitialOlderPaginationState(), [scrollObserved({ offsetY: 0 })]);
         expect(atTop.suspendedReasons.has('negative-offset')).toBe(true);
         expect(shouldLoadNow(atTop)).toBe(false);
+    });
 
+    it('still suspends negative offsets as bounce or invalid settling', () => {
         const negative = run(createInitialOlderPaginationState(), [scrollObserved({ offsetY: -12 })]);
         expect(negative.suspendedReasons.has('negative-offset')).toBe(true);
         expect(shouldLoadNow(negative)).toBe(false);
@@ -122,6 +139,21 @@ describe('olderPaginationMachine', () => {
         const recovered = reduceOlderPagination(negative, scrollObserved({ offsetY: 50 }));
         expect(recovered.suspendedReasons.has('negative-offset')).toBe(false);
         expect(shouldLoadNow(recovered)).toBe(true);
+    });
+
+    it('allows repeated explicit exact-edge triggers after cooldown without requiring a threshold exit', () => {
+        const afterLoad = run(createInitialOlderPaginationState(), [
+            scrollObserved({ offsetY: 0, trigger: 'edge-reached' }),
+            { type: 'loadStarted' },
+            { type: 'loadFinished', loaded: 10, hasMore: true },
+            scrollObserved({ offsetY: 0, trigger: 'edge-reached' }),
+            { type: 'cooldownElapsed' },
+        ]);
+        expect(afterLoad.phase).toBe('armed');
+        expect(shouldLoadNow(afterLoad)).toBe(true);
+
+        const loadingAgain = reduceOlderPagination(afterLoad, { type: 'loadStarted' });
+        expect(loadingAgain.phase).toBe('loading');
     });
 
     it('suspends while a viewport transaction is open and resumes on resume()', () => {

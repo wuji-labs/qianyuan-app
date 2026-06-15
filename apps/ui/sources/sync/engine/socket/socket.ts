@@ -8,12 +8,7 @@ import { isSessionVisible } from '@/sync/domains/session/activeViewingSession';
 import { computeNextSessionSeqFromUpdate } from '@/sync/domains/session/sequence/realtimeSessionSeq';
 import { resolveLastViewedSessionSeq } from '@/sync/domains/session/readCursor/resolveLastViewedSessionSeq';
 import { resolveSessionReadableSeq } from '@/sync/domains/session/readCursor/resolveSessionReadableSeq';
-import { isSessionFullContentConsumerActive as isSessionFullContentConsumerActiveDecision } from '@/sync/domains/session/realtime/sessionRealtimeVisibility';
-import {
-    readMountedSessionRealtimeScmConsumerScopes,
-    resolveSessionRealtimeScmScopeForMountedConsumers,
-} from '@/sync/runtime/sessionRealtimeScmConsumers';
-import { readMountedSessionRealtimeTranscriptConsumerSessionIds } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
+import { resolveSessionLiveConsumption } from '@/sync/runtime/sessionLiveConsumption';
 import type { MachineActivityUpdate } from '@/sync/reducer/machineActivityAccumulator';
 import { storage } from '@/sync/domains/state/storage';
 import { projectManager } from '@/sync/runtime/orchestration/projectManager';
@@ -22,8 +17,6 @@ import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetr
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { ingestWorkspaceMutationMessages } from '@/scm/refresh/workspaceMutationIngestionRuntime';
 import { voiceHooks } from '@/voice/context/voiceHooks';
-import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
-import { voiceSessionBindingStore } from '@/voice/sessionBinding/voiceSessionBindingStore';
 import { reportNewAgentRequestsFromSessionTransition } from '@/voice/context/reportNewAgentRequestsFromSessionTransition';
 import { deriveNewAgentRequests } from '@/sync/domains/permissions/deriveNewAgentRequests';
 import { notifyActivityAgentRequest } from '@/activity/notifications/runtime/activityLocalNotificationBus';
@@ -212,33 +205,13 @@ function getSocketSessionApplyBase(sessionId: string): Session | undefined {
     return storage.getState().sessions[sessionId];
 }
 
-function getVoiceBoundTargetSessionIds(): string[] {
-    return voiceSessionBindingStore
-        .getState()
-        .list()
-        .map((binding) => binding.targetSessionId)
-        .filter((sessionId): sessionId is string => typeof sessionId === 'string' && sessionId.trim().length > 0);
-}
-
 function isSessionFullContentConsumerActiveForRealtime(
     sessionId: string,
     sourceServerId?: string | null,
 ): boolean {
-    const voiceTarget = useVoiceTargetStore.getState();
-    const scmMountedScopes = readMountedSessionRealtimeScmConsumerScopes();
-    return isSessionFullContentConsumerActiveDecision({
-        sessionId,
-        isVisible: isSessionVisible(sessionId, sourceServerId),
-        explicitTranscriptConsumerSessionIds: readMountedSessionRealtimeTranscriptConsumerSessionIds(sourceServerId),
-        voicePrimaryActionSessionId: voiceTarget.primaryActionSessionId,
-        voiceTrackedSessionIds: voiceTarget.trackedSessionIds,
-        voiceReadbackSessionIds: voiceTarget.lastFocusedSessionId ? [voiceTarget.lastFocusedSessionId] : [],
-        voiceBoundTargetSessionIds: getVoiceBoundTargetSessionIds(),
-        sessionScmScope: scmMountedScopes.length > 0
-            ? resolveSessionRealtimeScmScopeForMountedConsumers(storage.getState(), sessionId, scmMountedScopes)
-            : null,
-        scmMountedScopes,
-    });
+    // Delegate to the shared selector so realtime routing and catch-up consume the identical
+    // live-content-consumer fan-out (single source of truth — the divergence is unrepresentable).
+    return resolveSessionLiveConsumption(sessionId, sourceServerId).isFullContentConsumer;
 }
 
 function normalizeProjectionSeq(value: unknown): number | null {

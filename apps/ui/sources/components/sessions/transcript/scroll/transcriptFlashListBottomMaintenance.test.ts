@@ -7,10 +7,16 @@ const baseParams = {
     bottomFollowMode: 'following' as const,
     layoutHeight: 600,
     nativeEntryShouldUseBottomMaintenance: true,
+    orientation: 'standard' as const,
     pinEnabled: true,
     pinThresholdPx: 72,
     platformIsWeb: false,
     hasOpenViewportTransaction: false,
+};
+
+const invertedParams = {
+    ...baseParams,
+    orientation: 'inverted' as const,
 };
 
 describe('transcript FlashList bottom maintenance policy', () => {
@@ -76,6 +82,96 @@ describe('transcript FlashList bottom maintenance policy', () => {
             hasOpenViewportTransaction: true,
         })).toEqual({
             startRenderingFromBottom: true,
+        });
+    });
+
+    it('arms the threshold from the given viewport height alone, independent of mount-settle (cold-open deadlock fix)', () => {
+        // Inverted follow-bottom cold opens have no JS bottom-pin authority — the MVCP
+        // autoscroll threshold is the only thing that pins. The resolver must arm it as
+        // soon as it is GIVEN a laid-out viewport height (following + no open transaction),
+        // never waiting on a content-height mount-settle window that may not converge while
+        // rows measure late on a tall session. Mount-settle is the caller's concern; the
+        // resolver depends only on the height it receives.
+        expect(resolveTranscriptFlashListBottomMaintenance({
+            ...baseParams,
+            layoutHeight: 812,
+        })).toEqual({
+            animateAutoScrollToBottom: false,
+            autoscrollToBottomThreshold: 72 / 812,
+            startRenderingFromBottom: true,
+        });
+    });
+
+    describe('inverted orientation (N3.2)', () => {
+        // FlashList/RN inverted transforms presentation, but native offsets still grow
+        // toward the physical content end. The visual live tail is therefore maintained
+        // by the same startRenderingFromBottom/autoscroll policy as standard mode.
+        it('uses the same native bottom maintenance threshold while following', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance(invertedParams)).toEqual({
+                animateAutoScrollToBottom: false,
+                autoscrollToBottomThreshold: 72 / 600,
+                startRenderingFromBottom: true,
+            });
+        });
+
+        it('keeps MVCP offset correction armed without bottom autoscroll while escaping or released', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                bottomFollowMode: 'escaping',
+            })).toEqual({ startRenderingFromBottom: true });
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                bottomFollowMode: 'released',
+            })).toEqual({ startRenderingFromBottom: true });
+        });
+
+        it('withholds bottom autoscroll while a viewport transaction is open (plan B3 single-owner rule)', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                hasOpenViewportTransaction: true,
+            })).toEqual({ startRenderingFromBottom: true });
+        });
+
+        it('keeps bottom maintenance without autoscroll when pinning or auto-follow is disabled', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                pinEnabled: false,
+            })).toEqual({ startRenderingFromBottom: true });
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                autoFollowWhenPinned: false,
+            })).toEqual({ startRenderingFromBottom: true });
+        });
+
+        it('never emits a disabled MVCP object for inverted physical bottom maintenance', () => {
+            const modes = ['following', 'escaping', 'released'] as const;
+            for (const mode of modes) {
+                for (const hasOpenViewportTransaction of [false, true]) {
+                    const result = resolveTranscriptFlashListBottomMaintenance({
+                        ...invertedParams,
+                        bottomFollowMode: mode,
+                        hasOpenViewportTransaction,
+                    });
+                    expect(result).not.toEqual({ disabled: true });
+                }
+            }
+        });
+
+        it('returns undefined on web regardless of orientation (web never gets the native MVCP props)', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                platformIsWeb: true,
+            })).toBeUndefined();
+        });
+
+        it('does not emit a zero threshold before layout measurement', () => {
+            const result = resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                layoutHeight: 0,
+            });
+
+            expect(result).toMatchObject({ startRenderingFromBottom: true });
+            expect(result).not.toHaveProperty('autoscrollToBottomThreshold', 0);
         });
     });
 

@@ -321,6 +321,85 @@ describe('useSessions', () => {
         }
     });
 
+    it('updates session list shell data when pending request freshness timing changes', async () => {
+        const previousState = storage.getState();
+        try {
+            const firstData: SessionListViewItem[] = [
+                {
+                    type: 'session',
+                    section: 'active',
+                    groupKey: 'server:server-a:active',
+                    groupKind: 'active',
+                    serverId: 'server-a',
+                    session: {
+                        id: 's-1',
+                        seq: 1,
+                        createdAt: 10,
+                        updatedAt: 20,
+                        active: true,
+                        activeAt: 20,
+                        archivedAt: null,
+                        metadataVersion: 1,
+                        agentStateVersion: 1,
+                        metadata: { path: '/repo', host: 'localhost', machineId: 'm-1' },
+                        thinking: false,
+                        thinkingAt: 0,
+                        presence: 'online',
+                        hasPendingPermissionRequests: true,
+                        pendingRequestObservedAt: 100,
+                    },
+                },
+            ];
+            const firstSessionItem = firstData[0];
+            if (firstSessionItem.type !== 'session') {
+                throw new Error('expected session test fixture');
+            }
+
+            storage.setState((state) => ({
+                ...state,
+                isDataReady: true,
+                sessionListViewData: firstData,
+            }));
+
+            let renderCount = 0;
+            const hook = await renderHook(() => {
+                renderCount += 1;
+                return useSessionListViewData();
+            }, {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListViewData: [{
+                        ...firstSessionItem,
+                        session: {
+                            ...firstSessionItem.session,
+                            pendingRequestObservedAt: 500,
+                        },
+                    }],
+                }));
+                await flushHookEffects({ cycles: 1, turns: 4 });
+            });
+
+            const next = hook.getCurrent();
+            expect(next).not.toBe(first);
+            expect(renderCount).toBe(2);
+            expect(next?.[0]).toMatchObject({
+                type: 'session',
+                session: {
+                    pendingRequestObservedAt: 500,
+                },
+            });
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('keeps selected server list shell data stable when unrelated server caches change', async () => {
         const previousState = storage.getState();
         try {

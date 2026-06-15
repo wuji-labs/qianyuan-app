@@ -5,6 +5,9 @@ import {
     resolveSessionListRowStoreScopeKey,
     resolveSessionListRowStoreSubscriptionMode,
     resolveSessionListRowStoreSubscriptionScopes,
+    reuseSessionListRowStoreKeySet,
+    reuseSessionListRowStoreSubscriptionScopes,
+    type SessionListRowStoreSubscriptionScope,
 } from './sessionListVisibleRowStoreScopes';
 
 describe('session list visible row store scopes', () => {
@@ -85,6 +88,34 @@ describe('session list visible row store scopes', () => {
 
     it('uses the unscoped session id when a row has no server id', () => {
         expect(resolveSessionListRowStoreScopeKey({ sessionId: 'local-session', serverId: null })).toBe('local-session');
+    });
+
+    it('reuses row subscription scope arrays when scoped session identities are unchanged', () => {
+        const previous: ReadonlyArray<SessionListRowStoreSubscriptionScope> = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: null, sessionId: 's2' },
+        ];
+        const nextEquivalent: ReadonlyArray<SessionListRowStoreSubscriptionScope> = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: undefined, sessionId: 's2' },
+        ];
+        const nextChanged: ReadonlyArray<SessionListRowStoreSubscriptionScope> = [
+            { serverId: 'server-a', sessionId: 's1' },
+            { serverId: 'server-a', sessionId: 's2' },
+        ];
+
+        expect(reuseSessionListRowStoreSubscriptionScopes(previous, nextEquivalent)).toBe(previous);
+        expect(reuseSessionListRowStoreSubscriptionScopes(previous, nextChanged)).toBe(nextChanged);
+    });
+
+    it('reuses row subscription key sets when membership is unchanged', () => {
+        const previous = new Set(['server-a:s1', 'server-a:s2']);
+        const nextEquivalent = new Set(['server-a:s2', 'server-a:s1']);
+        const nextChanged = new Set(['server-a:s1']);
+
+        expect(reuseSessionListRowStoreKeySet(previous, nextEquivalent)).toBe(previous);
+        expect(reuseSessionListRowStoreKeySet(previous, nextChanged)).toBe(nextChanged);
+        expect(reuseSessionListRowStoreKeySet(null, nextEquivalent)).toBe(nextEquivalent);
     });
 
     it('summarizes row store subscription telemetry without exposing row identifiers', () => {

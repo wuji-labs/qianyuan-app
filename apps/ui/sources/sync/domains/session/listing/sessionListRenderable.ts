@@ -482,6 +482,26 @@ export function didSessionListRenderableStructuralFieldsChange(
     return false;
 }
 
+export function didSessionListRenderableEmbeddedListRowFieldsChange(
+    previous: SessionListRenderableSession | undefined,
+    next: SessionListRenderableSession,
+): boolean {
+    if (!previous) return true;
+    // High-churn runtime fields are owned by visible row subscriptions. This
+    // comparator only refreshes embedded source rows for stale identity/badge
+    // fields that otherwise remain stuck inside already-built list data.
+    if ((previous.pendingCount ?? null) !== (next.pendingCount ?? null)) return true;
+    if ((previous.lastViewedSessionSeq ?? null) !== (next.lastViewedSessionSeq ?? null)) return true;
+    if ((previous.hasPendingPermissionRequests ?? null) !== (next.hasPendingPermissionRequests ?? null)) return true;
+    if ((previous.hasPendingUserActionRequests ?? null) !== (next.hasPendingUserActionRequests ?? null)) return true;
+    if ((previous.pendingRequestObservedAt ?? null) !== (next.pendingRequestObservedAt ?? null)) return true;
+    if ((previous.hasUnreadMessages === true) !== (next.hasUnreadMessages === true)) return true;
+    if ((previous.metadataUnavailable === true) !== (next.metadataUnavailable === true)) return true;
+    if (!areSessionListRenderableMetadataEqual(previous.metadata, next.metadata)) return true;
+
+    return false;
+}
+
 export function didSessionListRenderableAttentionPromotionFieldsChange(
     previous: SessionListRenderableSession | undefined,
     next: SessionListRenderableSession,

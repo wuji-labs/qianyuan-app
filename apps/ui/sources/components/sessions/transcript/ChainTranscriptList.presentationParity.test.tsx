@@ -26,6 +26,8 @@ const turnViewSpy = vi.fn();
 const turnViewWithCommonSpy = vi.fn();
 const toolCallsGroupRowSpy = vi.fn();
 const toolCallsGroupRowWithCommonSpy = vi.fn();
+const toolGroupUnitHeaderSpy = vi.fn();
+const toolGroupUnitToolSpy = vi.fn();
 const messageViewSpy = vi.fn();
 const messageViewWithCommonSpy = vi.fn();
 let scrollToIndexSpy: ReturnType<typeof vi.fn> | null = null;
@@ -127,6 +129,29 @@ vi.mock('@/components/sessions/transcript/toolCalls/ToolCallsGroupRow', () => ({
     },
 }));
 
+// N2c: turn-mode tool groups render as per-unit rows.
+vi.mock('@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitHeaderRow', () => ({
+    ToolCallsGroupUnitHeaderRow: (props: any) => {
+        toolGroupUnitHeaderSpy(props);
+        return React.createElement('ToolCallsGroupUnitHeaderRow', props);
+    },
+    ToolCallsGroupUnitHeaderRowWithSessionCommon: (props: any) => {
+        toolGroupUnitHeaderSpy(props);
+        return React.createElement('ToolCallsGroupUnitHeaderRowWithSessionCommon', props);
+    },
+}));
+
+vi.mock('@/components/sessions/transcript/toolCalls/units/ToolCallsGroupUnitToolRow', () => ({
+    ToolCallsGroupUnitToolRow: (props: any) => {
+        toolGroupUnitToolSpy(props);
+        return React.createElement('ToolCallsGroupUnitToolRow', props);
+    },
+    ToolCallsGroupUnitToolRowWithSessionCommon: (props: any) => {
+        toolGroupUnitToolSpy(props);
+        return React.createElement('ToolCallsGroupUnitToolRowWithSessionCommon', props);
+    },
+}));
+
 describe('ChainTranscriptList presentation parity', () => {
     beforeEach(() => {
         vi.resetModules();
@@ -142,6 +167,8 @@ describe('ChainTranscriptList presentation parity', () => {
         turnViewWithCommonSpy.mockReset();
         toolCallsGroupRowSpy.mockReset();
         toolCallsGroupRowWithCommonSpy.mockReset();
+        toolGroupUnitHeaderSpy.mockReset();
+        toolGroupUnitToolSpy.mockReset();
         messageViewSpy.mockReset();
         messageViewWithCommonSpy.mockReset();
         scrollToIndexSpy = null;
@@ -260,15 +287,13 @@ describe('ChainTranscriptList presentation parity', () => {
                     interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
                 }));
 
-        expect(toolCallsGroupRowWithCommonSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-                toolMessageIds: toolMessages.map((message) => message.id),
-            }),
-        );
-        const groupSizes = toolCallsGroupRowWithCommonSpy.mock.calls
-            .map(([props]) => Array.isArray(props?.toolMessageIds) ? props.toolMessageIds.length : 0);
-        expect(groupSizes).not.toContain(8);
-        expect(groupSizes.every((size) => size === 200)).toBe(true);
+        // N2c per-unit rows: ONE semantic group = ONE header..footer span. The header
+        // carries the full 200-tool membership — no every-N size splits (R5).
+        expect(toolCallsGroupRowWithCommonSpy).not.toHaveBeenCalled();
+        const headerGroupIds = new Set(toolGroupUnitHeaderSpy.mock.calls.map(([props]) => props?.groupId));
+        expect(headerGroupIds.size).toBe(1);
+        const headerToolIds = toolGroupUnitHeaderSpy.mock.calls[0]?.[0]?.toolMessages?.map((message: any) => message.id);
+        expect(headerToolIds).toEqual(toolMessages.map((message) => message.id));
     });
 
     it('uses turn layout in tool transcripts when transcript layout is set to turns', async () => {
@@ -301,14 +326,20 @@ describe('ChainTranscriptList presentation parity', () => {
                 }))).tree;
 
         expect(turnViewSpy).not.toHaveBeenCalled();
-        expect(turnViewWithCommonSpy).toHaveBeenCalledWith(
+        // N2c: the turn decomposes into per-unit rows — the user message renders as a
+        // message row carrying the parent-provided session common, and the turn's tool
+        // run renders as a tool-group unit span.
+        expect(messageViewWithCommonSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-                turn: expect.objectContaining({
-                    userMessageId: 'user-1',
-                }),
+                message: expect.objectContaining({ id: 'user-1' }),
                 messageDisplayCommon: expect.objectContaining({
                     sessionThinkingDisplayMode: 'inline',
                 }),
+            }),
+        );
+        expect(toolGroupUnitHeaderSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                toolMessages: [expect.objectContaining({ id: 'tool-msg-1' })],
             }),
         );
     });
@@ -326,16 +357,33 @@ describe('ChainTranscriptList presentation parity', () => {
             text: 'Start a subagent',
         };
 
+        const toolMessage: Message = {
+            kind: 'tool-call',
+            id: 'tool-msg-1',
+            localId: null,
+            createdAt: 2,
+            tool: makeToolCall({ id: 'tool-1', name: 'Read', input: { file: 'a.ts' }, createdAt: 2 }),
+            children: [],
+        };
+
         await renderScreen(React.createElement(ChainTranscriptList, {
                     sessionId: 's1',
-                    messages: [userMessage],
+                    messages: [userMessage, toolMessage],
                     metadata: null,
                     interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
                     forcePermissionPromptsInTranscript: true,
                 }));
 
-        expect(turnViewWithCommonSpy).toHaveBeenCalledWith(
+        // N2c: forced permission prompts flow to the decomposed rows — the message row
+        // and the per-unit tool row.
+        expect(messageViewWithCommonSpy).toHaveBeenCalledWith(
             expect.objectContaining({
+                forcePermissionPromptsInTranscript: true,
+            }),
+        );
+        expect(toolGroupUnitToolSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+                message: expect.objectContaining({ id: 'tool-msg-1' }),
                 forcePermissionPromptsInTranscript: true,
             }),
         );
@@ -394,6 +442,148 @@ describe('ChainTranscriptList presentation parity', () => {
                 viewPosition: 1,
             }),
         );
+    });
+
+    it('preserves the web sidechain reading position when expanding a turn tool group away from bottom (WREG.5)', async () => {
+        settings.transcriptGroupingMode = 'turns';
+        settings.transcriptTurnToolCallsGroupStrategy = 'all_tools_in_turn';
+        settings.transcriptToolCallsCollapsedPreviewCount = 1;
+
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        try {
+            const { ChainTranscriptList } = await import('./ChainTranscriptList');
+            const userMessage: Message = {
+                kind: 'user-text',
+                id: 'user-1',
+                localId: null,
+                createdAt: 1,
+                text: 'Run the audit',
+            };
+            const toolMessages: Message[] = Array.from({ length: 20 }, (_, index) => ({
+                kind: 'tool-call',
+                id: `tool-msg-${index + 1}`,
+                localId: null,
+                createdAt: index + 2,
+                tool: makeToolCall({
+                    id: `tool-${index + 1}`,
+                    name: 'Read',
+                    input: { file: `file-${index + 1}.ts` },
+                    createdAt: index + 2,
+                }),
+                children: [],
+            }));
+            const scrollEl = {
+                scrollTop: 480,
+                scrollHeight: 1200,
+                clientHeight: 400,
+            };
+
+            const screen = await renderScreen(React.createElement(ChainTranscriptList, {
+                sessionId: 's1',
+                messages: [userMessage, ...toolMessages],
+                metadata: null,
+                interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            }));
+            const list = screen.tree.root.findByType('FlashList' as any);
+
+            await act(async () => {
+                list.props.onLayout({ nativeEvent: { layout: { height: 400 } } });
+                list.props.onContentSizeChange(0, 1200);
+                list.props.onScroll({
+                    nativeEvent: {
+                        target: scrollEl,
+                        contentOffset: { y: scrollEl.scrollTop },
+                    },
+                    target: scrollEl,
+                });
+            });
+
+            const headerProps = toolGroupUnitHeaderSpy.mock.calls.at(-1)?.[0];
+            expect(headerProps?.expanded).toBe(false);
+            expect(typeof headerProps?.setExpanded).toBe('function');
+
+            await act(async () => {
+                headerProps.setExpanded(true);
+                scrollEl.scrollHeight = 1380;
+            });
+
+            expect(scrollEl.scrollTop).toBe(660);
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
+    });
+
+    it('keeps the web sidechain pinned to bottom when expanding a bottom tool group (WREG.5)', async () => {
+        settings.transcriptGroupingMode = 'turns';
+        settings.transcriptTurnToolCallsGroupStrategy = 'all_tools_in_turn';
+        settings.transcriptToolCallsCollapsedPreviewCount = 1;
+
+        const { Platform } = await import('react-native');
+        const originalPlatform = Platform.OS;
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
+        try {
+            const { ChainTranscriptList } = await import('./ChainTranscriptList');
+            const userMessage: Message = {
+                kind: 'user-text',
+                id: 'user-1',
+                localId: null,
+                createdAt: 1,
+                text: 'Run the audit',
+            };
+            const toolMessages: Message[] = Array.from({ length: 20 }, (_, index) => ({
+                kind: 'tool-call',
+                id: `tool-msg-${index + 1}`,
+                localId: null,
+                createdAt: index + 2,
+                tool: makeToolCall({
+                    id: `tool-${index + 1}`,
+                    name: 'Read',
+                    input: { file: `file-${index + 1}.ts` },
+                    createdAt: index + 2,
+                }),
+                children: [],
+            }));
+            const scrollEl = {
+                scrollTop: 800,
+                scrollHeight: 1200,
+                clientHeight: 400,
+            };
+
+            const screen = await renderScreen(React.createElement(ChainTranscriptList, {
+                sessionId: 's1',
+                messages: [userMessage, ...toolMessages],
+                metadata: null,
+                interaction: { canSendMessages: true, canApprovePermissions: true, disableToolNavigation: true },
+            }));
+            const list = screen.tree.root.findByType('FlashList' as any);
+
+            await act(async () => {
+                list.props.onLayout({ nativeEvent: { layout: { height: 400 } } });
+                list.props.onContentSizeChange(0, 1200);
+                list.props.onScroll({
+                    nativeEvent: {
+                        target: scrollEl,
+                        contentOffset: { y: scrollEl.scrollTop },
+                    },
+                    target: scrollEl,
+                });
+            });
+
+            const headerProps = toolGroupUnitHeaderSpy.mock.calls.at(-1)?.[0];
+            expect(headerProps?.expanded).toBe(false);
+            expect(typeof headerProps?.setExpanded).toBe('function');
+
+            await act(async () => {
+                headerProps.setExpanded(true);
+                scrollEl.scrollHeight = 1500;
+            });
+
+            expect(scrollEl.scrollTop).toBe(1100);
+        } finally {
+            Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+        }
     });
 
 });
