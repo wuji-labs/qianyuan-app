@@ -11,7 +11,33 @@
 const http = require('http');
 
 const port = parseInt(process.argv[2], 10);
-const hookEventName = typeof process.argv[3] === 'string' && process.argv[3].length > 0 ? process.argv[3] : '';
+
+// Args after the port: an optional hook event name, then optional `--secret-file <path>`
+// (keeps the secret off the world-visible command line; mirrors permission_hook_forwarder.cjs).
+let hookEventName = '';
+let secretFilePath = '';
+const restArgs = process.argv.slice(3);
+for (let i = 0; i < restArgs.length; i += 1) {
+    const arg = restArgs[i];
+    if (arg === '--secret-file') {
+        secretFilePath = typeof restArgs[i + 1] === 'string' ? restArgs[i + 1] : '';
+        i += 1;
+        continue;
+    }
+    if (!hookEventName && typeof arg === 'string' && arg.length > 0) {
+        hookEventName = arg;
+    }
+}
+
+let secret = '';
+if (secretFilePath) {
+    try {
+        secret = require('fs').readFileSync(secretFilePath, 'utf8').trim();
+    } catch {
+        // Unreadable secret file: forward without a secret; the server rejects if it requires one.
+        secret = '';
+    }
+}
 
 if (!port || isNaN(port)) {
     process.exit(1);
@@ -44,7 +70,8 @@ process.stdin.on('end', () => {
         path: '/hook/session-start',
         headers: {
             'Content-Type': 'application/json',
-            'Content-Length': body.length
+            'Content-Length': body.length,
+            ...(secret.length > 0 ? { 'x-happier-hook-secret': secret } : {})
         }
     }, (res) => {
         res.resume(); // Drain response
