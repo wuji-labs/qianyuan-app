@@ -6265,7 +6265,7 @@ describe('createOpenCodeServerRuntime', () => {
     }
   });
 
-  it('commits daemon typed runtime-auth recovery projection for OpenCode session.status usage-limit reports', async () => {
+  it('does not re-emit daemon typed runtime-auth recovery projection for OpenCode session.status usage-limit reports', async () => {
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockReset();
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const client = createFakeClient();
@@ -6315,15 +6315,9 @@ describe('createOpenCodeServerRuntime', () => {
         },
       });
 
-      await expect.poll(() => session.sendSessionEvent.mock.calls.length).toBe(1);
-      expect(session.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
+      await expect.poll(() => mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mock.calls.length).toBe(1);
+      expect(session.sendSessionEvent).not.toHaveBeenCalledWith(expect.objectContaining({
         type: 'connected-service-runtime-auth-recovery',
-        status: 'retry_scheduled',
-        serviceId: 'openai',
-        diagnostic: expect.objectContaining({
-          source: 'runtime_auth_recovery',
-          failurePhase: 'runtime_auth_recovery',
-        }),
       }));
     } finally {
       await runtime.cancel().catch(() => {});

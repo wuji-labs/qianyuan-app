@@ -339,7 +339,7 @@ export class DeferredApiSessionClient {
   }): Promise<MaterializeNextPendingResult> {
     return await this.withAttachedTarget(
       (t) => t.materializeNextPendingMessageSafely?.(opts) ?? Promise.resolve({ type: 'no_pending' as const }),
-      { type: 'no_pending' as const },
+      { type: 'deferred' as const, reason: 'supervisor_offline' as const },
     );
   }
 

@@ -20,6 +20,7 @@ import {
   readConnectedServiceChildSelectionsFromEnv,
   type ConnectedServiceChildSelection,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
+import { resolveTrackedConnectedServiceBindingsRaw } from '../trackedSessionConnectedServiceBindings';
 import {
   createConnectedServiceMaterializationIdentity,
   readConnectedServiceMaterializationIdentityV1,
@@ -1459,7 +1460,9 @@ async function rematerializeUnchangedConnectedServiceBinding(input: Readonly<{
   }
 
   const previous = input.previousByServiceId.get(serviceId) ?? null;
-  const previousBindings = readConnectedServiceBindingsOrEmpty(input.tracked.spawnOptions?.connectedServices);
+  const previousBindings = readConnectedServiceBindingsOrEmpty(
+    resolveTrackedConnectedServiceBindingsRaw(input.tracked),
+  );
   const runtimeAuthSelection = await maybeMaterializeRuntimeAuthSelection({
     materializeRuntimeAuthSelection: input.materializeRuntimeAuthSelection,
     tracked: input.tracked,
@@ -1905,7 +1908,9 @@ export async function switchSessionConnectedServiceAuth(
 	      });
       if (!normalized.ok) return normalized;
 
-      const previousBindings = readConnectedServiceBindingsOrEmpty(tracked.spawnOptions?.connectedServices);
+      const previousBindings = readConnectedServiceBindingsOrEmpty(
+        resolveTrackedConnectedServiceBindingsRaw(tracked),
+      );
       const previousByServiceId = previousEffectiveBindings(previousBindings);
       const nextByServiceId = resolveNextEffectiveBindings({
         previousByServiceId,

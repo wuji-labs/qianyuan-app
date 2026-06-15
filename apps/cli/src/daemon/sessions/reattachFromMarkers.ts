@@ -14,12 +14,16 @@ import { resolveSessionRuntimeSnapshot } from './runtimeSnapshot/resolveSessionR
 import type { TrackedSession } from '../types';
 import { findAllHappyProcesses } from '../doctor';
 import { adoptSessionsFromMarkers, isOwnedLiveDaemonSessionProcessCommand } from '../reattach';
-import { hashProcessCommand, listSessionMarkers, removeSessionMarker, writeSessionMarker } from '../sessionRegistry';
+import { hashProcessCommand, listSessionMarkers, removeSessionMarker, writeSessionMarker, type DaemonSessionMarker } from '../sessionRegistry';
 
 function extractExistingSessionIdFromCommand(command: string): string | null {
   const match = /(?:^|\s)--existing-session(?:=|\s+)(\S+)/.exec(command);
   const sessionId = typeof match?.[1] === 'string' ? match[1].trim() : '';
   return sessionId || null;
+}
+
+function normalizeSessionId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function readRuntimeSnapshotMetadata(value: unknown): Record<string, unknown> | null {
@@ -160,6 +164,16 @@ function restoreSpawnOptionsFromRespawnDescriptor(params: Readonly<{
   }
 }
 
+function readConnectedServiceRestartIntent(marker: DaemonSessionMarker): Readonly<{
+  requestedAtMs: number;
+}> | null {
+  const intent = marker.connectedServiceRestartIntent;
+  if (!intent || intent.v !== 1) return null;
+  return {
+    requestedAtMs: Math.max(0, Math.trunc(intent.requestedAtMs)),
+  };
+}
+
 async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
   happyProcesses: ReadonlyArray<{
     pid: number;
@@ -174,6 +188,7 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
     cwd?: string;
     metadata?: unknown;
     respawn?: unknown;
+    connectedServiceRestartIntent?: DaemonSessionMarker['connectedServiceRestartIntent'];
   }>>;
   markedPids: ReadonlySet<number>;
   pidToTrackedSession: Map<number, TrackedSession>;
@@ -289,6 +304,9 @@ async function recoverMarkerlessDaemonSpawnedSessions(params: Readonly<{
       processCommandHash,
       processCommand: processInfo.command,
       ...(respawn ? { respawn } : {}),
+      ...(incompleteMarker?.connectedServiceRestartIntent
+        ? { connectedServiceRestartIntent: incompleteMarker.connectedServiceRestartIntent }
+        : {}),
     });
     recovered++;
   }
@@ -301,8 +319,25 @@ type OrphanedDeadDaemonSession = Readonly<{
   pid: number;
 }>;
 
+export type ReattachedConnectedServiceRestartIntent =
+  | Readonly<{
+    kind: 'live';
+    sessionId: string;
+    pid: number;
+    requestedAtMs: number;
+  }>
+  | Readonly<{
+    kind: 'dead';
+    sessionId: string;
+    pid: number;
+    requestedAtMs: number;
+    spawnOptions: SpawnSessionOptions;
+    vendorResumeId: string;
+  }>;
+
 export type ReattachTrackedSessionsFromMarkersResult = Readonly<{
   orphanedDeadDaemonSessions: ReadonlyArray<OrphanedDeadDaemonSession>;
+  connectedServiceRestartIntents: ReadonlyArray<ReattachedConnectedServiceRestartIntent>;
 }>;
 
 export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
@@ -311,6 +346,13 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
 }>): Promise<ReattachTrackedSessionsFromMarkersResult> {
   const { pidToTrackedSession, credentials } = params;
   const orphanedDeadDaemonSessions: OrphanedDeadDaemonSession[] = [];
+  const deadConnectedServiceRestartMarkers: Array<Readonly<{
+    pid: number;
+    sessionId: string;
+    requestedAtMs: number;
+    spawnOptions: SpawnSessionOptions;
+    vendorResumeId: string;
+  }>> = [];
 
   // On daemon restart, reattach to still-running sessions via disk markers (stack-scoped by HAPPIER_HOME_DIR).
   try {
@@ -326,7 +368,31 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         process.kill(marker.pid, 0);
         aliveMarkers.push(marker);
       } catch {
-        const sessionId = typeof marker.happySessionId === 'string' ? marker.happySessionId.trim() : '';
+        const sessionId = normalizeSessionId(marker.happySessionId);
+        const restartIntent = readConnectedServiceRestartIntent(marker);
+        if (marker.startedBy === 'daemon' && sessionId && restartIntent) {
+          const parsedRespawnDescriptor = parseRecoveredRespawnDescriptor(marker.respawn);
+          const respawnSpawnOptions = restoreSpawnOptionsFromRespawnDescriptor({
+            parsedRespawnDescriptor,
+            credentials,
+          });
+          const spawnOptions = applyRecoveredRuntimeSnapshot({
+            spawnOptions: respawnSpawnOptions,
+            metadata: marker.metadata,
+            vendorResumeId: null,
+          });
+          const vendorResumeId = typeof spawnOptions?.resume === 'string' ? spawnOptions.resume.trim() : '';
+          if (spawnOptions && vendorResumeId) {
+            deadConnectedServiceRestartMarkers.push({
+              pid: marker.pid,
+              sessionId,
+              requestedAtMs: restartIntent.requestedAtMs,
+              spawnOptions,
+              vendorResumeId,
+            });
+            continue;
+          }
+        }
         if (marker.startedBy === 'daemon' && sessionId) {
           orphanedDeadDaemonSessions.push({
             sessionId,
@@ -375,6 +441,7 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
             cwd: marker.cwd,
             metadata: marker.metadata,
             respawn: marker.respawn,
+            connectedServiceRestartIntent: marker.connectedServiceRestartIntent,
           },
         ] as const),
     );
@@ -405,6 +472,51 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
         `[DAEMON RUN] Reattached session ${restoreError.happySessionId} without respawn descriptor continuity: ${restoreError.message}`,
       );
     }
+    const recoveredLiveSessionIds = new Set(
+      Array.from(pidToTrackedSession.values())
+        .map((trackedSession) => trackedSession.happySessionId)
+        .filter((sessionId): sessionId is string => typeof sessionId === 'string' && sessionId.trim().length > 0)
+        .map((sessionId) => sessionId.trim()),
+    );
+    const connectedServiceRestartIntents: ReattachedConnectedServiceRestartIntent[] = [];
+    for (const marker of aliveMarkers) {
+      const restartIntent = readConnectedServiceRestartIntent(marker);
+      if (!restartIntent) continue;
+      const sessionId = normalizeSessionId(marker.happySessionId);
+      if (!sessionId) continue;
+      const tracked = pidToTrackedSession.get(marker.pid);
+      if (normalizeSessionId(tracked?.happySessionId) !== sessionId) continue;
+      connectedServiceRestartIntents.push({
+        kind: 'live',
+        sessionId,
+        pid: marker.pid,
+        requestedAtMs: restartIntent.requestedAtMs,
+      });
+    }
+    for (const marker of deadConnectedServiceRestartMarkers) {
+      if (recoveredLiveSessionIds.has(marker.sessionId)) {
+        await removeSessionMarker(marker.pid);
+        continue;
+      }
+      connectedServiceRestartIntents.push({
+        kind: 'dead',
+        sessionId: marker.sessionId,
+        pid: marker.pid,
+        requestedAtMs: marker.requestedAtMs,
+        spawnOptions: marker.spawnOptions,
+        vendorResumeId: marker.vendorResumeId,
+      });
+    }
+    return {
+      orphanedDeadDaemonSessions: Array.from(
+        new Map(
+          orphanedDeadDaemonSessions
+            .filter((session) => !recoveredLiveSessionIds.has(session.sessionId))
+            .map((session) => [session.sessionId, session] as const),
+        ).values(),
+      ),
+      connectedServiceRestartIntents,
+    };
   } catch (e) {
     logger.debug('[DAEMON RUN] Failed to reattach sessions from disk markers', e);
   }
@@ -424,5 +536,6 @@ export async function reattachTrackedSessionsFromMarkers(params: Readonly<{
           .map((session) => [session.sessionId, session] as const),
       ).values(),
     ),
+    connectedServiceRestartIntents: [],
   };
 }

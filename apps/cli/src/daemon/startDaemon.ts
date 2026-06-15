@@ -232,7 +232,6 @@ import { commitConnectedServiceQuotaLifecycleSessionEvents } from './connectedSe
 import { ConnectedServiceGroupHomeCleanupScheduler } from './connectedServices/homes/ConnectedServiceGroupHomeCleanupScheduler';
 import { ConnectedServiceMaterializedHomeCleanupScheduler } from './connectedServices/materialize/cleanup/ConnectedServiceMaterializedHomeCleanupScheduler';
 import { startConnectedServiceMaterializedHomeCleanupLoop } from './connectedServices/materialize/cleanup/startConnectedServiceMaterializedHomeCleanupLoop';
-import { parseConnectedServiceBindingSelections } from './connectedServices/parseConnectedServicesBindings';
 import {
   ConnectedServiceBindingsV1Schema,
   CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES,
@@ -307,7 +306,10 @@ import {
   replayPendingConnectedServiceContinuationsForTrackedSessions,
   resolveConnectedServiceContinuationProviderContextAvailability,
 } from './connectedServices/continuation/connectedServiceContinuationProviderContext';
-import { resolveTrackedConnectedServiceBindingsRaw } from './connectedServices/trackedSessionConnectedServiceBindings';
+import {
+  hasTrackedConnectedServiceGroupBinding,
+  resolveTrackedConnectedServiceBindingsRaw,
+} from './connectedServices/trackedSessionConnectedServiceBindings';
 import { materializeSessionConnectedServiceRuntimeAuthSelection } from './connectedServices/sessionAuthSwitch/materializeSessionConnectedServiceRuntimeAuthSelection';
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from './connectedServices/sessionAuthSwitch/resolveTrackedConnectedServiceSwitchContinuityContext';
 import {
@@ -1625,8 +1627,11 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         hasLiveTarget: ({ serviceId, groupId, agentId }) => getCurrentChildren().some((tracked) => {
           const trackedAgentId = resolveTrackedSessionCatalogAgentId(tracked);
           if (trackedAgentId !== agentId) return false;
-          return parseConnectedServiceBindingSelections(tracked.spawnOptions?.connectedServices)
-            .some((selection) => selection.kind === 'group' && selection.serviceId === serviceId && selection.groupId === groupId);
+          return hasTrackedConnectedServiceGroupBinding({
+            tracked,
+            serviceId,
+            groupId,
+          });
         }),
         groupExists: async ({ serviceId, groupId }) => (await api.getConnectedServiceAuthGroup({ serviceId, groupId })) !== null,
       });
@@ -3584,7 +3589,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 serviceId: switchServiceId,
                 previousBinding: previous,
                 nextBinding: next,
-                fromBindingsRaw: switchTracked?.spawnOptions?.connectedServices ?? previousBindings,
+                fromBindingsRaw: switchTracked
+                  ? resolveTrackedConnectedServiceBindingsRaw(switchTracked) ?? previousBindings
+                  : previousBindings,
                 toBindings: normalizedBindings,
                 accountSettings: getActiveAccountSettingsSnapshot()?.settings ?? null,
                 connectedServiceMaterializationIdentityV1: continuityContext.connectedServiceMaterializationIdentityV1,
@@ -4561,7 +4568,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
         });
         const trackedForSwitch = getCurrentChildren().find((child) => child.happySessionId === input.sessionId) ?? null;
         const previousBindings = readConnectedServiceBindingsOrEmpty(
-          trackedForSwitch?.spawnOptions?.connectedServices,
+          trackedForSwitch ? resolveTrackedConnectedServiceBindingsRaw(trackedForSwitch) : undefined,
         );
         // Thread the live pre-switch member for any group binding so a manual group-member switch's
         // transcript "from" is the real account (the persisted group binding does not track it) —
@@ -4664,7 +4671,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               serviceId,
               previousBinding: previous,
               nextBinding: next,
-              fromBindingsRaw: tracked?.spawnOptions?.connectedServices ?? previousBindings,
+              fromBindingsRaw: tracked
+                ? resolveTrackedConnectedServiceBindingsRaw(tracked) ?? previousBindings
+                : previousBindings,
               toBindings: normalizedBindings,
               accountSettings: getActiveAccountSettingsSnapshot()?.settings ?? null,
               connectedServiceMaterializationIdentityV1: continuityContext.connectedServiceMaterializationIdentityV1,

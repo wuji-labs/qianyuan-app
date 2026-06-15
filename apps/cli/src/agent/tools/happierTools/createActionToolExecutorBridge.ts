@@ -64,6 +64,19 @@ function normalizeActionToolResult(actionId: ActionId, result: ActionExecutorRes
   return normalizeExecutionRunToolResult(result.result as Parameters<typeof normalizeExecutionRunToolResult>[0]);
 }
 
+function normalizeActionExecuteInput(input: unknown): unknown {
+  if (typeof input !== 'string') return input;
+
+  const trimmed = input.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return input;
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return input;
+  }
+}
+
 export function createActionToolExecutorBridge(params: Readonly<{
   executor: ActionExecutorLike;
   isActionEnabled?: (id: ActionId) => boolean;
@@ -103,7 +116,9 @@ export function createActionToolExecutorBridge(params: Readonly<{
         }
         return normalizeActionToolResult(actionId as ActionId, await params.executor.execute(
           actionId as ActionId,
-          Object.prototype.hasOwnProperty.call(toolArgs ?? {}, 'input') ? (toolArgs as any).input : {},
+          Object.prototype.hasOwnProperty.call(toolArgs ?? {}, 'input')
+            ? normalizeActionExecuteInput((toolArgs as any).input)
+            : {},
           context,
         ));
       }

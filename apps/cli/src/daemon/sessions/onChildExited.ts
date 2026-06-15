@@ -4,7 +4,7 @@ import { writeSessionExitReport } from '@/daemon/sessionExitReport';
 
 import type { TrackedSession } from '../types';
 import { reportDaemonObservedSessionExit, settleDaemonObservedOpenTurn } from '../sessionTermination';
-import { removeSessionMarker } from '../sessionRegistry';
+import { promoteSessionMarkerConnectedServiceRestartIntent, removeSessionMarker } from '../sessionRegistry';
 import { cleanupPidSessionResources } from './cleanupPidSessionResources';
 
 export type ChildExit = { reason: string; code: number | null; signal: string | null };
@@ -53,6 +53,8 @@ export function createOnChildExited(params: Readonly<{
   onUnexpectedExit?: (trackedSession: TrackedSession, exit: ChildExit) => void;
   isExitUnexpectedOverride?: (trackedSession: TrackedSession, exit: ChildExit) => boolean | null | undefined;
   onPidPromoted?: (input: Readonly<{ fromPid: number; toPid: number; trackedSession: TrackedSession }>) => void;
+  shouldPreserveSessionMarkerOnExit?: (input: Readonly<{ pid: number; trackedSession: TrackedSession; exit: ChildExit }>) => boolean;
+  promoteSessionMarkerConnectedServiceRestartIntentFn?: typeof promoteSessionMarkerConnectedServiceRestartIntent;
   removeSessionMarkerFn?: typeof removeSessionMarker;
 }>): (pid: number, exit: ChildExit) => void {
   const {
@@ -63,6 +65,8 @@ export function createOnChildExited(params: Readonly<{
     onUnexpectedExit,
     isExitUnexpectedOverride,
     onPidPromoted,
+    shouldPreserveSessionMarkerOnExit,
+    promoteSessionMarkerConnectedServiceRestartIntentFn = promoteSessionMarkerConnectedServiceRestartIntent,
     removeSessionMarkerFn = removeSessionMarker,
   } = params;
 
@@ -92,7 +96,11 @@ export function createOnChildExited(params: Readonly<{
       };
       pidToTrackedSession.set(runnerPid, promoted);
       onPidPromoted?.({ fromPid: pid, toPid: runnerPid, trackedSession: promoted });
-      void removeSessionMarkerFn(pid);
+      void promoteSessionMarkerConnectedServiceRestartIntentFn({ fromPid: pid, toPid: runnerPid })
+        .then(() => removeSessionMarkerFn(pid))
+        .catch((error) => {
+          logger.debug('[DAEMON RUN] Failed to promote connected-service restart intent to runner marker; preserving wrapper marker', error);
+        });
       return;
     }
 
@@ -160,7 +168,11 @@ export function createOnChildExited(params: Readonly<{
       sessionAttachCleanupByPid,
     });
     pidToTrackedSession.delete(pid);
-    void removeSessionMarkerFn(pid);
+    const preserveExitedMarker =
+      tracked !== undefined && shouldPreserveSessionMarkerOnExit?.({ pid, trackedSession: tracked, exit }) === true;
+    if (!preserveExitedMarker) {
+      void removeSessionMarkerFn(pid);
+    }
     if (typeof runnerPid === 'number' && runnerPid !== pid) {
       void removeSessionMarkerFn(runnerPid);
     }

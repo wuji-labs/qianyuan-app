@@ -1,8 +1,8 @@
 import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
 
 export type SpecialCommandQueue<Mode, Message> = {
-  push: (message: Message, mode: Mode) => void;
-  pushIsolateAndClear: (message: Message, mode: Mode) => void;
+  push: (message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }) => void;
+  pushIsolateAndClear: (message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }) => void;
 };
 
 /**
@@ -13,11 +13,13 @@ export function pushMessageToQueueWithSpecialCommands<Mode, Message>(opts: {
   message: Message;
   text: string;
   mode: Mode;
+  userMessageSeq?: number | null;
 }): void {
   const special = parseSpecialCommand(opts.text);
+  const queueOptions = { userMessageSeq: opts.userMessageSeq ?? null };
   if (special.type === 'clear') {
-    opts.queue.pushIsolateAndClear(opts.message, opts.mode);
+    opts.queue.pushIsolateAndClear(opts.message, opts.mode, queueOptions);
     return;
   }
-  opts.queue.push(opts.message, opts.mode);
+  opts.queue.push(opts.message, opts.mode, queueOptions);
 }

@@ -6,6 +6,13 @@ export type MessageBatch<Mode, Message> = {
   mode: Mode;
   isolate: boolean;
   hash: string;
+  /**
+   * Owed-delivery watermark attribution (A3-HIGH-1): max server user-row seq among the queue
+   * items consumed into this batch (null/absent when none carried one). Consumed by the
+   * provider-acceptance seam to persist the delivered-watermark only for rows that actually
+   * reached the provider.
+   */
+  maxUserMessageSeq?: number | null;
 };
 
 export type PendingMaterializationReconcileWhenEmpty = PendingQueueReconcileWhenEmpty;

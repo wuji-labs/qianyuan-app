@@ -9,6 +9,7 @@ import type { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../acco
 import type { ConnectedServiceAuthGroupQuotaSnapshot } from '../accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
 import { readConnectedServiceChildSelectionsFromEnv } from '../connectedServiceChildEnvironment';
 import { parseConnectedServiceBindingSelections } from '../parseConnectedServicesBindings';
+import { resolveTrackedConnectedServiceBindingsRaw } from '../trackedSessionConnectedServiceBindings';
 import type { ConnectedServiceQuotasCoordinator } from './ConnectedServiceQuotasCoordinator';
 import type { RuntimeAccountIdentityRecordInput } from './identity/runtimeAccountIdentityTypes';
 
@@ -66,7 +67,7 @@ export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input
 
   const tracked = findTrackedSession(input.getChildren(), input.sessionId);
   if (!tracked) return { status: 'session_not_found' };
-  const selection = parseConnectedServiceBindingSelections(tracked.spawnOptions?.connectedServices)
+  const selection = parseConnectedServiceBindingSelections(resolveTrackedConnectedServiceBindingsRaw(tracked))
     .find((candidate) => candidate.serviceId === input.serviceId) ?? null;
   const activeGroupSelection = readConnectedServiceChildSelectionsFromEnv(tracked.spawnOptions?.environmentVariables ?? {})
     .find((candidate) => (

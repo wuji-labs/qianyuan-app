@@ -16,6 +16,13 @@ const emptyAdoptResult = {
   respawnRestoreErrors: [],
 } satisfies ReturnType<typeof adoptSessionsFromMarkers>;
 
+type TestConnectedServiceRestartIntentMarker = DaemonSessionMarker & Readonly<{
+  connectedServiceRestartIntent: Readonly<{
+    v: 1;
+    requestedAtMs: number;
+  }>;
+}>;
+
 const { isOwnedLiveDaemonSessionProcessCommandMock } = vi.hoisted(() => ({
   isOwnedLiveDaemonSessionProcessCommandMock: vi.fn(() => true),
 }));
@@ -71,6 +78,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
           pid: 43210,
         },
       ],
+      connectedServiceRestartIntents: [],
     });
     expect(removeSessionMarker).toHaveBeenCalledWith(43210);
     expect(adoptSessionsFromMarkers).toHaveBeenCalledWith({
@@ -78,6 +86,112 @@ describe('reattachTrackedSessionsFromMarkers', () => {
       happyProcesses: [],
       pidToTrackedSession,
     });
+  });
+
+  it('returns a durable connected-service restart intent for a live reattached marker', async () => {
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 24680,
+        happySessionId: 'session-live-restart',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 2,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+        processCommandHash: 'a'.repeat(64),
+        respawn: {
+          version: 1,
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+          resume: 'claude-live-thread',
+        },
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 1_000,
+        },
+      } satisfies TestConnectedServiceRestartIntentMarker,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([
+      {
+        pid: 24680,
+        type: 'daemon-spawned-session',
+        cwd: '/tmp/project',
+        command:
+          '/home/guest/.happier/cli-preview/current/happier claude --happy-starting-mode remote --started-by daemon --resume claude-live-thread --existing-session session-live-restart',
+      } satisfies HappyProcessInfo,
+    ]);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    const pidToTrackedSession = new Map<number, TrackedSession>();
+    const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.get(24680)).toEqual(expect.objectContaining({
+      happySessionId: 'session-live-restart',
+      pid: 24680,
+      vendorResumeId: 'claude-live-thread',
+      reattachedFromDiskMarker: true,
+    }));
+    expect(result.connectedServiceRestartIntents).toEqual([
+      {
+        kind: 'live',
+        sessionId: 'session-live-restart',
+        pid: 24680,
+        requestedAtMs: 1_000,
+      },
+    ]);
+    expect(removeSessionMarker).not.toHaveBeenCalledWith(24680);
+  });
+
+  it('keeps a dead connected-service restart marker durable and returns respawn inputs', async () => {
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 24681,
+        happySessionId: 'session-dead-restart',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 2,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+        respawn: {
+          version: 1,
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          resume: 'codex-dead-thread',
+        },
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 2_000,
+        },
+      } satisfies TestConnectedServiceRestartIntentMarker,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([]);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
+
+    const pidToTrackedSession = new Map<number, TrackedSession>();
+    const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.size).toBe(0);
+    expect(result).toEqual({
+      orphanedDeadDaemonSessions: [],
+      connectedServiceRestartIntents: [
+        {
+          kind: 'dead',
+          sessionId: 'session-dead-restart',
+          pid: 24681,
+          requestedAtMs: 2_000,
+          spawnOptions: {
+            directory: '/tmp/project',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            resume: 'codex-dead-thread',
+            approvedNewDirectoryCreation: true,
+          },
+          vendorResumeId: 'codex-dead-thread',
+        },
+      ],
+    });
+    expect(removeSessionMarker).not.toHaveBeenCalledWith(24681);
   });
 
   it('recovers a markerless daemon-spawned session from the live process command and heals its marker', async () => {
@@ -761,6 +875,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     }));
     expect(result).toEqual({
       orphanedDeadDaemonSessions: [],
+      connectedServiceRestartIntents: [],
     });
   });
 
@@ -823,6 +938,7 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     }));
     expect(result).toEqual({
       orphanedDeadDaemonSessions: [],
+      connectedServiceRestartIntents: [],
     });
   });
 });

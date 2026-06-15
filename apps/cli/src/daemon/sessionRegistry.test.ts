@@ -164,6 +164,100 @@ describe('sessionRegistry', () => {
     await expect(listSessionMarkers()).resolves.toHaveLength(0);
   });
 
+  it('marks and clears connected-service restart intent on an existing marker', async () => {
+    const {
+      clearSessionMarkerConnectedServiceRestartIntent,
+      listSessionMarkers,
+      markSessionMarkerConnectedServiceRestartIntent,
+      writeSessionMarker,
+    } = await import('./sessionRegistry');
+
+    await writeSessionMarker({
+      pid: 9991,
+      happySessionId: 'sess-restart-intent',
+      startedBy: 'daemon',
+      cwd: '/tmp/work',
+    });
+
+    await expect(markSessionMarkerConnectedServiceRestartIntent({
+      pid: 9991,
+      requestedAtMs: 12_345,
+    })).resolves.toBe(true);
+
+    await expect(listSessionMarkers()).resolves.toEqual([
+      expect.objectContaining({
+        pid: 9991,
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 12_345,
+        },
+      }),
+    ]);
+
+    await clearSessionMarkerConnectedServiceRestartIntent(9991);
+
+    const markers = await listSessionMarkers();
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).not.toHaveProperty('connectedServiceRestartIntent');
+  });
+
+  it('does not create a connected-service restart intent marker when no session marker exists', async () => {
+    const { listSessionMarkers, markSessionMarkerConnectedServiceRestartIntent } = await import('./sessionRegistry');
+
+    await expect(markSessionMarkerConnectedServiceRestartIntent({
+      pid: 9992,
+      requestedAtMs: 12_345,
+    })).resolves.toBe(false);
+
+    await expect(listSessionMarkers()).resolves.toHaveLength(0);
+  });
+
+  it('promotes connected-service restart intent from a wrapper marker to an existing runner marker', async () => {
+    const registry = await import('./sessionRegistry');
+    const {
+      listSessionMarkers,
+      promoteSessionMarkerConnectedServiceRestartIntent,
+      writeSessionMarker,
+    } = registry;
+
+    await writeSessionMarker({
+      pid: 9993,
+      happySessionId: 'sess-promote-restart-intent',
+      startedBy: 'daemon',
+      cwd: '/tmp/wrapper',
+      connectedServiceRestartIntent: {
+        v: 1,
+        requestedAtMs: 44_000,
+      },
+    });
+    await writeSessionMarker({
+      pid: 9994,
+      happySessionId: 'sess-promote-restart-intent',
+      startedBy: 'daemon',
+      cwd: '/tmp/runner',
+      processCommandHash: 'c'.repeat(64),
+      metadata: { owner: 'runner' },
+    });
+
+    await expect(promoteSessionMarkerConnectedServiceRestartIntent({
+      fromPid: 9993,
+      toPid: 9994,
+    })).resolves.toBe(true);
+
+    await expect(listSessionMarkers()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        pid: 9994,
+        cwd: '/tmp/runner',
+        processCommandHash: 'c'.repeat(64),
+        metadata: { owner: 'runner' },
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 44_000,
+        },
+      }),
+    ]));
+  });
+
   it('writes valid JSON payload shape to disk', async () => {
     const { configuration } = await import('@/configuration');
     const { writeSessionMarker } = await import('./sessionRegistry');

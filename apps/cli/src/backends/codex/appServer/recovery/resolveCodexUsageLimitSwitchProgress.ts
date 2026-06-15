@@ -4,13 +4,13 @@
  *
  * Live bug being fixed: when the rate-limit probe sees exhausted quota and the group recovery
  * reports `switched`, the runtime previously returned an immediate retry
- * (`nextCheckAtMs: Date.now()`). If the "switch" landed on the SAME exhausted account (Codex
- * caches the account at process level and keeps failing until restarted with a DIFFERENT
- * account), that produced a tight immediate-retry storm.
+ * (`nextCheckAtMs: Date.now()`). If the "switch" landed on the same selected profile, that
+ * produced a tight immediate-retry storm.
  *
- * Deterministic-proof principle: a switch only counts as progress when the newly-selected
- * account is genuinely different from the exhausted one. Otherwise we wait until the provider
- * reset time (never an immediate retry), or go terminal when no candidate exists.
+ * Deterministic-proof principle: this helper must not treat profile-id change as provider
+ * account proof. Exact provider-account identity is owned by the daemon quota identity index /
+ * fanout path and post-switch verification. Without that proof, wait until reset instead of
+ * immediately retrying on a merely different selected profile.
  *
  * Seam for wave-3: this helper proves a fresh CANDIDATE was selected. Full provider-outcome
  * proof (the provider actually accepting the new account and producing activity) is left to the
@@ -55,6 +55,7 @@ export function resolveCodexUsageLimitSwitchProgress(input: Readonly<{
   switchAttemptStatus: CodexUsageLimitSwitchAttemptStatus | null;
   exhaustedProfileId: string | null;
   selectedProfileId: string | null;
+  verificationStatus: 'verified' | 'weakly_verified' | null;
   resetAtMs: number | null;
   nowMs: number;
   fallbackNextCheckAtMs?: number | null;
@@ -87,13 +88,11 @@ export function resolveCodexUsageLimitSwitchProgress(input: Readonly<{
       return waitUntilReset();
     case 'switched':
     case 'observed_generation': {
-      const exhausted = normalizeProfileId(input.exhaustedProfileId);
-      const selected = normalizeProfileId(input.selectedProfileId);
-      // Only a genuinely different account counts as progress (fresh-candidate proof).
-      if (selected !== null && selected !== exhausted) {
+      // Codex requires exact live provider account proof before treating the switch as fresh
+      // quota. `weakly_verified` is sufficient for auth-surface providers, not for Codex.
+      if (input.verificationStatus === 'verified') {
         return { kind: 'retry' };
       }
-      // Same account (or unknown selection) => no fresh quota; wait until reset, never immediate.
       return waitUntilReset();
     }
     default:

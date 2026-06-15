@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createZellijTerminalHostAdapter as createZellijTerminalHostAdapterBase } from './adapter';
 import { ZellijActionTimeoutError, type ZellijActions, type ZellijPane } from './actions';
 import { prepareZellijSocketDir, resolveZellijSocketDir } from './socketDir';
+import { isTerminalHostStartupError } from '../terminalHost/errors';
 
 const skipPrepareZellijSocketDir = async (): Promise<void> => {};
 
@@ -274,13 +275,118 @@ describe('createZellijTerminalHostAdapter', () => {
       launchStrategy: { type: 'foregroundAttached'; launchClient(): Promise<void> };
     });
 
-    await expect(adapter.createOrAttachHost({
+    let error: unknown;
+    await adapter.createOrAttachHost({
       sessionName: 'session-a',
       workingDirectory: '/workspace/project',
       spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
       spawnEnv: {},
       isolatedEnv: true,
-    })).rejects.toThrow(/launched terminal pane disappeared/i);
+    }).catch((caught: unknown) => {
+      error = caught;
+    });
+    expect(isTerminalHostStartupError(error)).toBe(true);
+    expect(error).toMatchObject({
+      code: 'terminal_host_startup_failed',
+      hostKind: 'zellij',
+      reason: 'pane_disappeared_after_bootstrap_cleanup',
+    });
+    const diagnostics = (error as { diagnostics?: Record<string, unknown> }).diagnostics;
+    expect(diagnostics).toMatchObject({
+      previousPaneId: 'terminal_42',
+      closedPaneIds: ['terminal_1'],
+    });
+    expect(JSON.parse(JSON.stringify(diagnostics))).toMatchObject({
+      closedPaneIds: ['terminal_1'],
+    });
+    expect(launcherDisposed).toBe(true);
+  });
+
+  it('preserves the typed startup failure when zellij session cleanup also fails', async () => {
+    let listCount = 0;
+    let launcherDisposed = false;
+    let bootstrapClosed = false;
+    const actions = {
+      attachCreateBackground: async () => {
+        throw new Error('should not create a background session');
+      },
+      runCommand: async () => {
+        throw new Error('foreground launch should not await zellij run');
+      },
+      startCommandDetached: async () => ({
+        dispose: () => {
+          launcherDisposed = true;
+        },
+      }),
+      writeBytesChunked: async () => {
+        throw new Error('should not write during host creation');
+      },
+      sendEnter: async () => {
+        throw new Error('should not submit during host creation');
+      },
+      sendEscape: async () => {
+        throw new Error('should not interrupt during host creation');
+      },
+      listPanes: async () => {
+        listCount += 1;
+        if (listCount === 1) {
+          return [{ id: 1, is_plugin: false, terminal_command: null }];
+        }
+        if (launcherDisposed) {
+          return bootstrapClosed ? [] : [{ id: 1, is_plugin: false, terminal_command: null }];
+        }
+        return [
+          { id: 1, is_plugin: false, terminal_command: null },
+          { id: 42, is_plugin: false, terminal_command: '/managed/node' },
+        ];
+      },
+      dumpScreen: async () => '',
+      closePane: async () => {
+        bootstrapClosed = true;
+      },
+      killSession: async () => ({ exitCode: 1, stdout: '', stderr: 'cleanup denied' }),
+    } as ZellijActions & {
+      startCommandDetached(): Promise<{ dispose(): void }>;
+    };
+    const adapter = createZellijTerminalHostAdapter({
+      zellijBinary: '/tools/zellij',
+      happyHomeDir: '/home/happier',
+      actions,
+      launchStrategy: {
+        type: 'foregroundAttached',
+        launchClient: async () => undefined,
+      },
+    } as Parameters<typeof createZellijTerminalHostAdapterBase>[0] & {
+      launchStrategy: { type: 'foregroundAttached'; launchClient(): Promise<void> };
+    });
+
+    let error: unknown;
+    await adapter.createOrAttachHost({
+      sessionName: 'session-a',
+      workingDirectory: '/workspace/project',
+      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+      spawnEnv: {},
+      isolatedEnv: true,
+    }).catch((caught: unknown) => {
+      error = caught;
+    });
+
+    expect(isTerminalHostStartupError(error)).toBe(true);
+    expect(error).toMatchObject({
+      code: 'terminal_host_startup_failed',
+      hostKind: 'zellij',
+      reason: 'pane_disappeared_after_bootstrap_cleanup',
+    });
+    const diagnostics = (error as { diagnostics?: Record<string, unknown> }).diagnostics;
+    expect(diagnostics).toMatchObject({
+      previousPaneId: 'terminal_42',
+      closedPaneIds: ['terminal_1'],
+      cleanupError: expect.stringContaining('cleanup denied'),
+    });
+    expect(JSON.parse(JSON.stringify(diagnostics))).toMatchObject({
+      closedPaneIds: ['terminal_1'],
+    });
+    expect(String((error as { message?: unknown }).message)).toContain('cleanup failed');
     expect(launcherDisposed).toBe(true);
   });
 

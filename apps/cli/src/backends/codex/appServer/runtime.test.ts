@@ -56,6 +56,7 @@ function createSessionTurnLifecycleTestDouble(overrides: Partial<SessionTurnLife
         beginTurn: vi.fn(async () => ({ turnId: 'session-turn-1' })),
         attachProviderTurnId: vi.fn(async () => {}),
         appendTranscriptAnchors: vi.fn(async () => {}),
+        touchActiveTurn: vi.fn(async () => {}),
         completeTurn: vi.fn(async () => {}),
         failTurn: vi.fn(async () => {}),
         cancelTurn: vi.fn(async () => {}),
@@ -95,6 +96,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     rejectThreadRead?: boolean;
     requireResumeBeforeThreadRead?: boolean;
     oversizedResumePayloadChars?: number;
+    omitTurnStartedForPrompt?: string;
 }>): Promise<string> {
     const scriptPath = join(params.dir, 'fake-codex-app-server.mjs');
     const script = [
@@ -434,9 +436,11 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        setTimeout(() => {',
         '            process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId }, threadId: msg.params?.threadId ?? null } }) + "\\n");',
         '        }, respondDelayMs);',
-        '        setTimeout(() => {',
-            '            process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
-        '        }, respondDelayMs + 5);',
+        `        if (text !== ${JSON.stringify(params.omitTurnStartedForPrompt ?? null)}) {`,
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, respondDelayMs + 5);',
+        '        }',
         '        if (text === "bridge-streams") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { itemId: "msg_1", delta: "Hello " } }) + "\\n");',
@@ -956,6 +960,18 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 12);',
         '            continue;',
         '        }',
+        '        if (text === "rate-limit-update-sparse-after-full") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "account/rateLimits/updated", params: { rateLimits: { account: { id: "acct_live_codex", email: "codex-user@example.test" }, primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1779098400 }, secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: 1779698400 }, planType: "pro" } } }) + "\\n");',
+        '            }, 6);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "account/rateLimits/updated", params: { rateLimits: { primary: { usedPercent: 88 } } } }) + "\\n");',
+        '            }, 8);',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 12);',
+        '            continue;',
+        '        }',
         '        if (text === "bridge-chatgpt-refresh") {',
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ id: "refresh-chatgpt-tokens", method: "account/chatgptAuthTokens/refresh", params: { chatgptPlanType: "plus" } }) + "\\n");',
@@ -1238,6 +1254,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectThreadRead?: boolean;
             requireResumeBeforeThreadRead?: boolean;
             oversizedResumePayloadChars?: number;
+            omitTurnStartedForPrompt?: string;
             maxJsonLineChars?: number;
             rpcTimeoutMs?: number;
             startupRpcTimeoutMs?: number;
@@ -1276,6 +1293,7 @@ describe('createCodexAppServerRuntime', () => {
             rejectThreadRead: options.rejectThreadRead,
             requireResumeBeforeThreadRead: options.requireResumeBeforeThreadRead,
             oversizedResumePayloadChars: options.oversizedResumePayloadChars,
+            omitTurnStartedForPrompt: options.omitTurnStartedForPrompt,
         });
         envScope.patch({
             HAPPIER_CODEX_APP_SERVER_BIN: fakeAppServer,
@@ -2863,11 +2881,15 @@ describe('createCodexAppServerRuntime', () => {
 
     it('advertises in-flight steer support and can call turn/steer while a turn is in flight', async () => {
         const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-steer-');
+        const acceptedPrompts: Array<{ userMessageSeq: number | null }> = [];
 
         const runtime = createCodexAppServerRuntime({
             directory: root,
             onThinkingChange: vi.fn(),
             session: { updateMetadata: vi.fn() } as any,
+        });
+        runtime.setOnPromptAcceptedByProvider((prompt) => {
+            acceptedPrompts.push(prompt);
         });
 
         await runtime.startOrLoad({});
@@ -2877,7 +2899,7 @@ describe('createCodexAppServerRuntime', () => {
         await new Promise((resolve) => setTimeout(resolve, 30));
 
         expect(runtime.isTurnInFlight()).toBe(true);
-        await runtime.steerPrompt('nudge');
+        await runtime.steerPrompt('nudge', { userMessageSeq: 42 });
         await sendPromptPromise;
 
         const requestLog = (await readFile(requestLogPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
@@ -2891,6 +2913,7 @@ describe('createCodexAppServerRuntime', () => {
             }),
         ]);
         expect(requestLog.filter((entry: { method: string }) => entry.method === 'turn/start')).toHaveLength(1);
+        expect(acceptedPrompts).toContainEqual({ userMessageSeq: 42 });
     });
 
     it('clears stale in-flight state when native steer reports no active turn', async () => {
@@ -6132,7 +6155,14 @@ describe('createCodexAppServerRuntime', () => {
             ok: true,
             result: {
                 status: 'switch_attempted',
-                result: { status: 'switched', activeProfileId: 'backup', generation: 2 },
+                result: {
+                    status: 'switched',
+                    activeProfileId: 'backup',
+                    generation: 2,
+                    verificationByServiceId: {
+                        'openai-codex': { status: 'verified', reason: 'active_account_match' },
+                    },
+                },
             },
         }));
         const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
@@ -6609,6 +6639,103 @@ describe('createCodexAppServerRuntime', () => {
                 credits: null,
                 planType: 'pro',
                 rateLimitReachedType: null,
+            },
+        });
+    });
+
+    it('notifies prompt acceptance only after the provider turn/started event', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-prompt-accepted-');
+
+        const onPromptAcceptedByProvider = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        (runtime as any).setOnPromptAcceptedByProvider(onPromptAcceptedByProvider);
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('hello-world', { userMessageSeq: 42 } as any);
+
+        expect(onPromptAcceptedByProvider).toHaveBeenCalledWith({ userMessageSeq: 42 });
+        expect(onPromptAcceptedByProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to successful turn/start response as prompt acceptance when turn/started is absent', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-prompt-accepted-response-', {
+            omitTurnStartedForPrompt: 'turn-start-response-only',
+        });
+
+        const onPromptAcceptedByProvider = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        (runtime as any).setOnPromptAcceptedByProvider(onPromptAcceptedByProvider);
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('turn-start-response-only', { userMessageSeq: 43 } as any);
+
+        const requestLog = await readRequestLog(requestLogPath);
+        expect(requestLog).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                method: 'turn/start',
+                params: expect.objectContaining({
+                    input: [expect.objectContaining({ text: 'turn-start-response-only' })],
+                }),
+            }),
+        ]));
+        expect(onPromptAcceptedByProvider).toHaveBeenCalledWith({ userMessageSeq: 43 });
+        expect(onPromptAcceptedByProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it('merges sparse Codex account/rateLimits/updated notifications with the last known snapshot', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-app-server-runtime-rate-limit-sparse-update-');
+
+        const onRateLimitSnapshot = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            onRateLimitSnapshot,
+            session: {
+                updateMetadata: vi.fn(),
+                sendCodexMessage: vi.fn(),
+                sendSessionEvent: vi.fn(),
+            } as any,
+        });
+
+        await runtime.startOrLoad({});
+        await runtime.sendPrompt('rate-limit-update-sparse-after-full');
+
+        expect(onRateLimitSnapshot).toHaveBeenCalledTimes(2);
+        expect(onRateLimitSnapshot.mock.calls[1]?.[0]).toEqual({
+            rateLimits: {
+                account: {
+                    id: 'acct_live_codex',
+                    email: 'codex-user@example.test',
+                },
+                primary: {
+                    usedPercent: 88,
+                    windowDurationMins: 300,
+                    resetsAt: 1_779_098_400,
+                },
+                secondary: {
+                    usedPercent: 40,
+                    windowDurationMins: 10080,
+                    resetsAt: 1_779_698_400,
+                },
+                planType: 'pro',
             },
         });
     });

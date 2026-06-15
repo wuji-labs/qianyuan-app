@@ -82,7 +82,7 @@ describe('verifyCodexConnectedServiceActiveAccount', () => {
     });
   });
 
-  it('weakly verifies Codex account adoption from email-only account/read when no account-id proof contradicts it', async () => {
+  it('does not accept Codex account adoption from email-only account/read when no live account-id proof is available', async () => {
     const client = {
       request: vi.fn(async () => ({ account: { email: '  Codex1@Example.Test  ', planType: 'plus' } })),
     };
@@ -99,13 +99,13 @@ describe('verifyCodexConnectedServiceActiveAccount', () => {
         client,
       },
     })).resolves.toEqual({
-      status: 'weakly_verified',
-      providerAccountId: 'acct_codex1',
-      reason: 'provider_account_email_verified_without_account_id',
+      status: 'unavailable',
+      retryable: true,
+      reason: 'active_account_probe_missing_account_id',
     });
   });
 
-  it('verifies the current Codex app-server email-only account/read shape against the materialized auth store account id', async () => {
+  it('does not accept Codex account adoption from auth-store proof when live account/read omits account id', async () => {
     const client = {
       request: vi.fn(async () => ({
         account: { type: 'chatgpt', email: '  Codex1@Example.Test  ', planType: 'pro' },
@@ -126,9 +126,36 @@ describe('verifyCodexConnectedServiceActiveAccount', () => {
         readAuthStoreProviderAccountId: vi.fn(async () => 'acct_codex1'),
       },
     })).resolves.toEqual({
-      status: 'verified',
-      providerAccountId: 'acct_codex1',
-      reason: 'provider_account_auth_store_and_email_verified',
+      status: 'unavailable',
+      retryable: true,
+      reason: 'active_account_probe_missing_account_id',
+    });
+  });
+
+  it('treats missing live email and account id as missing proof, not an email mismatch', async () => {
+    const client = {
+      request: vi.fn(async () => ({
+        account: { type: 'chatgpt', planType: 'pro' },
+        requiresOpenaiAuth: true,
+      })),
+    };
+
+    await expect(verifyCodexConnectedServiceActiveAccount({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        profileId: 'codex1',
+        record: recordWithEmail({
+          providerAccountId: 'acct_codex1',
+          providerEmail: 'codex1@example.test',
+        }),
+        client,
+        readAuthStoreProviderAccountId: vi.fn(async () => 'acct_codex1'),
+      },
+    })).resolves.toEqual({
+      status: 'unavailable',
+      retryable: true,
+      reason: 'active_account_probe_missing_account_id',
     });
   });
 

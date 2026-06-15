@@ -10,6 +10,7 @@ import { SessionRuntimeIssueV1Schema } from '../control/runtimeIssueV1.js';
 
 export const SessionTurnMutationActionV1Schema = z.enum([
   'begin',
+  'touch_active',
   'attach_provider_turn_id',
   'append_transcript_anchors',
   'complete',
@@ -45,6 +46,9 @@ const CanonicalSessionTurnMutationV1Schema = z.discriminatedUnion('action', [
   TurnRequiredMutationBaseV1Schema.extend({
     action: z.literal('begin'),
     transcriptAnchors: SessionTurnTranscriptAnchorsV1Schema.optional(),
+  }).strict(),
+  TurnRequiredMutationBaseV1Schema.extend({
+    action: z.literal('touch_active'),
   }).strict(),
   TurnRequiredMutationBaseV1Schema.extend({
     action: z.literal('attach_provider_turn_id'),

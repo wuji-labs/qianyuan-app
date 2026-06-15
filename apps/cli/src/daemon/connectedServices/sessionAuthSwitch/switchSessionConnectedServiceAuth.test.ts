@@ -35,6 +35,18 @@ function trackedSession(overrides: Partial<TrackedSession> = {}): TrackedSession
   };
 }
 
+function metadata(overrides: Record<string, unknown> = {}) {
+  return {
+    path: '/tmp/project',
+    host: 'test-host',
+    homeDir: '/tmp/home',
+    happyHomeDir: '/tmp/home/.happier',
+    happyLibDir: '/tmp/home/.happier/lib',
+    happyToolsDir: '/tmp/home/.happier/tools',
+    ...overrides,
+  };
+}
+
 function group(overrides: Partial<ConnectedServiceAuthGroupV1> = {}): ConnectedServiceAuthGroupV1 {
   return {
     v: 1,
@@ -453,6 +465,161 @@ describe('switchSessionConnectedServiceAuth', () => {
       partialState: null,
       errorCode: null,
     }));
+  });
+
+  it('uses webhook metadata bindings as the previous binding when tracked spawn options no longer carry them', async () => {
+    const previousBindings = bindings('old-profile');
+    const nextBindings = bindings('new-profile');
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      },
+      happySessionMetadataFromLocalWebhook: metadata({
+        flavor: 'claude',
+        connectedServices: previousBindings,
+      }),
+    });
+    const resolveContinuity = vi.fn(async ({ previous, next, previousBindings: resolvedPreviousBindings }) => {
+      expect(previous).toEqual(expect.objectContaining({
+        serviceId: 'anthropic',
+        profileId: 'old-profile',
+      }));
+      expect(next).toEqual(expect.objectContaining({
+        serviceId: 'anthropic',
+        profileId: 'new-profile',
+      }));
+      expect(resolvedPreviousBindings).toEqual(previousBindings);
+      return { mode: 'restart_rematerialize' as const };
+    });
+    const restartSession = vi.fn(async () => {});
+    const emitSessionEvent = vi.fn();
+
+    const result = await switchSessionConnectedServiceAuth({
+      core: createCore(),
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'existing switch fixture does not exercise provider adoption verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'new-profile', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      resolveContinuity,
+      restartSession,
+      hotApply: async () => ({ ok: true }),
+      registerHotApplyTargets: vi.fn(),
+      emitSessionEvent,
+      persistSessionBindings: vi.fn(),
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        bindings: nextBindings,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'restart_requested',
+      normalizedBindings: nextBindings,
+    });
+    expect(resolveContinuity).toHaveBeenCalledOnce();
+    expect(restartSession).toHaveBeenCalledWith(tracked);
+    expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
+      type: 'connected_service_account_switch',
+      serviceId: 'anthropic',
+      fromProfileId: 'old-profile',
+      toProfileId: 'new-profile',
+      reason: 'manual',
+    }));
+  });
+
+  it('passes webhook metadata bindings into unchanged rematerialization when spawn options no longer carry them', async () => {
+    const previousBindings = bindings('old-profile');
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+      },
+      happySessionMetadataFromLocalWebhook: metadata({
+        flavor: 'claude',
+        connectedServices: previousBindings,
+      }),
+    });
+    const materializeRuntimeAuthSelection = vi.fn(async ({ previous, next, previousBindings: resolvedPreviousBindings }) => {
+      expect(previous).toEqual(expect.objectContaining({
+        serviceId: 'anthropic',
+        profileId: 'old-profile',
+      }));
+      expect(next).toEqual(expect.objectContaining({
+        serviceId: 'anthropic',
+        profileId: 'old-profile',
+      }));
+      expect(resolvedPreviousBindings).toEqual(previousBindings);
+      return { kind: 'materialized' };
+    });
+    const resolveContinuity = vi.fn(async ({ previous, next, previousBindings: resolvedPreviousBindings }) => {
+      expect(previous).toEqual(expect.objectContaining({
+        serviceId: 'anthropic',
+        profileId: 'old-profile',
+      }));
+      expect(next).toEqual(expect.objectContaining({
+        serviceId: 'anthropic',
+        profileId: 'old-profile',
+      }));
+      expect(resolvedPreviousBindings).toEqual(previousBindings);
+      return { mode: 'hot_apply' as const };
+    });
+    const hotApply = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await switchSessionConnectedServiceAuth({
+      core: createCore(),
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'existing switch fixture does not exercise provider adoption verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'anthropic',
+          profiles: [{ profileId: 'old-profile', status: 'connected' }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      materializeRuntimeAuthSelection,
+      resolveContinuity,
+      restartSession: vi.fn(),
+      hotApply,
+      recoverAfterRuntimeAuthSwitch: vi.fn(async () => ({ ok: true })),
+      continueAfterRuntimeAuthSwitch: vi.fn(async () => {}),
+      verifyProviderAccountAdoption: vi.fn(async () => ({
+        status: 'verified' as const,
+        reason: 'test_verified',
+      })),
+      persistSessionBindings: vi.fn(),
+      registerHotApplyTargets: vi.fn(),
+      emitSessionEvent: vi.fn(),
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'claude',
+        bindings: previousBindings,
+        rematerializeServiceId: 'anthropic',
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      action: 'hot_applied',
+      normalizedBindings: previousBindings,
+      continuityByServiceId: { anthropic: 'hot_apply' },
+    });
+    expect(materializeRuntimeAuthSelection).toHaveBeenCalledOnce();
+    expect(resolveContinuity).toHaveBeenCalledOnce();
+    expect(hotApply).toHaveBeenCalledOnce();
   });
 
   it.each([

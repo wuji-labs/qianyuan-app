@@ -95,13 +95,16 @@ describe('DeferredApiSessionClient', () => {
     expect(real.close).toHaveBeenCalledTimes(1);
   });
 
-  it('delegates safe pending materialization after attach and reports no_pending before attach', async () => {
+  it('delegates safe pending materialization after attach and defers before attach', async () => {
     const deferred = new DeferredApiSessionClient({
       placeholderSessionId: 'PID-1',
       limits: { maxEntries: 10, maxBytes: 10_000 },
     });
 
-    await expect(deferred.materializeNextPendingMessageSafely()).resolves.toEqual({ type: 'no_pending' });
+    await expect(deferred.materializeNextPendingMessageSafely()).resolves.toEqual({
+      type: 'deferred',
+      reason: 'supervisor_offline',
+    });
 
     const real = {
       sessionId: 'sess_1',

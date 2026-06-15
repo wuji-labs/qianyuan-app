@@ -113,12 +113,10 @@ import {
     resolveCodexRuntimeAuthClassificationContext,
 } from '../connectedServices/resolveCodexRuntimeAuthClassificationContext';
 import { UsageLimitRecoveryScheduler } from '@/daemon/connectedServices/usageLimitRecovery/UsageLimitRecoveryScheduler';
-import { getSharedAccountExhaustionSuppression } from '@/daemon/connectedServices/usageLimitRecovery/accountExhaustionSuppression';
 import {
     resolveCodexUsageLimitSwitchProgress,
     type CodexUsageLimitSwitchAttemptStatus,
 } from './recovery/resolveCodexUsageLimitSwitchProgress';
-import { resolveCodexUsageLimitSuppressionWait } from './recovery/resolveCodexUsageLimitSuppressionWait';
 import { resolveCodexUsageLimitProbeFailureWait } from './recovery/resolveCodexUsageLimitProbeFailureWait';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { deriveUsageLimitRecoveryTiming } from '@/session/usageLimitRecoveryControls/deriveUsageLimitRecoveryTiming';
@@ -250,7 +248,21 @@ type CodexAppServerPromptOptions = Readonly<{
     metadata?: unknown;
     localId?: string | null;
     trustedLocalImagePaths?: ReadonlySet<string>;
+    userMessageSeq?: number | null;
 }>;
+
+type CodexAppServerPromptAcceptedCallback = (input: Readonly<{
+    userMessageSeq: number | null;
+}>) => void;
+
+type CodexAppServerUndeliverablePrompt = Readonly<{
+    text: string;
+    userMessageSeq: number | null;
+}>;
+
+type CodexAppServerUndeliverablePromptsCallback = (
+    prompts: ReadonlyArray<CodexAppServerUndeliverablePrompt>,
+) => void;
 
 async function buildCodexTurnInputForPrompt(
     prompt: string,
@@ -329,6 +341,17 @@ function readSwitchAttemptResult(value: unknown): Record<string, unknown> | null
 
 function readSwitchAttemptStatus(value: unknown): string | null {
     return trimStringValue(readSwitchAttemptResult(value)?.status);
+}
+
+function readSwitchAttemptVerificationStatus(
+    switchAttemptResult: Record<string, unknown> | null,
+    serviceId: string,
+): 'verified' | 'weakly_verified' | null {
+    const verificationByServiceId = readRecord(switchAttemptResult?.verificationByServiceId);
+    const verification = readRecord(verificationByServiceId?.[serviceId]);
+    return verification?.status === 'verified' || verification?.status === 'weakly_verified'
+        ? verification.status
+        : null;
 }
 
 function buildUsageLimitIssueFingerprint(issue: SessionRuntimeIssueV1): string {
@@ -552,6 +575,22 @@ function isNoActiveTurnToInterruptError(error: unknown): boolean {
 function readRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return value as Record<string, unknown>;
+}
+
+function mergeSparseCodexSnapshotUpdate(previous: unknown, next: unknown): unknown {
+    const previousRecord = readRecord(previous);
+    const nextRecord = readRecord(next);
+    if (!previousRecord || !nextRecord) return next;
+    const merged: Record<string, unknown> = { ...previousRecord };
+    for (const [key, value] of Object.entries(nextRecord)) {
+        const previousValue = previousRecord[key];
+        if (readRecord(previousValue) && readRecord(value)) {
+            merged[key] = mergeSparseCodexSnapshotUpdate(previousValue, value);
+        } else {
+            merged[key] = value;
+        }
+    }
+    return merged;
 }
 
 const CODEX_APP_SERVER_AUTH_ACCOUNT_CHANGED_MESSAGE =
@@ -955,6 +994,8 @@ export function createCodexAppServerRuntime(params: Readonly<{
     steerPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
     compactContext: (_command: string) => Promise<void>;
     sendPrompt: (_prompt: string, _options?: CodexAppServerPromptOptions) => Promise<void>;
+    setOnPromptAcceptedByProvider: (_callback: CodexAppServerPromptAcceptedCallback | null) => void;
+    setOnUndeliverablePrompts: (_callback: CodexAppServerUndeliverablePromptsCallback | null) => void;
     startReview: (_request: CodexAppServerReviewStartRequest) => Promise<void | UnsupportedSessionRuntimeMethodResult>;
     startInlineReview: (_input: unknown) => Promise<Readonly<{ ok: true; reviewTurnId: string | null }> | UnsupportedSessionRuntimeMethodResult | Readonly<{ ok: false; errorCode: 'invalid_parameters' | 'inline_review_not_supported'; error: string }>>;
     handleUserMessage: (_request: Readonly<{
@@ -1007,6 +1048,10 @@ export function createCodexAppServerRuntime(params: Readonly<{
     let hasServiceTierOverride = false;
     let pendingTurnStartSeqInclusive: number | null = null;
     let permissionSupport: CodexAppServerPermissionSupport = 'unknown';
+    let lastRateLimitSnapshot: unknown = null;
+    let onPromptAcceptedByProvider: CodexAppServerPromptAcceptedCallback | null = null;
+    let onUndeliverablePrompts: CodexAppServerUndeliverablePromptsCallback | null = null;
+    let pendingProviderPrompt: (CodexAppServerUndeliverablePrompt & Readonly<{ accepted: boolean }>) | null = null;
     const turnBoundaryTracker = createCodexAppServerSessionTurnTracker({
         session: params.session,
         getProviderThreadId: () => threadId,
@@ -1043,6 +1088,41 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const assistantTextByItemId = new Map<string, string>();
     const reasoningTextByItemId = new Map<string, string>();
     const latestAssistantItemIdByStreamScope = new Map<string, string>();
+
+    const publishRateLimitSnapshot = async (
+        rawSnapshot: unknown,
+        options?: Readonly<{ mergeWithLast?: boolean }>,
+    ): Promise<void> => {
+        const snapshot = options?.mergeWithLast === true
+            ? mergeSparseCodexSnapshotUpdate(lastRateLimitSnapshot, rawSnapshot)
+            : rawSnapshot;
+        lastRateLimitSnapshot = snapshot;
+        await params.onRateLimitSnapshot?.(snapshot);
+    };
+
+    const markPendingProviderPromptAccepted = (): void => {
+        const pending = pendingProviderPrompt;
+        if (!pending || pending.accepted) return;
+        pendingProviderPrompt = { ...pending, accepted: true };
+        onPromptAcceptedByProvider?.({ userMessageSeq: pending.userMessageSeq });
+    };
+
+    const clearPendingProviderPrompt = (): void => {
+        pendingProviderPrompt = null;
+    };
+
+    const emitPendingProviderPromptAsUndeliverable = (): void => {
+        const pending = pendingProviderPrompt;
+        if (!pending || pending.accepted) {
+            pendingProviderPrompt = null;
+            return;
+        }
+        pendingProviderPrompt = null;
+        onUndeliverablePrompts?.([{
+            text: pending.text,
+            userMessageSeq: pending.userMessageSeq,
+        }]);
+    };
     const normalizedAssistantFinalItemKeys = new Set<string>();
     const nativeReviewCompletionTextByStreamScope = new Map<string, string>();
     const rawAssistantFinalByItemKey = new Map<string, PendingRawAssistantFinal>();
@@ -1064,48 +1144,15 @@ export function createCodexAppServerRuntime(params: Readonly<{
             if (!activeThreadId) {
                 return { status: 'exhausted' as const, lastProbeError: 'codex_app_server_thread_not_started' };
             }
-            // S1 anti-storm: if a sibling session already recorded the currently-selected
-            // account as known-exhausted for this reset bucket, skip the rate-limit probe and
-            // the redundant group switch/restart request. Wait until the recorded reset bucket
-            // instead of each session looping against an account that cannot recover yet.
-            const suppressionDecision = resolveCodexUsageLimitSuppressionWait({
-                suppression: getSharedAccountExhaustionSuppression(),
-                serviceId: intent.selectedAuth.kind === 'native'
-                    ? (intent.selectedAuth.serviceId ?? 'openai-codex')
-                    : intent.selectedAuth.serviceId,
-                accountId: intent.selectedAuth.kind === 'native' ? null : intent.selectedAuth.profileId,
-                resetAtMs: intent.resetAtMs ?? intent.nextCheckAtMs ?? null,
-                nowMs: Date.now(),
-            });
-            if (suppressionDecision.kind === 'wait_until_reset') {
-                return {
-                    status: 'wait' as const,
-                    nextCheckAtMs: suppressionDecision.nextCheckAtMs,
-                    lastProbeError: 'account_known_exhausted_until_reset',
-                };
-            }
             const client = await ensureClient();
             try {
                 const rawSnapshot = await readCodexRateLimitsSnapshot({
                     request: async (_method, params) => await client.request('account/rateLimits/read', params),
                 });
-                await params.onRateLimitSnapshot?.(rawSnapshot);
+                await publishRateLimitSnapshot(rawSnapshot);
                 if (isCodexRateLimitSnapshotExhausted(rawSnapshot)) {
                     const resetAtMs = readEarliestCodexRateLimitResetAtMs(rawSnapshot) ?? intent.nextCheckAtMs ?? intent.resetAtMs ?? null;
                     const nextCheckAtMs = resetAtMs ?? Date.now();
-                    // The currently-selected account is confirmed exhausted for this reset bucket.
-                    // Record it so sibling sessions on the same account skip the restart-loop.
-                    const exhaustedProfileId = intent.selectedAuth.kind === 'native' ? null : intent.selectedAuth.profileId;
-                    const exhaustedServiceId = intent.selectedAuth.kind === 'native'
-                        ? (intent.selectedAuth.serviceId ?? 'openai-codex')
-                        : intent.selectedAuth.serviceId;
-                    if (exhaustedProfileId) {
-                        getSharedAccountExhaustionSuppression().markExhausted({
-                            serviceId: exhaustedServiceId,
-                            accountId: exhaustedProfileId,
-                            resetAtMs,
-                        });
-                    }
                     if (intent.selectedAuth.kind === 'group' && typeof params.onUsageLimitGroupRecovery === 'function') {
                         try {
                             const recoveryRequest = await params.onUsageLimitGroupRecovery({
@@ -1125,13 +1172,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             const switchAttemptResult = readSwitchAttemptResult(recoveryRequest);
                             const switchAttemptStatus = trimStringValue(switchAttemptResult?.status) as CodexUsageLimitSwitchAttemptStatus | null;
                             const selectedProfileId = trimStringValue(switchAttemptResult?.activeProfileId);
-                            // Require a genuinely different account before treating the switch as
-                            // progress. A switch back to the SAME exhausted account is not fresh
-                            // quota and must wait for reset instead of immediately retrying.
                             const progress = resolveCodexUsageLimitSwitchProgress({
                                 switchAttemptStatus,
                                 exhaustedProfileId: intent.selectedAuth.profileId,
                                 selectedProfileId,
+                                verificationStatus: readSwitchAttemptVerificationStatus(switchAttemptResult, 'openai-codex'),
                                 resetAtMs,
                                 nowMs: Date.now(),
                                 fallbackNextCheckAtMs: nextCheckAtMs,
@@ -2666,6 +2711,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             await bindActiveNativeTurnIdFromProviderActivity(activeTurn, notificationParams, {
                                 turnId: notificationTurnId,
                             });
+                            markPendingProviderPromptAccepted();
                             const nextThreadId = readThreadId(notificationParams);
                             if (nextThreadId && nextThreadId !== threadId) {
                                 threadId = nextThreadId;
@@ -2704,7 +2750,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     });
                     client.registerNotificationHandler('account/rateLimits/updated', (notificationParams) => {
                         void runBridgeWork(async () => {
-                            await params.onRateLimitSnapshot?.(notificationParams);
+                            await publishRateLimitSnapshot(notificationParams, { mergeWithLast: true });
                         });
                     });
                     client.registerNotificationHandler('thread/goal/updated', (notificationParams) => {
@@ -2867,6 +2913,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
     const disposeClient = async (options?: Readonly<{
         pendingTurnError?: Error;
     }>): Promise<void> => {
+        emitPendingProviderPromptAsUndeliverable();
         const activeClientPromise = clientPromise;
         clientPromise = null;
         if (!activeClientPromise) {
@@ -3386,11 +3433,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
         cancel: async () => {
             const activeTurn = pendingTurn;
             if (!activeTurn) {
+                emitPendingProviderPromptAsUndeliverable();
                 turnInFlight = false;
                 clearActiveTurnSteerability();
                 setThinking(false);
                 return;
             }
+            emitPendingProviderPromptAsUndeliverable();
             markActiveTurnNonSteerable();
             const client = await ensureClient();
             const interruptTurnId = (activeTurn.turnId ?? latestPendingTurnId) ?? (await waitForActiveTurnId());
@@ -3495,6 +3544,11 @@ export function createCodexAppServerRuntime(params: Readonly<{
 
             const structuredInput = await buildCodexTurnInputForPrompt(prompt, params.directory, options);
             const textOnlyInput: CodexAppServerTurnInputItem[] = [{ type: 'text', text: prompt }];
+            pendingProviderPrompt = {
+                text: prompt,
+                userMessageSeq: typeof options?.userMessageSeq === 'number' ? options.userMessageSeq : null,
+                accepted: false,
+            };
             const payload = {
                 threadId: activeTurn.threadId,
             };
@@ -3526,8 +3580,14 @@ export function createCodexAppServerRuntime(params: Readonly<{
                 await requestSteerWithStaleTurnRecovery(structuredInput, 'expectedTurnId');
             } catch (error) {
                 if (structuredInput.length > 1 && isCodexAppServerInvalidParamsError(error)) {
-                    await requestSteerWithStaleTurnRecovery(textOnlyInput, 'expectedTurnId');
+                    try {
+                        await requestSteerWithStaleTurnRecovery(textOnlyInput, 'expectedTurnId');
+                    } catch (fallbackError) {
+                        clearPendingProviderPrompt();
+                        throw fallbackError;
+                    }
                     await turnBoundaryTracker.appendSteerMessage({ localId: options?.localId ?? null });
+                    markPendingProviderPromptAccepted();
                     return;
                 }
                 // Backward compatibility: older experimental app-server builds used `turnId` instead
@@ -3538,20 +3598,29 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     (normalized.includes('expectedturnid') || normalized.includes('expected turn') || normalized.includes('turnid'))
                     && (normalized.includes('require') || normalized.includes('missing') || normalized.includes('unknown') || normalized.includes('invalid'));
                 if (!looksLikeParamMismatch) {
+                    clearPendingProviderPrompt();
                     throw error;
                 }
                 try {
                     await requestSteerWithStaleTurnRecovery(structuredInput, 'turnId');
                 } catch (legacyError) {
                     if (structuredInput.length > 1 && isCodexAppServerInvalidParamsError(legacyError)) {
-                        await requestSteerWithStaleTurnRecovery(textOnlyInput, 'turnId');
+                        try {
+                            await requestSteerWithStaleTurnRecovery(textOnlyInput, 'turnId');
+                        } catch (fallbackError) {
+                            clearPendingProviderPrompt();
+                            throw fallbackError;
+                        }
                         await turnBoundaryTracker.appendSteerMessage({ localId: options?.localId ?? null });
+                        markPendingProviderPromptAccepted();
                         return;
                     }
+                    clearPendingProviderPrompt();
                     throw legacyError;
                 }
             }
             await turnBoundaryTracker.appendSteerMessage({ localId: options?.localId ?? null });
+            markPendingProviderPromptAccepted();
         },
         compactContext: async (_command: string) => {
             const activeThreadId = threadId;
@@ -3589,6 +3658,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
                     throw new Error('Codex app-server already has a turn in flight');
                 }
                 const client = await ensureClient();
+                pendingProviderPrompt = {
+                    text: promptForAttempt,
+                    userMessageSeq: typeof optionsForAttempt?.userMessageSeq === 'number'
+                        ? optionsForAttempt.userMessageSeq
+                        : null,
+                    accepted: false,
+                };
                 const activeTurn = await beginPendingTurnForThread(activeThreadId, { localId: optionsForAttempt?.localId ?? null });
                 try {
                     const collaborationMode = currentModeId
@@ -3655,7 +3731,9 @@ export function createCodexAppServerRuntime(params: Readonly<{
                         recordInProgressBestEffort(startedTurnId);
                         await turnBoundaryTracker.updateActiveTurnId(startedTurnId);
                     }
+                    markPendingProviderPromptAccepted();
                     await (pendingTurn ?? activeTurn).promise;
+                    clearPendingProviderPrompt();
                     return;
                 } catch (error) {
                     const failure = error instanceof Error ? error : new Error(String(error));
@@ -3693,11 +3771,13 @@ export function createCodexAppServerRuntime(params: Readonly<{
                             continue;
                         }
                         if (retryDecision.action === 'budget_exhausted') {
+                            clearPendingProviderPrompt();
                             throw resolveRecoverableTurnFailureSecondFailure({
                                 originalFailure,
                                 latestFailure: failure,
                             }).failure;
                         }
+                        clearPendingProviderPrompt();
                         throw originalFailure;
                     }
                     if (isCodexAppServerContextWindowExhaustedError(failure)) {
@@ -3735,6 +3815,7 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 '[codex-app-server] Codex context-window recovery disabled; surfacing original turn failure',
                                 { mode: contextWindowRecoveryConfig.mode },
                             );
+                            clearPendingProviderPrompt();
                             throw originalFailure;
                         }
                         if (retryDecision.action === 'budget_exhausted') {
@@ -3743,13 +3824,22 @@ export function createCodexAppServerRuntime(params: Readonly<{
                                 latestFailure: failure,
                             });
                             await surfaceOriginalContextWindowFailureAfterRecoveryError(secondFailureDecision.failure, failure);
+                            clearPendingProviderPrompt();
                             throw secondFailureDecision.failure;
                         }
+                        clearPendingProviderPrompt();
                         throw originalFailure;
                     }
+                    clearPendingProviderPrompt();
                     throw failure;
                 }
             }
+        },
+        setOnPromptAcceptedByProvider: (callback) => {
+            onPromptAcceptedByProvider = callback;
+        },
+        setOnUndeliverablePrompts: (callback) => {
+            onUndeliverablePrompts = callback;
         },
         flushTurn: async () => {
             await finishPendingTurn({ flushReason: 'turn-end' });

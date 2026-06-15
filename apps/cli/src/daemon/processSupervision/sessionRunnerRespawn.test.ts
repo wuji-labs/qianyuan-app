@@ -17,7 +17,7 @@ describe('createSessionRunnerRespawnManager', () => {
       maxDelayMs: 50,
       jitterMs: 0,
       isSessionAlreadyRunning: async () => false,
-      spawnSession: (opts) => spawnSession(opts),
+      spawnSession: (opts: SpawnSessionOptions) => spawnSession(opts),
       random: () => 0,
       logDebug: () => {},
       logWarn: () => {},
@@ -328,6 +328,124 @@ describe('createSessionRunnerRespawnManager', () => {
       existingSessionId: 'sess-connected-service-immediate-restart',
       resume: 'claude-thread',
     }));
+  });
+
+  it('reports the previous pid after a forced connected-service respawn succeeds', async () => {
+    vi.useFakeTimers();
+    const spawnResult = { type: 'success' as const, pid: 123 };
+    const spawnSession = vi.fn(async (_opts: unknown) => spawnResult);
+    const onRespawnSuccess = vi.fn();
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 60_000,
+      maxDelayMs: 60_000,
+      jitterMs: 0,
+      isSessionAlreadyRunning: async () => false,
+      spawnSession: (opts) => spawnSession(opts),
+      onRespawnSuccess,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    });
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-connected-service-clear-intent',
+      spawnOptions: {
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        resume: 'claude-thread',
+      } satisfies SpawnSessionOptions,
+    };
+
+    manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-exited', code: null, signal: 'SIGTERM' },
+      { forceRestart: true },
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    expect(onRespawnSuccess).toHaveBeenCalledTimes(1);
+    expect(onRespawnSuccess).toHaveBeenCalledWith({
+      sessionId: 'sess-connected-service-clear-intent',
+      previousPid: 111,
+      result: spawnResult,
+    });
+  });
+
+  it.each([
+    {
+      name: 'replacement is already running',
+      isSessionAlreadyRunning: async () => true,
+      spawnResult: null,
+      expectedReason: 'already_running',
+    },
+    {
+      name: 'directory approval is required',
+      isSessionAlreadyRunning: async () => false,
+      spawnResult: { type: 'requestToApproveDirectoryCreation' as const },
+      expectedReason: 'directory_approval_required',
+    },
+    {
+      name: 'auth is not available',
+      isSessionAlreadyRunning: async () => false,
+      spawnResult: {
+        type: 'error' as const,
+        errorCode: 'not_authenticated',
+        errorMessage: 'expired token',
+      },
+      expectedReason: 'not_authenticated',
+    },
+  ])('reports terminal respawn suppression when $name', async ({ isSessionAlreadyRunning, spawnResult, expectedReason }) => {
+    vi.useFakeTimers();
+    const spawnSession = vi.fn(async (_opts: unknown) => spawnResult);
+    const onRespawnTerminal = vi.fn();
+
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true,
+      maxRestarts: 1,
+      baseDelayMs: 50,
+      maxDelayMs: 50,
+      jitterMs: 0,
+      isSessionAlreadyRunning,
+      spawnSession: (opts: SpawnSessionOptions) => spawnSession(opts),
+      onRespawnTerminal,
+      random: () => 0,
+      logDebug: () => {},
+      logWarn: () => {},
+    } as any);
+
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      pid: 111,
+      happySessionId: 'sess-connected-service-terminal',
+      spawnOptions: {
+        directory: '/tmp',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        resume: 'claude-thread',
+      } satisfies SpawnSessionOptions,
+    };
+
+    manager.handleUnexpectedExit(
+      tracked,
+      { reason: 'process-exited', code: null, signal: 'SIGTERM' },
+      { forceRestart: true },
+    );
+
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.resolve();
+
+    expect(onRespawnTerminal).toHaveBeenCalledTimes(1);
+    expect(onRespawnTerminal).toHaveBeenCalledWith({
+      sessionId: 'sess-connected-service-terminal',
+      previousPid: 111,
+      reason: expectedReason,
+    });
   });
 
   it('keeps ordinary unexpected exits suppressed when general respawn is disabled', async () => {

@@ -5,11 +5,11 @@
  * Helps diagnose and fix issues with hung or orphaned processes
  */
 
-import psList from 'ps-list';
 import spawn from 'cross-spawn';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readFile, readlink } from 'node:fs/promises';
+import { listProcessSnapshot } from './processSnapshotCache';
 
 const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
 const DAEMON_OWNERSHIP_ENVIRONMENT_VARIABLE_KEYS = [
@@ -332,7 +332,7 @@ export function classifyHappyProcess(proc: RawProcessInfo): HappyProcessInfo | n
 
 async function findAllHappyProcessesSnapshot(): Promise<HappyProcessInfo[]> {
   try {
-    const processes = await psList().catch((error: unknown) => {
+    const processes = await listProcessSnapshot().catch((error: unknown) => {
       if (process.platform !== 'win32') throw error;
       return [];
     });
@@ -450,7 +450,7 @@ export async function killRunawayHappyProcesses(): Promise<{ killed: number, err
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         // Check if still alive
-        const processes = await psList();
+        const processes = await listProcessSnapshot({ ttlMs: 0 });
         const stillAlive = processes.find(p => p.pid === pid);
         if (stillAlive) {
           console.log(`Process PID ${pid} ignored SIGTERM, using SIGKILL`);

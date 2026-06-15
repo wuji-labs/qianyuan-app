@@ -160,16 +160,26 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
     });
   });
 
-  it('records account/rateLimits/read probe snapshots into the runtime quota store for group selections', async () => {
+  it('records account/rateLimits/read probe snapshots with live account/read identity into the runtime quota store for group selections', async () => {
     const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
     const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
     const client = {
-      request: vi.fn(async () => ({
-        primary: {
-          used_percent: 97,
-          resets_at: 1_768_100_000_000,
-        },
-      })),
+      request: vi.fn(async (method: string) => {
+        if (method === 'account/read') {
+          return {
+            account: {
+              id: 'acct_live_codex',
+              email: 'live-codex-user@example.test',
+            },
+          };
+        }
+        return {
+          primary: {
+            used_percent: 97,
+            resets_at: 1_768_100_000_000,
+          },
+        };
+      }),
     };
 
     const result = await adapter.probeQuota({
@@ -205,10 +215,70 @@ describe('createCodexConnectedServiceRuntimeAuthAdapter', () => {
       groupId: 'main',
       profileId: 'work',
     })).toMatchObject({
-      activeAccountId: 'acct',
+      activeAccountId: 'acct_live_codex',
+      accountLabel: 'live-codex-user@example.test',
+      meters: [expect.objectContaining({ utilizationPct: 97 })],
+    });
+  });
+
+  it('does not report selected credential account id as activeAccountId when live account proof is unavailable', async () => {
+    const store = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const adapter = createCodexConnectedServiceRuntimeAuthAdapter();
+    const client = {
+      request: vi.fn(async (method: string) => {
+        if (method === 'account/read') {
+          return { account: { email: 'codex-user@example.test' } };
+        }
+        return {
+          primary: {
+            used_percent: 97,
+            resets_at: 1_768_100_000_000,
+          },
+        };
+      }),
+    };
+
+    const result = await adapter.probeQuota({
+      target: { agentId: 'codex' },
+      selection: {
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'work',
+        client,
+        runtimeQuotaSnapshots: store,
+        record: buildConnectedServiceCredentialRecord({
+          now: 1_000,
+          serviceId: 'openai-codex',
+          profileId: 'work',
+          kind: 'oauth',
+          expiresAt: 2_000,
+          oauth: {
+            accessToken: 'access',
+            refreshToken: 'refresh',
+            idToken: 'id',
+            scope: null,
+            tokenType: null,
+            providerAccountId: 'acct_selected_not_live',
+            providerEmail: 'codex-user@example.test',
+          },
+        }),
+      },
+    });
+
+    expect(result).toMatchObject({ status: 'available' });
+    expect(store.getSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'work',
+    })).toMatchObject({
       accountLabel: 'codex-user@example.test',
       meters: [expect.objectContaining({ utilizationPct: 97 })],
     });
+    expect(store.getSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'work',
+    })).not.toHaveProperty('activeAccountId');
   });
 
   it('returns unsupported for non-app-server Codex probes without calling app-server rate-limit APIs', async () => {

@@ -122,6 +122,7 @@ vi.mock('@/configuration', () => ({
         publicReleaseRing: 'stable',
         serverUrl: 'https://api.happier.dev',
         activeServerDir: '/tmp/server',
+        daemonReattachCatchUpConcurrency: 4,
         daemonSpawnExistingSessionWaitForExitMs: 5_000,
         daemonSpawnExistingSessionWaitForExitPollIntervalMs: 50,
     },

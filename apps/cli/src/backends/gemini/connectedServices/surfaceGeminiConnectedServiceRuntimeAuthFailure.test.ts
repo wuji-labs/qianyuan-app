@@ -120,7 +120,7 @@ describe('classifyGeminiConnectedServiceRuntimeAuthFailure', () => {
 });
 
 describe('surfaceGeminiConnectedServiceRuntimeAuthFailure', () => {
-  it('reports the structured classification to the daemon and commits the typed projection', async () => {
+  it('reports the structured classification to the daemon and leaves typed transcript projection to the daemon', async () => {
     const reportOutboxDir = await mkdtemp(join(tmpdir(), 'gemini-runtime-auth-report-'));
     const session = buildSessionClient();
     const classification = classifyGeminiConnectedServiceRuntimeAuthFailure({
@@ -162,16 +162,11 @@ describe('surfaceGeminiConnectedServiceRuntimeAuthFailure', () => {
       },
     });
     expect(report.handled).toBe(true);
-    expect(session.events).toHaveLength(1);
-    expect(session.events[0]).toMatchObject({
-      type: 'connected-service-runtime-auth-recovery',
-      status: 'retry_scheduled',
-      serviceId: 'gemini',
-    });
+    expect(session.events).toEqual([]);
     expect(session.metadataUpdates).toBeGreaterThan(0);
   });
 
-  it('suppresses duplicate recovery projections for the same classification within the dedupe window', async () => {
+  it('does not provider-emit duplicate daemon-handled recovery transcript projections', async () => {
     const reportOutboxDir = await mkdtemp(join(tmpdir(), 'gemini-runtime-auth-report-'));
     const session = buildSessionClient();
     const classification = classifyGeminiConnectedServiceRuntimeAuthFailure({
@@ -201,6 +196,6 @@ describe('surfaceGeminiConnectedServiceRuntimeAuthFailure', () => {
       notify,
     });
 
-    expect(session.events).toHaveLength(1);
+    expect(session.events).toEqual([]);
   });
 });

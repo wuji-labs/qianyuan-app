@@ -26,7 +26,10 @@ import type {
     SessionTurnLifecycleController,
     SessionTurnTerminalStatus,
     SessionTurnTranscriptAnchorsInput,
+    TouchActiveTurnInput,
 } from './types';
+
+const DEFAULT_ACTIVE_TURN_TOUCH_INTERVAL_MS = 60_000;
 
 type MutableTurn = {
     turnId: string;
@@ -41,6 +44,7 @@ type CreateSessionTurnLifecycleParams = Readonly<{
     enqueueSessionTurn: (mutation: SessionTurnMutationV1) => Promise<void>;
     createId?: () => string;
     now?: () => number;
+    activeTurnTouchIntervalMs?: number;
     onTurnLifecycleEvent?: (
         event: 'prompt_or_steer' | 'task_started' | 'assistant_message_end' | 'turn_cancelled',
         // REV-1: failTurn / turn_failed markers emit `assistant_message_end` too; the
@@ -124,8 +128,13 @@ function withLifecycleMarkerId<T extends Extract<ACPMessageData, { id: string }>
 export function createSessionTurnLifecycle(params: CreateSessionTurnLifecycleParams): SessionTurnLifecycleController {
     const createId = params.createId ?? randomUUID;
     const now = params.now ?? Date.now;
+    const activeTurnTouchIntervalMs = Math.max(
+        0,
+        Math.trunc(params.activeTurnTouchIntervalMs ?? DEFAULT_ACTIVE_TURN_TOUCH_INTERVAL_MS),
+    );
     let activeTurn: MutableTurn | null = null;
     let lastTerminalTurn: MutableTurn | null = null;
+    let lastActiveTurnTouchAt: number | null = null;
     const terminalWrites = new Set<string>();
 
     function emitTurnLifecycleEvent(
@@ -228,6 +237,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
     function beginTurnSync(input: BeginTurnInput): { turn: MutableTurn; pendingWrite: Promise<void> } {
         if (!activeTurn || activeTurn.terminalStatus) {
             activeTurn = createTurn(input);
+            lastActiveTurnTouchAt = input.observedAt ?? now();
         } else {
             mergeProviderFacts(activeTurn, input);
         }
@@ -277,6 +287,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
         turn.terminalStatus = input.status;
         turn.lastRuntimeIssue = issue ?? null;
         activeTurn = null;
+        lastActiveTurnTouchAt = null;
         lastTerminalTurn = turn;
         return {
             turn,
@@ -331,6 +342,28 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
             providerTurnId: input.providerTurnId,
             transcriptAnchors: input.transcriptAnchors,
             observedAt: input.observedAt,
+        }));
+    }
+
+    async function touchActiveTurn(input: TouchActiveTurnInput = {}): Promise<void> {
+        const turn = activeTurn;
+        if (!turn) return;
+        const observedAt = input.observedAt ?? now();
+        if (
+            input.force !== true
+            && lastActiveTurnTouchAt !== null
+            && observedAt - lastActiveTurnTouchAt < activeTurnTouchIntervalMs
+        ) {
+            return;
+        }
+        mergeProviderFacts(turn, input);
+        lastActiveTurnTouchAt = observedAt;
+        await enqueue(buildMutation({
+            action: 'touch_active',
+            turn,
+            provider: input.provider,
+            providerTurnId: input.providerTurnId,
+            observedAt,
         }));
     }
 
@@ -453,6 +486,7 @@ export function createSessionTurnLifecycle(params: CreateSessionTurnLifecyclePar
         beginTurn,
         attachProviderTurnId,
         appendTranscriptAnchors,
+        touchActiveTurn,
         completeTurn,
         failTurn,
         cancelTurn,

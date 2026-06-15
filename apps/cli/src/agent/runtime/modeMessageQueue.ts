@@ -5,6 +5,12 @@ export type MessageQueueBatch<Mode, Message> = {
   mode: Mode;
   isolate: boolean;
   hash: string;
+  /**
+   * Owed-delivery watermark attribution (A3-HIGH-1): max server user-row seq among the items
+   * consumed into this batch, or null when none carried one. Lets the provider-acceptance seam
+   * persist the delivered-watermark for exactly the rows that actually reached the provider.
+   */
+  maxUserMessageSeq: number | null;
 };
 
 type QueueItem<Mode, Message> = {
@@ -12,9 +18,14 @@ type QueueItem<Mode, Message> = {
   mode: Mode;
   modeHash: string;
   isolate: boolean;
+  userMessageSeq: number | null;
 };
 
 type MessageBatcher<Message> = (messages: Message[]) => Message;
+
+function normalizeUserMessageSeq(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : null;
+}
 
 function defaultStringBatcher(messages: unknown[]): string {
   if (!messages.every((value) => typeof value === 'string')) {
@@ -54,7 +65,7 @@ export class MessageQueue2<Mode, Message = string> {
     this.onMessageHandler = handler;
   }
 
-  push(message: Message, mode: Mode): void {
+  push(message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }): void {
     if (this.closed) {
       throw new Error('Cannot push to closed queue');
     }
@@ -66,6 +77,7 @@ export class MessageQueue2<Mode, Message = string> {
       mode,
       modeHash,
       isolate: false,
+      userMessageSeq: normalizeUserMessageSeq(opts?.userMessageSeq),
     });
 
     if (this.onMessageHandler) {
@@ -83,7 +95,7 @@ export class MessageQueue2<Mode, Message = string> {
     this.push(message, mode);
   }
 
-  pushIsolateAndClear(message: Message, mode: Mode): void {
+  pushIsolateAndClear(message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }): void {
     if (this.closed) {
       throw new Error('Cannot push to closed queue');
     }
@@ -96,6 +108,7 @@ export class MessageQueue2<Mode, Message = string> {
       mode,
       modeHash,
       isolate: true,
+      userMessageSeq: normalizeUserMessageSeq(opts?.userMessageSeq),
     });
 
     if (this.onMessageHandler) {
@@ -109,7 +122,7 @@ export class MessageQueue2<Mode, Message = string> {
     }
   }
 
-  unshift(message: Message, mode: Mode): void {
+  unshift(message: Message, mode: Mode, opts?: { userMessageSeq?: number | null }): void {
     if (this.closed) {
       throw new Error('Cannot unshift to closed queue');
     }
@@ -121,6 +134,7 @@ export class MessageQueue2<Mode, Message = string> {
       mode,
       modeHash,
       isolate: false,
+      userMessageSeq: normalizeUserMessageSeq(opts?.userMessageSeq),
     });
 
     if (this.onMessageHandler) {
@@ -206,14 +220,19 @@ export class MessageQueue2<Mode, Message = string> {
     const mode = firstItem.mode;
     const isolate = firstItem.isolate;
     const targetModeHash = firstItem.modeHash;
+    let maxUserMessageSeq: number | null = null;
+    const consume = (item: QueueItem<Mode, Message>): void => {
+      sameModeMessages.push(item.message);
+      if (item.userMessageSeq !== null) {
+        maxUserMessageSeq = Math.max(maxUserMessageSeq ?? -1, item.userMessageSeq);
+      }
+    };
 
     if (firstItem.isolate) {
-      const item = this.queue.shift()!;
-      sameModeMessages.push(item.message);
+      consume(this.queue.shift()!);
     } else {
       while (this.queue.length > 0 && this.queue[0].modeHash === targetModeHash && !this.queue[0].isolate) {
-        const item = this.queue.shift()!;
-        sameModeMessages.push(item.message);
+        consume(this.queue.shift()!);
       }
     }
 
@@ -224,6 +243,7 @@ export class MessageQueue2<Mode, Message = string> {
       mode,
       hash: targetModeHash,
       isolate,
+      maxUserMessageSeq,
     };
   }
 

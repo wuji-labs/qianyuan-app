@@ -39,7 +39,7 @@ import type { SessionHandoffLocalMetadataSource } from '@/session/handoff/metada
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { archiveSessionByIdBestEffort } from '@/session/services/setSessionArchivedState';
 import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
-import psList from 'ps-list';
+import { listProcessSnapshot } from '@/daemon/processSnapshotCache';
 import type { DaemonExecutionRunEntry, DaemonExecutionRunProcessInfo } from '@happier-dev/protocol';
 
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
@@ -1277,7 +1277,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
 
     let processIndex = new Map<number, DaemonExecutionRunProcessInfo>();
     try {
-      const processes = await psList();
+      const processes = await listProcessSnapshot();
 	      processIndex = new Map(
 	        processes.map((proc) => [
 	          proc.pid,

@@ -2,6 +2,7 @@ import type { DirectTranscriptRawMessageV1 } from '@happier-dev/protocol';
 
 import type {
   DirectSessionFollowLease,
+  DirectSessionTranscriptUpdate,
   DirectSessionTranscriptUpdateListener,
 } from './createManagedDirectSessionFollowLease';
 
@@ -40,7 +41,7 @@ function resolveMaxItems(env: NodeJS.ProcessEnv): number {
 
 async function notifyTranscriptListeners(
   listeners: ReadonlySet<DirectSessionTranscriptUpdateListener>,
-  update: DirectSessionTranscriptReadAfter,
+  update: DirectSessionTranscriptUpdate,
 ): Promise<void> {
   await Promise.allSettled(Array.from(listeners, async (listener) => {
     await listener(update);
@@ -83,8 +84,9 @@ export async function createPollingDirectSessionFollowLease(
     if (released || polling || listeners.size === 0) return;
     polling = true;
     try {
+      const fromCursor = tailCursor ?? 'tail';
       const result = await params.readAfterTranscript({
-        cursor: tailCursor ?? 'tail',
+        cursor: fromCursor,
         maxBytes,
         maxItems,
       });
@@ -95,6 +97,7 @@ export async function createPollingDirectSessionFollowLease(
       if (items.length > 0 || result.truncated === true) {
         await notifyTranscriptListeners(listeners, {
           items,
+          fromCursor,
           nextCursor: result.nextCursor ?? null,
           truncated: result.truncated === true,
         });

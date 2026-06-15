@@ -46,6 +46,26 @@ describe('mapCodexRateLimitSnapshotToQuotaSnapshot', () => {
     });
   });
 
+  it('uses live app-server account identity embedded in the rate-limit snapshot', () => {
+    const snapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
+      serviceId: 'openai-codex',
+      profileId: 'work',
+      fetchedAt: 1_768_000_000_000,
+      rawSnapshot: {
+        account: {
+          id: 'acct_live_codex',
+          email: 'live@example.test',
+        },
+        primary: { used_percent: 12 },
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      activeAccountId: 'acct_live_codex',
+      accountLabel: 'live@example.test',
+    });
+  });
+
   it('unwraps official app-server rateLimits response and notification envelopes', () => {
     for (const rawSnapshot of [
       {

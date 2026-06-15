@@ -306,6 +306,7 @@ describe('ApiMachineClient transports', () => {
           },
         },
       ],
+      fromCursor: 'cursor-1',
       nextCursor: 'cursor-2',
       truncated: false,
     });
@@ -510,6 +511,7 @@ describe('ApiMachineClient transports', () => {
       type: 'direct-session-transcript-delta',
       sessionId: 'session-1',
       items: [{ id: 'a2', createdAtMs: 1_050, raw: { type: 'assistant' } }],
+      fromCursor: 'cursor-1',
       nextCursor: 'cursor-2',
       truncated: false,
     });

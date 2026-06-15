@@ -92,8 +92,8 @@ export async function reportCodexRateLimitSnapshotToDaemon(input: Readonly<{
   const identity = selectedProfileId
     ? {
         profileId: selectedProfileId,
-        activeAccountId: nativeIdentity.activeAccountId,
-        accountLabel: nativeIdentity.accountLabel,
+        activeAccountId: null,
+        accountLabel: null,
       }
     : nativeIdentity;
 

@@ -260,8 +260,10 @@ export async function runCodex(opts: {
         setSessionMode: (mode: string) => Promise<void>;
         setSessionModel: (model: string) => Promise<void>;
         setSessionConfigOption: (key: string, value: string | number | boolean | null) => Promise<void>;
-        steerPrompt: (prompt: string, options?: { metadata?: unknown; localId?: string | null }) => Promise<void>;
-        sendPrompt: (prompt: string, options?: { metadata?: unknown; localId?: string | null }) => Promise<void>;
+        steerPrompt: (prompt: string, options?: { metadata?: unknown; localId?: string | null; userMessageSeq?: number | null }) => Promise<void>;
+        sendPrompt: (prompt: string, options?: { metadata?: unknown; localId?: string | null; userMessageSeq?: number | null }) => Promise<void>;
+        setOnPromptAcceptedByProvider?: (callback: ((input: Readonly<{ userMessageSeq: number | null }>) => void) | null) => void;
+        setOnUndeliverablePrompts?: (callback: ((prompts: ReadonlyArray<Readonly<{ text: string; userMessageSeq: number | null }>>) => void) | null) => void;
         compactContext: (command: string) => Promise<void>;
         refreshGoal?: () => Promise<unknown>;
         setGoal?: (
@@ -359,6 +361,10 @@ export async function runCodex(opts: {
             appendSystemPrompt: resolveAppendSystemPromptQueueKeyValue(mode),
         }),
     );
+    const undeliverableProviderPromptsBySeq = new Map<number, Readonly<{
+        message: string;
+        mode: EnhancedMode;
+    }>>();
     const messageBuffer = new MessageBuffer();
 
     const nowMs = () => Date.now();
@@ -695,7 +701,8 @@ export async function runCodex(opts: {
         }
     };
 
-    session.onUserMessage((message) => {
+    session.onUserMessage((message, info) => {
+        const userMessageSeq = info?.seq ?? null;
         // Resolve permission mode (accept all modes, will be mapped in switch statement)
         let messagePermissionMode = currentPermissionMode;
         let didChangePermissionMode = false;
@@ -750,7 +757,11 @@ export async function runCodex(opts: {
         })) {
             // This message will not go through the main prompt loop queue; display it immediately.
             messageBuffer.addMessage(text, 'user');
-            void runtime.steerPrompt(text, { metadata: message.meta, localId: message.localId ?? null }).catch((error) => {
+            void runtime.steerPrompt(text, {
+                metadata: message.meta,
+                localId: message.localId ?? null,
+                userMessageSeq,
+            }).catch((error) => {
                 pushMessageToQueueWithSpecialCommands({
                     queue: messageQueue,
                     message: text,
@@ -759,6 +770,7 @@ export async function runCodex(opts: {
                         ...enhancedMode,
                         suppressUserEcho: true,
                     },
+                    userMessageSeq,
                 });
             });
             return;
@@ -769,6 +781,7 @@ export async function runCodex(opts: {
             message: text,
             text,
             mode: enhancedMode,
+            userMessageSeq,
         });
     });
 
@@ -1431,6 +1444,22 @@ export async function runCodex(opts: {
                 }
                 : {}),
         });
+        session.deferDeliveredUserMessageWatermarkToProviderAcceptance?.();
+        codexAppServerRuntime.setOnPromptAcceptedByProvider?.(({ userMessageSeq }) => {
+            session.confirmUserMessageDeliveredToProvider?.(userMessageSeq);
+            if (typeof userMessageSeq === 'number') {
+                undeliverableProviderPromptsBySeq.delete(userMessageSeq);
+            }
+        });
+        codexAppServerRuntime.setOnUndeliverablePrompts?.((prompts) => {
+            for (const prompt of prompts) {
+                if (typeof prompt.userMessageSeq !== 'number') continue;
+                const queued = undeliverableProviderPromptsBySeq.get(prompt.userMessageSeq);
+                if (!queued) continue;
+                undeliverableProviderPromptsBySeq.delete(prompt.userMessageSeq);
+                messageQueue.unshift(queued.message, queued.mode, { userMessageSeq: prompt.userMessageSeq });
+            }
+        });
         session.setSessionRuntimeControls?.(codexAppServerRuntime);
         try {
             publishInFlightSteerCapability({ session, runtime: codexAppServerRuntime });
@@ -1475,7 +1504,13 @@ export async function runCodex(opts: {
 
 	    try {
 		        let wasCreated = false;
-	            let pending: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = null;
+	            let pending: {
+                    message: string;
+                    mode: EnhancedMode;
+                    isolate: boolean;
+                    hash: string;
+                    maxUserMessageSeq?: number | null;
+                } | null = null;
 
 	        const codexRemoteRuntimeForSync = getCodexRemoteRuntime();
 	        const modelSync =
@@ -1760,7 +1795,13 @@ export async function runCodex(opts: {
         while (!shouldExit && !requestedSwitchToLocal) {
             logActiveHandles('loop-top');
             // Get next batch; respect mode boundaries like Claude
-            let message: { message: string; mode: EnhancedMode; isolate: boolean; hash: string } | null = pending;
+            let message: {
+                message: string;
+                mode: EnhancedMode;
+                isolate: boolean;
+                hash: string;
+                maxUserMessageSeq?: number | null;
+            } | null = pending;
                 pending = null;
                 if (!message) {
                     // Capture the current signal to distinguish idle-abort from queue close
@@ -1862,6 +1903,7 @@ export async function runCodex(opts: {
 	                            await codexRuntime.steerPrompt(providerPromptText, {
 	                                metadata: message.mode.promptMetadata,
 	                                localId,
+                                  userMessageSeq: message.maxUserMessageSeq ?? null,
 	                            });
 	                            if (shouldLogAcpDebug) {
 	                                logger.debug('[CodexAppServer] steerPrompt complete for queued message while turn is in flight');
@@ -2057,17 +2099,30 @@ export async function runCodex(opts: {
                         )
                         : undefined;
                     const providerPromptText = await resolveProviderPromptText();
-                    await codexRuntime.sendPrompt(
-                        buildCodexAcpPromptForFreshSession({
-                            prompt: providerPromptText,
-                            startedFreshSession: startedFreshSessionForTurn,
-                            systemPromptText,
-                        }),
-                        {
-                            metadata: message.mode.promptMetadata,
-                            localId,
-                        },
-                    );
+                    if (typeof message.maxUserMessageSeq === 'number') {
+                        undeliverableProviderPromptsBySeq.set(message.maxUserMessageSeq, {
+                            message: message.message,
+                            mode: message.mode,
+                        });
+                    }
+                    try {
+                        await codexRuntime.sendPrompt(
+                            buildCodexAcpPromptForFreshSession({
+                                prompt: providerPromptText,
+                                startedFreshSession: startedFreshSessionForTurn,
+                                systemPromptText,
+                            }),
+                            {
+                                metadata: message.mode.promptMetadata,
+                                localId,
+                                userMessageSeq: message.maxUserMessageSeq ?? null,
+                            },
+                        );
+                    } finally {
+                        if (typeof message.maxUserMessageSeq === 'number') {
+                            undeliverableProviderPromptsBySeq.delete(message.maxUserMessageSeq);
+                        }
+                    }
                     if (shouldLogAcpDebug) {
                         logger.debug('[CodexACP] sendPrompt complete');
                     }

@@ -16,6 +16,7 @@ export type DirectSessionFollowLeaseReason = 'attached_view' | 'background_follo
 
 export type DirectSessionTranscriptUpdate = Readonly<{
   items: Iterable<DirectTranscriptRawMessageV1>;
+  fromCursor?: string | null;
   nextCursor?: string | null;
   truncated: boolean;
 }>;
@@ -102,13 +103,21 @@ export async function createManagedDirectSessionFollowLease(params: Readonly<{
 
     if (params.emitDirectSessionTranscriptUpdate) {
       try {
-        await params.emitDirectSessionTranscriptUpdate({
+        const payload: DirectSessionTranscriptDeltaEphemeral = {
           type: 'direct-session-transcript-delta',
           sessionId: params.sessionId,
           items: Array.from(update.items),
-          nextCursor: update.nextCursor,
           truncated: update.truncated,
-        });
+        };
+        if (update.fromCursor !== undefined) {
+          payload.fromCursor = update.fromCursor;
+        }
+        const canIncludeNextCursor = update.truncated === true
+          || (typeof update.fromCursor === 'string' && update.fromCursor.trim().length > 0);
+        if (update.nextCursor !== undefined && canIncludeNextCursor) {
+          payload.nextCursor = update.nextCursor;
+        }
+        await params.emitDirectSessionTranscriptUpdate(payload);
       } catch {
         // Live transcript deltas are best-effort and must not stop the follow lease.
       }

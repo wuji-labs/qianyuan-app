@@ -253,6 +253,7 @@ export function createLocalSessionHarness(): LocalSessionHarness {
     peekPendingMessageQueueV2Count: async () => 0,
     discardPendingMessageQueueV2All: async () => 0,
     discardCommittedMessageLocalIds: async (_ids: string[]) => {},
+    waitForMetadataUpdate: async () => false,
   } as unknown as ApiSessionClient;
 
   return { session, codexMessages, sessionEvents, metadataUpdates, agentStateUpdates, rpcHandlers };

@@ -40,6 +40,13 @@ export type AppendTranscriptAnchorsInput = Readonly<{
     transcriptAnchors: SessionTurnTranscriptAnchorsInput;
 }>;
 
+export type TouchActiveTurnInput = Readonly<{
+    provider?: string | null;
+    providerTurnId?: string | null;
+    observedAt?: number;
+    force?: boolean;
+}>;
+
 export type CompleteTurnInput = Readonly<{
     provider?: string | null;
     providerTurnId?: string | null;
@@ -86,6 +93,7 @@ export type SessionTurnLifecycle = Readonly<{
     beginTurn(input: BeginTurnInput): Promise<SessionTurnHandle>;
     attachProviderTurnId(input: AttachProviderTurnIdInput): Promise<void>;
     appendTranscriptAnchors(input: AppendTranscriptAnchorsInput): Promise<void>;
+    touchActiveTurn(input?: TouchActiveTurnInput): Promise<void>;
     completeTurn(input?: CompleteTurnInput): Promise<void>;
     failTurn(input: FailTurnInput): Promise<void>;
     cancelTurn(input?: CancelTurnInput): Promise<void>;

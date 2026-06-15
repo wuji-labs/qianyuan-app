@@ -290,7 +290,7 @@ describe('createOnChildExited', () => {
     const spawnResourceCleanupByPid = new Map<number, () => void>();
     const sessionAttachCleanupByPid = new Map<number, () => Promise<void>>();
 
-    const removeSessionMarkerFn = vi.fn(async () => {});
+    const removeSessionMarkerFn = vi.fn(async (_pid: number) => {});
     const originalKill = process.kill.bind(process);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
       if (targetPid === runnerPid && signal === 0) {
@@ -309,7 +309,7 @@ describe('createOnChildExited', () => {
 
     onChildExited(wrapperPid, { reason: 'process-exited', code: 0, signal: null });
 
-    expect(removeSessionMarkerFn).toHaveBeenCalledWith(wrapperPid);
+    await expect.poll(() => removeSessionMarkerFn.mock.calls.map(([pid]) => pid)).toContain(wrapperPid);
     expect(removeSessionMarkerFn).not.toHaveBeenCalledWith(runnerPid);
     expect(pidToTrackedSession.has(wrapperPid)).toBe(false);
     expect(pidToTrackedSession.get(runnerPid)).toEqual(
@@ -319,6 +319,49 @@ describe('createOnChildExited', () => {
       }),
     );
     expect(pidToTrackedSession.get(runnerPid)?.sessionRunnerPid).toBeUndefined();
+    killSpy.mockRestore();
+  });
+
+  it('promotes durable connected-service restart intent before removing the wrapper marker', async () => {
+    const wrapperPid = 123;
+    const runnerPid = 456;
+    const tracked = { pid: wrapperPid, startedBy: 'daemon', happySessionId: 'session-1', sessionRunnerPid: runnerPid };
+    const calls: string[] = [];
+    const pidToTrackedSession = new Map<number, any>([[wrapperPid, tracked]]);
+    const promoteSessionMarkerConnectedServiceRestartIntentFn = vi.fn(async (input: { fromPid: number; toPid: number }) => {
+      calls.push(`promote:${input.fromPid}->${input.toPid}`);
+    });
+    const removeSessionMarkerFn = vi.fn(async (pid: number) => {
+      calls.push(`remove:${pid}`);
+    });
+    const originalKill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
+      if (targetPid === runnerPid && signal === 0) {
+        return true;
+      }
+      return originalKill(targetPid, signal as any);
+    }) as any);
+
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      removeSessionMarkerFn,
+      promoteSessionMarkerConnectedServiceRestartIntentFn,
+    } as any);
+
+    onChildExited(wrapperPid, { reason: 'process-exited', code: 0, signal: null });
+
+    await expect.poll(() => calls).toEqual([
+      `promote:${wrapperPid}->${runnerPid}`,
+      `remove:${wrapperPid}`,
+    ]);
+    expect(promoteSessionMarkerConnectedServiceRestartIntentFn).toHaveBeenCalledWith({
+      fromPid: wrapperPid,
+      toPid: runnerPid,
+    });
+    expect(removeSessionMarkerFn).not.toHaveBeenCalledWith(runnerPid);
     killSpy.mockRestore();
   });
 
@@ -332,7 +375,7 @@ describe('createOnChildExited', () => {
     const sessionAttachCleanupByPid = new Map<number, () => Promise<void>>();
     const onUnexpectedExit = vi.fn();
     const onPidPromoted = vi.fn();
-    const removeSessionMarkerFn = vi.fn(async () => {});
+    const removeSessionMarkerFn = vi.fn(async (_pid: number) => {});
     const originalKill = process.kill.bind(process);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((targetPid: number, signal?: any) => {
       if (targetPid === runnerPid && signal === 0) {
@@ -360,7 +403,7 @@ describe('createOnChildExited', () => {
       happySessionId: 'session-1',
       pid: runnerPid,
     }));
-    expect(removeSessionMarkerFn).toHaveBeenCalledWith(wrapperPid);
+    await expect.poll(() => removeSessionMarkerFn.mock.calls.map(([pid]) => pid)).toContain(wrapperPid);
     expect(removeSessionMarkerFn).not.toHaveBeenCalledWith(runnerPid);
     expect(onPidPromoted).toHaveBeenCalledWith(expect.objectContaining({
       fromPid: wrapperPid,
@@ -438,5 +481,26 @@ describe('createOnChildExited', () => {
     expect(pidToTrackedSession.has(wrapperPid)).toBe(false);
     expect(pidToTrackedSession.has(runnerPid)).toBe(false);
     killSpy.mockRestore();
+  });
+
+  it('preserves the durable marker when the caller keeps a connected-service restart intent pending', async () => {
+    const pid = 789;
+    const tracked = { pid, startedBy: 'daemon', happySessionId: 'session-restart-intent' };
+    const pidToTrackedSession = new Map<number, any>([[pid, tracked]]);
+    const removeSessionMarkerFn = vi.fn(async () => {});
+
+    const onChildExited = createOnChildExited({
+      pidToTrackedSession,
+      spawnResourceCleanupByPid: new Map(),
+      sessionAttachCleanupByPid: new Map(),
+      getApiMachineForSessions: () => null,
+      removeSessionMarkerFn,
+      shouldPreserveSessionMarkerOnExit: () => true,
+    } as any);
+
+    onChildExited(pid, { reason: 'process-exited', code: null, signal: 'SIGTERM' });
+
+    expect(pidToTrackedSession.has(pid)).toBe(false);
+    expect(removeSessionMarkerFn).not.toHaveBeenCalledWith(pid);
   });
 });

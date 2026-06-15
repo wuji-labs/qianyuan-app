@@ -128,6 +128,48 @@ describe('SessionTurnLifecycle', () => {
         expect(mutations).toEqual([]);
     });
 
+    it('touches an active turn at a bounded cadence without starting a new turn', async () => {
+        const mutations: SessionTurnMutationV1[] = [];
+        let nowMs = 1_000;
+        const lifecycle = createSessionTurnLifecycle({
+            sessionId: 's1',
+            createId: () => 'turn-touch',
+            now: () => nowMs,
+            activeTurnTouchIntervalMs: 60_000,
+            enqueueSessionTurn: async (mutation) => {
+                mutations.push(mutation);
+            },
+        });
+
+        await lifecycle.touchActiveTurn({ provider: 'claude' });
+        await lifecycle.beginTurn({ provider: 'claude' });
+        await lifecycle.touchActiveTurn({ provider: 'claude' });
+        nowMs += 30_000;
+        await lifecycle.touchActiveTurn({ provider: 'claude' });
+        nowMs += 30_001;
+        await lifecycle.touchActiveTurn({ provider: 'claude' });
+        await lifecycle.completeTurn({ provider: 'claude' });
+        nowMs += 60_001;
+        await lifecycle.touchActiveTurn({ provider: 'claude' });
+
+        expect(mutations).toEqual([
+            expect.objectContaining({
+                action: 'begin',
+                turnId: 'session-turn:turn-touch',
+                observedAt: 1_000,
+            }),
+            expect.objectContaining({
+                action: 'touch_active',
+                turnId: 'session-turn:turn-touch',
+                observedAt: 61_001,
+            }),
+            expect.objectContaining({
+                action: 'complete',
+                turnId: 'session-turn:turn-touch',
+            }),
+        ]);
+    });
+
     it('does not allocate a terminal turn when no lifecycle turn is active', async () => {
         const mutations: SessionTurnMutationV1[] = [];
         const lifecycle = createSessionTurnLifecycle({

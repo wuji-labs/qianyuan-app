@@ -9,6 +9,7 @@ function createLifecycleHarness() {
         beginTurn: vi.fn(async () => ({ turnId: 'session-turn-1' })),
         attachProviderTurnId: vi.fn(async () => {}),
         appendTranscriptAnchors: vi.fn(async () => {}),
+        touchActiveTurn: vi.fn(async () => {}),
         completeTurn: vi.fn(async () => {}),
         failTurn: vi.fn(async () => {}),
         cancelTurn: vi.fn(async () => {}),

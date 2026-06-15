@@ -3,11 +3,25 @@ import { describe, expect, it } from 'vitest';
 import { resolveCodexUsageLimitSwitchProgress } from './resolveCodexUsageLimitSwitchProgress';
 
 describe('resolveCodexUsageLimitSwitchProgress', () => {
-  it('treats a switch to a genuinely different account as progress (retry)', () => {
+  it('does not treat a different selected profile as progress without provider verification', () => {
     const result = resolveCodexUsageLimitSwitchProgress({
       switchAttemptStatus: 'switched',
       exhaustedProfileId: 'work',
       selectedProfileId: 'backup',
+      verificationStatus: null,
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    });
+
+    expect(result).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
+  });
+
+  it('treats a verified switch as progress without relying on profile id difference', () => {
+    const result = resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'switched',
+      exhaustedProfileId: 'work',
+      selectedProfileId: 'backup',
+      verificationStatus: 'verified',
       resetAtMs: 5_000,
       nowMs: 1_000,
     });
@@ -15,11 +29,12 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
     expect(result).toEqual({ kind: 'retry' });
   });
 
-  it('does NOT treat a switch to the SAME exhausted account as progress (live loop fix)', () => {
+  it('does NOT treat a switch to the same exhausted profile as progress (live loop fix)', () => {
     const result = resolveCodexUsageLimitSwitchProgress({
       switchAttemptStatus: 'switched',
       exhaustedProfileId: 'work',
       selectedProfileId: 'work',
+      verificationStatus: null,
       resetAtMs: 5_000,
       nowMs: 1_000,
     });
@@ -28,11 +43,12 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
     expect(result).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
   });
 
-  it('waits using a fallback time when same-account switch has no known reset time', () => {
+  it('waits using a fallback time when a same-profile switch has no known reset time', () => {
     const result = resolveCodexUsageLimitSwitchProgress({
       switchAttemptStatus: 'switched',
       exhaustedProfileId: 'work',
       selectedProfileId: 'work',
+      verificationStatus: null,
       resetAtMs: null,
       nowMs: 1_000,
       fallbackNextCheckAtMs: 9_000,
@@ -46,6 +62,7 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
       switchAttemptStatus: 'no_eligible_member',
       exhaustedProfileId: 'work',
       selectedProfileId: null,
+      verificationStatus: null,
       resetAtMs: 5_000,
       nowMs: 1_000,
     });
@@ -58,6 +75,7 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
       switchAttemptStatus: 'no_eligible_member',
       exhaustedProfileId: 'work',
       selectedProfileId: null,
+      verificationStatus: null,
       resetAtMs: null,
       nowMs: 1_000,
     });
@@ -70,6 +88,7 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
       switchAttemptStatus: 'generation_apply_failed',
       exhaustedProfileId: 'work',
       selectedProfileId: null,
+      verificationStatus: null,
       errorCode: 'apply_blew_up',
       resetAtMs: 5_000,
       nowMs: 1_000,
@@ -86,6 +105,7 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
       switchAttemptStatus: 'manual_strategy',
       exhaustedProfileId: 'work',
       selectedProfileId: null,
+      verificationStatus: null,
       resetAtMs: 5_000,
       nowMs: 1_000,
     })).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
@@ -94,16 +114,27 @@ describe('resolveCodexUsageLimitSwitchProgress', () => {
       switchAttemptStatus: 'switch_limit_reached',
       exhaustedProfileId: 'work',
       selectedProfileId: null,
+      verificationStatus: null,
       resetAtMs: 5_000,
       nowMs: 1_000,
     })).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
   });
 
-  it('treats an observed generation on a different account as progress', () => {
+  it('treats an observed generation as progress only when provider verification is present', () => {
     expect(resolveCodexUsageLimitSwitchProgress({
       switchAttemptStatus: 'observed_generation',
       exhaustedProfileId: 'work',
       selectedProfileId: 'backup',
+      verificationStatus: null,
+      resetAtMs: 5_000,
+      nowMs: 1_000,
+    })).toEqual({ kind: 'wait_until_reset', nextCheckAtMs: 5_000 });
+
+    expect(resolveCodexUsageLimitSwitchProgress({
+      switchAttemptStatus: 'observed_generation',
+      exhaustedProfileId: 'work',
+      selectedProfileId: 'backup',
+      verificationStatus: 'verified',
       resetAtMs: 5_000,
       nowMs: 1_000,
     })).toEqual({ kind: 'retry' });

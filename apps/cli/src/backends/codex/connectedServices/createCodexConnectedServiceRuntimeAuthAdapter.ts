@@ -45,6 +45,18 @@ function readLoginStartClient(value: unknown): { request: (method: string, param
     : null;
 }
 
+function readCodexLiveAccountIdentity(value: unknown): Readonly<{
+  activeAccountId: string | null;
+  accountLabel: string | null;
+}> {
+  const response = readRecord(value);
+  const account = readRecord(response?.account) ?? response;
+  return {
+    activeAccountId: readString(account?.id ?? account?.accountId ?? account?.account_id ?? account?.chatgptAccountId ?? account?.chatgpt_account_id),
+    accountLabel: readString(account?.email ?? account?.accountEmail ?? account?.account_email),
+  };
+}
+
 function readAsyncCallback(value: unknown): (() => Promise<void>) | null {
   return typeof value === 'function'
     ? async () => { await value(); }
@@ -161,11 +173,23 @@ export function createCodexConnectedServiceRuntimeAuthAdapter(): ConnectedServic
       const rawSnapshot = await readCodexRateLimitsSnapshot({
         request: async (_method, params) => await client.request('account/rateLimits/read', params),
       });
+      let liveIdentity: Readonly<{ activeAccountId: string | null; accountLabel: string | null }> = {
+        activeAccountId: null,
+        accountLabel: null,
+      };
+      try {
+        liveIdentity = readCodexLiveAccountIdentity(await client.request('account/read', null));
+      } catch {
+        liveIdentity = {
+          activeAccountId: null,
+          accountLabel: null,
+        };
+      }
       const quotaSnapshot = mapCodexRateLimitSnapshotToQuotaSnapshot({
         serviceId: 'openai-codex',
         profileId: record.profileId,
-        activeAccountId: record.kind === 'oauth' ? record.oauth.providerAccountId : null,
-        accountLabel: record.kind === 'oauth' ? readString(record.oauth.providerEmail) : null,
+        activeAccountId: liveIdentity.activeAccountId,
+        accountLabel: liveIdentity.accountLabel ?? (record.kind === 'oauth' ? readString(record.oauth.providerEmail) : null),
         fetchedAt: Date.now(),
         rawSnapshot,
       });

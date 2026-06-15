@@ -19,6 +19,26 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function readCodexSnapshotAccount(rawSnapshot: unknown, unwrappedSnapshot: unknown): Record<string, unknown> {
+  const rawRecord = isRecord(rawSnapshot) ? rawSnapshot : {};
+  const unwrappedRecord = isRecord(unwrappedSnapshot) ? unwrappedSnapshot : {};
+  const account =
+    (isRecord(unwrappedRecord.account) ? unwrappedRecord.account : null)
+    ?? (isRecord(rawRecord.account) ? rawRecord.account : null)
+    ?? {};
+  return account;
+}
+
+function readCodexSnapshotActiveAccountId(account: Record<string, unknown>): string | null {
+  return readString(
+    account.id
+      ?? account.accountId
+      ?? account.account_id
+      ?? account.chatgptAccountId
+      ?? account.chatgpt_account_id,
+  );
+}
+
 function readFiniteNumber(value: unknown): number | null {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
@@ -93,13 +113,13 @@ export function mapCodexRateLimitSnapshotToQuotaSnapshot(params: Readonly<{
 }>): ConnectedServiceQuotaSnapshotV1 {
   const unwrappedSnapshot = unwrapCodexRateLimitSnapshot(params.rawSnapshot);
   const raw = isRecord(unwrappedSnapshot) ? unwrappedSnapshot : {};
-  const account = isRecord(raw.account) ? raw.account : {};
+  const account = readCodexSnapshotAccount(params.rawSnapshot, unwrappedSnapshot);
   const relativeResetReferenceMs = Math.max(0, Math.trunc(params.fetchedAt));
   const meters = [
     buildMeter('primary', raw.primary ?? raw.primary_window ?? raw.primaryWindow, relativeResetReferenceMs),
     buildMeter('secondary', raw.secondary ?? raw.secondary_window ?? raw.secondaryWindow, relativeResetReferenceMs),
   ].filter((meter): meter is ConnectedServiceQuotaMeterV1 => meter !== null);
-  const activeAccountId = readString(params.activeAccountId);
+  const activeAccountId = readCodexSnapshotActiveAccountId(account) ?? readString(params.activeAccountId);
 
   return ConnectedServiceQuotaSnapshotV1Schema.parse({
     v: 1,

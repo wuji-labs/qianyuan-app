@@ -35,7 +35,7 @@ export type TerminalInputInjectionResult =
     }>
   | Readonly<{
       status: 'failed';
-      reason: 'pane_dead' | 'no_target' | 'host_unreachable' | 'timeout';
+      reason: 'pane_dead' | 'no_target' | 'host_unreachable' | 'timeout' | 'invalid_prompt_text';
       phase: TerminalInjectionFailurePhase;
       duplicateRisk: TerminalInjectionDuplicateRisk;
       recoverable: boolean;

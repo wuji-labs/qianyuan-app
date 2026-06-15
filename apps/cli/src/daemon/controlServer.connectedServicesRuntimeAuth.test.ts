@@ -718,6 +718,7 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
   it('clears the matching runtime-auth recovery key when account adoption is verified', async () => {
     const cancel = vi.fn(async () => ({ status: 'cancelled' }));
     const markSucceededByKey = vi.fn(async () => ({ status: 'succeeded' }));
+    const markProviderOutcomeProofByKey = vi.fn(async () => ({ status: 'succeeded' }));
     const cancelByKey = vi.fn(async () => ({ status: 'cancelled' }));
     const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
       status: 'switch_attempted',
@@ -743,7 +744,14 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
       onHappySessionWebhook: () => {},
       controlToken: 'token',
       handleConnectedServiceRuntimeAuthFailure,
-      runtimeAuthRecoveryScheduler: { cancel, cancelByKey, markSucceededByKey },
+      runtimeAuthRecoveryScheduler: {
+        cancel,
+        cancelByKey,
+        markSucceededByKey,
+        markProviderOutcomeProofByKey,
+      } as NonNullable<Parameters<typeof createDaemonControlApp>[0]['runtimeAuthRecoveryScheduler']> & {
+        markProviderOutcomeProofByKey: typeof markProviderOutcomeProofByKey;
+      },
     });
 
     try {
@@ -768,14 +776,111 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
       });
 
       expect(response.statusCode).toBe(200);
-      expect(markSucceededByKey).toHaveBeenCalledWith(buildRuntimeAuthRecoveryKey({
-        sessionId: 'sess_1',
-        serviceId: 'openai-codex',
-        profileId: 'primary',
-        groupId: 'main',
-      }));
+      expect(markProviderOutcomeProofByKey).toHaveBeenCalledWith({
+        recoveryKey: buildRuntimeAuthRecoveryKey({
+          sessionId: 'sess_1',
+          serviceId: 'openai-codex',
+          profileId: 'primary',
+          groupId: 'main',
+        }),
+        proofKind: 'account_adoption_verified',
+      });
+      expect(markSucceededByKey).not.toHaveBeenCalled();
       expect(cancel).not.toHaveBeenCalled();
       expect(cancelByKey).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('resolves an exhausted runtime-auth recovery dead-letter when in-band handling returns accepted provider proof', async () => {
+    const recoveryClassification: ConnectedServiceRuntimeFailureClassification = {
+      kind: 'usage_limit',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+      resetsAtMs: null,
+      planType: null,
+      rateLimits: null,
+      source: 'structured_provider_error',
+    } as ConnectedServiceRuntimeFailureClassification;
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      maxAttempts: 1,
+      recover: async () => {
+        throw new Error('timeout of 5000ms exceeded');
+      },
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+    await runtimeAuthRecoveryScheduler.enqueueHandlerFailure({
+      sessionId: 'sess_1',
+      switchesThisTurn: 0,
+      classification: recoveryClassification,
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+    await expect(runtimeAuthRecoveryScheduler.wake({ sessionId: 'sess_1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'exhausted' });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toMatchObject({
+      status: 'exhausted',
+    });
+
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'switch_attempted',
+      result: {
+        status: 'switched',
+        activeProfileId: 'backup',
+        generation: 2,
+        verificationByServiceId: {
+          'openai-codex': { status: 'verified' },
+        },
+      },
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          switchesThisTurn: 0,
+          classification: recoveryClassification,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toBeNull();
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        event: 'runtime_auth_recovery_success',
+        reason: 'dead_letter_resolved_by_provider_outcome_proof',
+      }));
     } finally {
       await app.close();
     }

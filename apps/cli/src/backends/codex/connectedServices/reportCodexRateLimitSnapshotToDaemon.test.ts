@@ -7,6 +7,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { reportCodexRateLimitSnapshotToDaemon } from './reportCodexRateLimitSnapshotToDaemon';
 
+type NotifyQuotaSnapshotInput = Readonly<{
+  sessionId: string;
+  serviceId: 'openai-codex';
+  snapshot: unknown;
+}>;
+
+function createNotifyQuotaSnapshotMock() {
+  return vi.fn(async (_body: NotifyQuotaSnapshotInput) => ({ ok: true }));
+}
+
 function buildJwt(payload: Record<string, unknown>): string {
   return [
     Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url'),
@@ -17,7 +27,7 @@ function buildJwt(payload: Record<string, unknown>): string {
 
 describe('reportCodexRateLimitSnapshotToDaemon', () => {
   it('reports app-server rate-limit snapshots for the active connected-service group member', async () => {
-    const notify = vi.fn(async () => ({ ok: true }));
+    const notify = createNotifyQuotaSnapshotMock();
 
     await reportCodexRateLimitSnapshotToDaemon({
       env: {
@@ -52,7 +62,7 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
   });
 
   it('attributes post-hot-apply snapshots to the current session metadata member, not the stale child env selection', async () => {
-    const notify = vi.fn(async () => ({ ok: true }));
+    const notify = createNotifyQuotaSnapshotMock();
 
     await reportCodexRateLimitSnapshotToDaemon({
       env: {
@@ -99,7 +109,7 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
   });
 
   it('falls back to the child env selection when session metadata has no usable connected binding', async () => {
-    const notify = vi.fn(async () => ({ ok: true }));
+    const notify = createNotifyQuotaSnapshotMock();
 
     await reportCodexRateLimitSnapshotToDaemon({
       env: {
@@ -128,6 +138,96 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
     });
   });
 
+  it('does not report selected auth-store account id as live activeAccountId for connected-service snapshots', async () => {
+    const root = join(tmpdir(), `happier-codex-connected-quota-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const codexHome = join(root, 'codex-home');
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: {
+        id_token: {
+          chatgpt_account_id: 'acct_selected_not_proven_live',
+        },
+      },
+    }));
+    const notify = vi.fn(async (_body: NotifyQuotaSnapshotInput) => ({ ok: true }));
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        CODEX_HOME: codexHome,
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'primary',
+          generation: 2,
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 88 } },
+      nowMs: 1_000,
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.not.objectContaining({
+        activeAccountId: 'acct_selected_not_proven_live',
+      }),
+    });
+    const firstCall = notify.mock.calls[0]?.[0];
+    expect(firstCall?.snapshot).not.toHaveProperty('activeAccountId');
+  });
+
+  it('reports connected-service activeAccountId only when the app-server snapshot carries live account proof', async () => {
+    const root = join(tmpdir(), `happier-codex-connected-live-quota-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const codexHome = join(root, 'codex-home');
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+      tokens: {
+        id_token: {
+          chatgpt_account_id: 'acct_selected_not_live',
+        },
+      },
+    }));
+    const notify = createNotifyQuotaSnapshotMock();
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        CODEX_HOME: codexHome,
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'primary',
+          generation: 2,
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: {
+        account: {
+          id: 'acct_live_codex',
+          email: 'live@example.test',
+        },
+        primary: { used_percent: 88 },
+      },
+      nowMs: 1_000,
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.objectContaining({
+        profileId: 'backup',
+        activeAccountId: 'acct_live_codex',
+        accountLabel: 'live@example.test',
+      }),
+    });
+  });
+
   it('reports native app-server snapshots with stable Codex account identity when no connected auth is selected', async () => {
     const root = join(tmpdir(), `happier-codex-native-quota-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const codexHome = join(root, 'codex-home');
@@ -139,7 +239,7 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
         },
       },
     }));
-    const notify = vi.fn(async () => ({ ok: true }));
+    const notify = createNotifyQuotaSnapshotMock();
 
     await reportCodexRateLimitSnapshotToDaemon({
       env: { CODEX_HOME: codexHome },
@@ -173,7 +273,7 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
         }),
       },
     }));
-    const notify = vi.fn(async () => ({ ok: true }));
+    const notify = createNotifyQuotaSnapshotMock();
 
     await reportCodexRateLimitSnapshotToDaemon({
       env: { CODEX_HOME: codexHome },

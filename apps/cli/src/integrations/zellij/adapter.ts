@@ -10,6 +10,7 @@ import type {
   TerminalInputState,
   TerminalPromptInput,
 } from '../terminalHost/_types';
+import { TerminalHostStartupError, isTerminalHostStartupError } from '../terminalHost/errors';
 import {
   defaultZellijActions,
   DEFAULT_ZELLIJ_WRITE_BYTES_CHUNK_SIZE,
@@ -449,6 +450,17 @@ async function cleanupZellijSessionAndRethrowStartupError(params: Readonly<{
   } catch (cleanupError) {
     const startupMessage = params.error instanceof Error ? params.error.message : String(params.error);
     const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    if (isTerminalHostStartupError(params.error)) {
+      throw new TerminalHostStartupError({
+        hostKind: params.error.hostKind,
+        reason: params.error.reason,
+        message: `zellij startup failed: ${startupMessage}; cleanup failed: ${cleanupMessage}`,
+        diagnostics: {
+          ...params.error.diagnostics,
+          cleanupError: cleanupMessage,
+        },
+      });
+    }
     throw new Error(`zellij startup failed: ${startupMessage}; cleanup failed: ${cleanupMessage}`);
   }
   throw params.error;
@@ -697,7 +709,7 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
   const livenessInspectionCache = new Map<string, Readonly<{ atMs: number; value: LivenessInspection }>>();
 
   async function inspectLiveness(handle: TerminalHostHandle): Promise<LivenessInspection> {
-    const cacheKey = `${handle.sessionName} ${handle.paneId ?? ''}`;
+    const cacheKey = `${handle.sessionName}\u0000${handle.paneId ?? ''}`;
     const cached = livenessInspectionCache.get(cacheKey);
     const nowMs = Date.now();
     if (cached && nowMs - cached.atMs <= LIVENESS_INSPECTION_FRESHNESS_MS) {
@@ -968,7 +980,16 @@ export function createZellijTerminalHostAdapter(params: Readonly<{
           expectedCommandFragments,
         });
         if (currentPaneId === null) {
-          throw new Error('zellij launched terminal pane disappeared after bootstrap cleanup');
+          throw new TerminalHostStartupError({
+            hostKind: 'zellij',
+            reason: 'pane_disappeared_after_bootstrap_cleanup',
+            message: 'zellij launched terminal pane disappeared after bootstrap cleanup',
+            diagnostics: {
+              previousPaneId: paneId,
+              closedPaneIds: [...bootstrapCleanup.closedPaneIds],
+              expectedCommandFragments,
+            },
+          });
         }
         paneId = currentPaneId;
       } catch (error) {

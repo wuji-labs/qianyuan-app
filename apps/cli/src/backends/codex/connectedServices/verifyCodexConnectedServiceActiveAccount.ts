@@ -172,14 +172,7 @@ export async function verifyCodexConnectedServiceActiveAccount(
           reason: 'provider_account_auth_store_mismatch',
         };
       }
-      if (!actualProviderEmail) {
-        return {
-          status: 'unavailable',
-          retryable: true,
-          reason: 'active_account_probe_missing_email',
-        };
-      }
-      if (expectedProviderEmail && actualProviderEmail !== expectedProviderEmail) {
+      if (actualProviderEmail && expectedProviderEmail && actualProviderEmail !== expectedProviderEmail) {
         return {
           status: 'mismatch',
           expectedProviderAccountId,
@@ -188,13 +181,6 @@ export async function verifyCodexConnectedServiceActiveAccount(
           reason: 'provider_account_email_mismatch',
         };
       }
-      return {
-        status: 'verified',
-        providerAccountId: expectedProviderAccountId,
-        reason: expectedProviderEmail
-          ? 'provider_account_auth_store_and_email_verified'
-          : 'provider_account_auth_store_verified',
-      };
     }
     if (actualProviderEmail && expectedProviderEmail && actualProviderEmail !== expectedProviderEmail) {
       return {
@@ -205,13 +191,8 @@ export async function verifyCodexConnectedServiceActiveAccount(
         reason: 'provider_account_email_mismatch',
       };
     }
-    if (actualProviderEmail && expectedProviderEmail && actualProviderEmail === expectedProviderEmail) {
-      return {
-        status: 'weakly_verified',
-        providerAccountId: expectedProviderAccountId,
-        reason: 'provider_account_email_verified_without_account_id',
-      };
-    }
+    // Auth-store and email proof can diagnose mismatches, but Codex adoption success
+    // must be proven by the live app-server account id used by the runtime.
     return {
       status: 'unavailable',
       retryable: true,

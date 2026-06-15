@@ -44,6 +44,7 @@ vi.mock('@/session/metadata/updateSessionMetadataWithRetry', () => ({
 
 type TranscriptUpdate = Readonly<{
   items: Iterable<DirectTranscriptRawMessageV1>;
+  fromCursor?: string | null;
   nextCursor?: string | null;
   truncated: boolean;
 }>;
@@ -126,6 +127,7 @@ describe('createManagedDirectSessionFollowLease', () => {
 
     await currentListener({
       items: new Set([directMessage]),
+      fromCursor: 'cursor-1',
       nextCursor: 'cursor-2',
       truncated: false,
     });
@@ -134,6 +136,7 @@ describe('createManagedDirectSessionFollowLease', () => {
       type: 'direct-session-transcript-delta',
       sessionId: 'sess-managed-follow',
       items: [directMessage],
+      fromCursor: 'cursor-1',
       nextCursor: 'cursor-2',
       truncated: false,
     });
@@ -210,6 +213,7 @@ describe('createManagedDirectSessionFollowLease', () => {
 
     await currentListener({
       items: [directMessage],
+      fromCursor: 'cursor-current',
       nextCursor: 'cursor-progress',
       truncated: false,
     });
@@ -262,6 +266,7 @@ describe('createManagedDirectSessionFollowLease', () => {
 
     await currentListener({
       items: [directMessage],
+      fromCursor: 'cursor-current',
       nextCursor: 'cursor-notification',
       truncated: false,
     });
@@ -303,12 +308,14 @@ describe('createManagedDirectSessionFollowLease', () => {
 
     await currentListener({
       items: [directMessage],
+      fromCursor: 'cursor-current',
       nextCursor: 'cursor-suppressed',
       truncated: false,
     });
 
     expect(emitDirectSessionTranscriptUpdate).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'sess-managed-follow',
+      fromCursor: 'cursor-current',
       nextCursor: 'cursor-suppressed',
     }));
     expect(updateSessionMetadataWithRetryMock).not.toHaveBeenCalled();

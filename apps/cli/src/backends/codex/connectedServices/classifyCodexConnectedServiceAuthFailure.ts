@@ -150,9 +150,9 @@ function buildClassification(
 }
 
 // Usage-limit (capacity) recovery is distinct from provider state-sharing capability.
-// Quota recovery is satisfied by a fresh/different account or proven fresh quota, not by
-// sharing vendor continuity state. Keep `provider_state_sharing_required` reserved for
-// genuine continuity/state-sharing failures.
+// Quota recovery is satisfied by proven fresh quota or canonical provider-account proof, not by
+// sharing vendor continuity state. Keep `provider_state_sharing_required` reserved for genuine
+// continuity/state-sharing failures.
 const codexUsageLimitRecoveryAction = { kind: 'quota_recovery_required' } as const;
 
 export function classifyCodexConnectedServiceAuthFailure(

@@ -30,6 +30,14 @@ export type SessionRunnerRespawnOptionsResolver = (input: Readonly<{
   defaultOptions: SpawnSessionOptions;
 }>) => SpawnSessionOptions | Promise<SpawnSessionOptions>;
 
+export type SessionRunnerRespawnTerminalReason =
+  | 'already_running'
+  | 'stop_requested'
+  | 'missing_spawn_options'
+  | 'directory_approval_required'
+  | 'not_authenticated'
+  | 'no_restart';
+
 function normalizeSessionId(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim() : '';
 }
@@ -96,6 +104,17 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   isSessionAlreadyRunning: (sessionId: string) => boolean | Promise<boolean>;
   spawnSession: (opts: SpawnSessionOptions) => Promise<unknown>;
   resolveRespawnOptions?: SessionRunnerRespawnOptionsResolver;
+  onRespawnSuccess?: (input: Readonly<{
+    sessionId: string;
+    previousPid: number;
+    result: unknown;
+  }>) => void;
+  onRespawnTerminal?: (input: Readonly<{
+    sessionId: string;
+    previousPid: number;
+    reason: SessionRunnerRespawnTerminalReason;
+    detail?: string;
+  }>) => void;
   random: () => number;
   logDebug: (message: string, payload?: unknown) => void;
   logWarn: (message: string) => void;
@@ -140,6 +159,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     spawnOptions: SpawnSessionOptions,
     vendorResumeId: string,
     event: TerminationEvent,
+    previousPid: number,
   ) => {
     const state = stateBySessionId.get(sessionId);
     if (!state) return;
@@ -150,10 +170,11 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         params.logWarn(`[DAEMON RUN] Session ${sessionId} crashed; respawn suppressed (${decision.reason})`);
       }
       stateBySessionId.delete(sessionId);
+      params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'no_restart', detail: decision.reason });
       return;
     }
 
-    scheduleSpawn(sessionId, spawnOptions, vendorResumeId, decision.delayMs, decision.attempt, event);
+    scheduleSpawn(sessionId, spawnOptions, vendorResumeId, decision.delayMs, decision.attempt, event, previousPid);
   };
 
   const scheduleSpawn = (
@@ -163,6 +184,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     delayMs: number,
     attempt: number,
     event: TerminationEvent,
+    previousPid: number,
   ) => {
     clearTimer(sessionId);
     const existing = stateBySessionId.get(sessionId);
@@ -173,11 +195,13 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         const alreadyRunning = await params.isSessionAlreadyRunning(sessionId);
         if (alreadyRunning) {
           stateBySessionId.delete(sessionId);
+          params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'already_running' });
           return;
         }
         const stopRequest = stopRequestedBySessionId.get(sessionId);
         if (stopRequest) {
           stateBySessionId.delete(sessionId);
+          params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
           return;
         }
 
@@ -194,6 +218,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
           .spawnSession(respawnOptions)
           .then((result) => {
             if (result && typeof result === 'object' && (result as any).type === 'success') {
+              params.onRespawnSuccess?.({ sessionId, previousPid, result });
               stateBySessionId.delete(sessionId);
               return;
             }
@@ -201,12 +226,14 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
             if (result && typeof result === 'object' && (result as any).type === 'requestToApproveDirectoryCreation') {
               params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (directory approval required)`);
               stateBySessionId.delete(sessionId);
+              params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'directory_approval_required' });
               return;
             }
 
             if (isNotAuthenticatedSpawnResult(result)) {
               params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (auth:not_authenticated)`);
               stateBySessionId.delete(sessionId);
+              params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'not_authenticated' });
               return;
             }
 
@@ -219,7 +246,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
                   ? `respawn_failed:${String((result as any).errorCode)}`
                   : 'respawn_failed',
             };
-            scheduleRetryFromTermination(sessionId, spawnOptions, vendorResumeId, retryEvent);
+            scheduleRetryFromTermination(sessionId, spawnOptions, vendorResumeId, retryEvent, previousPid);
           })
           .catch((error) => {
             params.logDebug(`[DAEMON RUN] Failed to respawn runner for session ${sessionId}`, error);
@@ -228,7 +255,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
               errorName: error instanceof Error ? error.name : 'Error',
               errorMessage: error instanceof Error ? error.message : String(error),
             };
-            scheduleRetryFromTermination(sessionId, spawnOptions, vendorResumeId, retryEvent);
+            scheduleRetryFromTermination(sessionId, spawnOptions, vendorResumeId, retryEvent, previousPid);
           });
       })().catch((error) => {
         params.logDebug(`[DAEMON RUN] Failed to evaluate respawn preflight for session ${sessionId}`, error);
@@ -237,7 +264,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
           errorName: error instanceof Error ? error.name : 'Error',
           errorMessage: error instanceof Error ? error.message : String(error),
         };
-        scheduleRetryFromTermination(sessionId, spawnOptions, vendorResumeId, retryEvent);
+        scheduleRetryFromTermination(sessionId, spawnOptions, vendorResumeId, retryEvent, previousPid);
       });
     }, delayMs) as unknown as { unref?: () => void };
     timer.unref?.();
@@ -285,6 +312,9 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
 
       const spawnOptions = trackedSession.spawnOptions;
       if (!spawnOptions || typeof (spawnOptions as any).directory !== 'string' || !String((spawnOptions as any).directory).trim()) {
+        if (forceRestart) {
+          params.onRespawnTerminal?.({ sessionId, previousPid: trackedSession.pid, reason: 'missing_spawn_options' });
+        }
         return;
       }
 
@@ -297,10 +327,24 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
           params.logWarn(`[DAEMON RUN] Session ${sessionId} crashed; respawn suppressed (${decision.reason})`);
         }
         stateBySessionId.delete(sessionId);
+        params.onRespawnTerminal?.({
+          sessionId,
+          previousPid: trackedSession.pid,
+          reason: 'no_restart',
+          detail: decision.reason,
+        });
         return;
       }
 
-      scheduleSpawn(sessionId, spawnOptions, vendorResumeId, forceRestart ? 0 : decision.delayMs, decision.attempt, event);
+      scheduleSpawn(
+        sessionId,
+        spawnOptions,
+        vendorResumeId,
+        forceRestart ? 0 : decision.delayMs,
+        decision.attempt,
+        event,
+        trackedSession.pid,
+      );
     },
   };
 }

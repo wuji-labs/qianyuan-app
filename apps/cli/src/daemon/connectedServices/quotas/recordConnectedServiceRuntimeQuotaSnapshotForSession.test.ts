@@ -4,6 +4,18 @@ import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServic
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { recordConnectedServiceRuntimeQuotaSnapshotForSession } from './recordConnectedServiceRuntimeQuotaSnapshotForSession';
 
+function metadata(overrides: Record<string, unknown> = {}) {
+  return {
+    path: '/tmp/project',
+    host: 'test-host',
+    homeDir: '/tmp/home',
+    happyHomeDir: '/tmp/home/.happier',
+    happyLibDir: '/tmp/home/.happier/lib',
+    happyToolsDir: '/tmp/home/.happier/tools',
+    ...overrides,
+  };
+}
+
 describe('recordConnectedServiceRuntimeQuotaSnapshotForSession', () => {
   it('records group session snapshots into connected quota persistence and candidate runtime state', async () => {
     const quotaCoordinator = {
@@ -72,6 +84,90 @@ describe('recordConnectedServiceRuntimeQuotaSnapshotForSession', () => {
     }).get('primary')?.quotaSnapshot).toMatchObject({
       effectiveMeterId: 'primary',
       effectiveRemainingPercent: 1,
+    });
+  });
+
+  it('uses webhook metadata bindings for group quota state when tracked spawn options no longer carry them', async () => {
+    const quotaCoordinator = {
+      recordInBandQuotaSnapshot: vi.fn(async () => ({ status: 'persisted' as const })),
+      recordRuntimeAccountIdentityFromSnapshot: vi.fn(),
+    };
+    const publishQuotaRef = vi.fn(async () => {});
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const snapshot = {
+      v: 1 as const,
+      serviceId: 'openai-codex' as const,
+      profileId: 'primary',
+      fetchedAt: 1_000,
+      staleAfterMs: 300_000,
+      providerId: 'codex',
+      activeAccountId: 'acct_native_codex',
+      planLabel: 'pro',
+      accountLabel: null,
+      meters: [],
+    };
+
+    await expect(recordConnectedServiceRuntimeQuotaSnapshotForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          environmentVariables: {
+            [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+              kind: 'group',
+              serviceId: 'openai-codex',
+              groupId: 'main',
+              activeProfileId: 'primary',
+              fallbackProfileId: 'primary',
+              generation: 7,
+            }]),
+          },
+        },
+        happySessionMetadataFromLocalWebhook: metadata({
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+        }),
+      }],
+      quotaCoordinator,
+      publishQuotaRef,
+      runtimeQuotaSnapshots,
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot,
+    })).resolves.toEqual({ status: 'recorded', groupRuntimeStateRecorded: true, quotaStateRecorded: true });
+
+    expect(runtimeQuotaSnapshots.getSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'primary',
+    })).toBe(snapshot);
+    expect(publishQuotaRef).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+    });
+    expect(quotaCoordinator.recordRuntimeAccountIdentityFromSnapshot).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'primary',
+      providerAccountId: 'acct_native_codex',
+      accountLabel: null,
+      observedAtMs: 1_000,
+      source: 'runtime_quota_snapshot',
+      proofStrength: 'exact',
+      groupGeneration: 7,
     });
   });
 

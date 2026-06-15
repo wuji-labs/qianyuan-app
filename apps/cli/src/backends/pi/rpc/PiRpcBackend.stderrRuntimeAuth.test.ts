@@ -247,7 +247,7 @@ describe('PiRpcBackend stderr runtime-auth detection', () => {
     expect(reportSpy.mock.calls[0]?.[0]).toMatchObject({ kind: 'usage_limit', serviceId: 'openai-codex' });
   });
 
-  it('emits daemon typed runtime-auth recovery projection after reporting stderr runtime auth failure', async () => {
+  it('does not re-emit daemon typed runtime-auth recovery projection after reporting stderr runtime auth failure', async () => {
     mockNotifyDaemonConnectedServiceRuntimeAuthFailure.mockResolvedValueOnce(createScheduledRuntimeAuthRecoveryReport());
     const backend = createBackendWithSelection();
     const priv = backend as unknown as PrivateStderrBackend;
@@ -265,19 +265,10 @@ describe('PiRpcBackend stderr runtime-auth detection', () => {
       source: 'structured_provider_error',
     });
 
-    expect(messages).toContainEqual({
+    expect(messages).not.toContainEqual(expect.objectContaining({
       type: 'event',
       name: 'connected-service-runtime-auth-recovery',
-      payload: expect.objectContaining({
-        type: 'connected-service-runtime-auth-recovery',
-        status: 'retry_scheduled',
-        serviceId: 'openai-codex',
-        diagnostic: expect.objectContaining({
-          source: 'runtime_auth_recovery',
-          failurePhase: 'runtime_auth_recovery',
-        }),
-      }),
-    });
+    }));
   });
 
   it('emits a generic recovery status when the daemon report has a typed diagnostic but no transcript event', async () => {

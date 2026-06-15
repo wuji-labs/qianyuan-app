@@ -448,3 +448,36 @@ describe('MessageQueue2', () => {
         expect(batch3?.mode.type).toBe('B');
     });
 });
+
+describe('MessageQueue2 user-message seq attribution (A3-HIGH-1 owed-delivery watermark)', () => {
+    it('returns the max user-message seq of the consumed items on a batch', async () => {
+        const queue = new MessageQueue2<string>(mode => mode);
+
+        queue.push('m1', 'local', { userMessageSeq: 10 });
+        queue.push('m2', 'local'); // no seq (e.g. RPC-direct delivery)
+        queue.push('m3', 'local', { userMessageSeq: 12 });
+        queue.push('other-mode', 'remote', { userMessageSeq: 99 });
+
+        const batch = await queue.waitForMessagesAndGetAsString();
+        expect(batch?.message).toBe('m1\nm2\nm3');
+        // Seq 99 belongs to a message still in the queue and must NOT be covered.
+        expect(batch?.maxUserMessageSeq).toBe(12);
+
+        const batch2 = await queue.waitForMessagesAndGetAsString();
+        expect(batch2?.maxUserMessageSeq).toBe(99);
+    });
+
+    it('returns null when no consumed item carries a seq', async () => {
+        const queue = new MessageQueue2<string>(mode => mode);
+        queue.push('m1', 'local');
+        const batch = await queue.waitForMessagesAndGetAsString();
+        expect(batch?.maxUserMessageSeq).toBeNull();
+    });
+
+    it('preserves seq attribution through unshift (undeliverable-batch handback)', async () => {
+        const queue = new MessageQueue2<string>(mode => mode);
+        queue.unshift('returned', 'local', { userMessageSeq: 7 });
+        const batch = await queue.waitForMessagesAndGetAsString();
+        expect(batch?.maxUserMessageSeq).toBe(7);
+    });
+});

@@ -49,6 +49,46 @@ describe('createActionToolExecutorBridge', () => {
     ]);
   });
 
+  it('parses JSON-string action_execute input before invoking the action executor', async () => {
+    const calls: unknown[] = [];
+    const bridge = createActionToolExecutorBridge({
+      surface: 'session_agent',
+      executor: {
+        execute: async (actionId, input, ctx) => {
+          calls.push({ actionId, input, ctx });
+          return {
+            ok: true,
+            result: { ok: true },
+          };
+        },
+      },
+    });
+
+    const res = await bridge.executeActionByToolName('action_execute', {
+      actionId: 'session.transcript.get',
+      input: '{"sessionId":"sess-2","limit":20,"roles":["user","assistant"]}',
+    }, 'sess-1');
+
+    expect(res).toEqual({
+      ok: true,
+      result: { ok: true },
+    });
+    expect(calls).toEqual([
+      {
+        actionId: 'session.transcript.get',
+        input: {
+          sessionId: 'sess-2',
+          limit: 20,
+          roles: ['user', 'assistant'],
+        },
+        ctx: {
+          defaultSessionId: 'sess-1',
+          surface: 'session_agent',
+        },
+      },
+    ]);
+  });
+
   it('returns approved result-bearing action results without converting them to approval requests', async () => {
     const actionsSettings = ActionsSettingsV1Schema.parse({
       v: 1,

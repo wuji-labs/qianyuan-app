@@ -16,6 +16,7 @@ function createLifecycleStub(overrides: Partial<SessionTurnLifecycle>): SessionT
     endSession: vi.fn(),
     markRollbackEligible: vi.fn(),
     markRolledBack: vi.fn(),
+    touchActiveTurn: vi.fn(),
     hasActiveTurn: vi.fn(() => false),
     ...overrides,
   };
