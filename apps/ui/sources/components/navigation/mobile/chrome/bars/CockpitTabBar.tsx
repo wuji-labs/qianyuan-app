@@ -78,7 +78,7 @@ export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps
     const metrics = resolveTabBarMetrics(useSetting('tabBarSize'), useSetting('tabBarShowLabels'));
 
     return (
-        <FloatingTabBarSurface testID={props.barTestId} bottomInset={insets.bottom}>
+        <FloatingTabBarSurface testID={props.barTestId} bottomInset={insets.bottom} opaqueBand>
             <View style={[styles.innerContainer, { gap: metrics.rowGap }]}>
                 {props.tabs.map((tab) => {
                     const active = tab.id === props.activeSurface;
@@ -95,7 +95,7 @@ export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps
                             style={[styles.tab, { paddingVertical: metrics.tabPaddingVertical, paddingHorizontal: metrics.tabPaddingHorizontal }]}
                         >
                             <View style={styles.iconContainer}>
-                                {active && !metrics.showLabels ? <View pointerEvents="none" style={styles.activePill} /> : null}
+                                {active ? <View pointerEvents="none" style={styles.activePill} /> : null}
                                 {icon}
                                 {renderTabBadge(tab.badge, `${props.tabTestIdPrefix}${tab.id}-badge`)}
                             </View>

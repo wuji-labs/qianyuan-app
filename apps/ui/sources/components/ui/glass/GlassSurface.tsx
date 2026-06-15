@@ -18,6 +18,8 @@ export type GlassSurfaceProps = Readonly<{
     glassEffectStyle?: 'regular' | 'clear';
     /** Blur intensity used by the `expo-blur` fallback. */
     blurIntensity?: number;
+    /** When false, renders an opaque solid surface instead of glass/blur. */
+    enabled?: boolean;
     testID?: string;
 }>;
 
@@ -37,11 +39,13 @@ export const GlassSurface = React.memo(function GlassSurface(props: GlassSurface
     const liquidGlassAvailable = useLiquidGlassAvailable();
     const reduceTransparency = useReduceTransparency();
 
-    const capability = resolveGlassCapability({
-        liquidGlassAvailable,
-        blurAvailable: Platform.OS !== 'web',
-        reduceTransparency,
-    });
+    const capability = props.enabled === false
+        ? 'solid'
+        : resolveGlassCapability({
+            liquidGlassAvailable,
+            blurAvailable: Platform.OS !== 'web',
+            reduceTransparency,
+        });
 
     if (capability === 'liquidGlass') {
         const GlassView = getGlassViewComponent();

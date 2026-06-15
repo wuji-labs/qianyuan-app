@@ -244,6 +244,20 @@ export const ACCOUNT_DISPLAY_SETTING_DEFINITIONS = defineSettingDefinitions({
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
     },
+    tabBarBlurEnabled: {
+        schema: z.boolean(),
+        default: true,
+        description: 'Use a translucent blur/glass material for the tab bar (off = solid surface)',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },
+    },
+    tabBarBlurIntensity: {
+        schema: z.enum(['light', 'regular', 'strong']),
+        default: 'regular',
+        description: 'Tab bar blur intensity when the blur material is enabled',
+        storageScope: 'account',
+        analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'person' },
+    },
 });
 
 export const ACCOUNT_DISPLAY_SETTING_ARTIFACTS = buildSettingArtifacts(ACCOUNT_DISPLAY_SETTING_DEFINITIONS);

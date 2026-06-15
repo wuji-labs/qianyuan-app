@@ -106,7 +106,7 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
                             hitSlop={8}
                         >
                             <View style={styles.tabContent}>
-                                {isActive && !metrics.showLabels ? <View pointerEvents="none" style={styles.activePill} /> : null}
+                                {isActive ? <View pointerEvents="none" style={styles.activePill} /> : null}
                                 <Image
                                     source={tab.icon}
                                     contentFit="contain"

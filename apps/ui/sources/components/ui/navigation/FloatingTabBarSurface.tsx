@@ -5,6 +5,13 @@ import { StyleSheet } from 'react-native-unistyles';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { layout } from '@/components/ui/layout/layout';
 import { shadowLevelStyle } from '@/shadowElevation';
+import { useSetting } from '@/sync/domains/state/storage';
+
+const BLUR_INTENSITY: Record<'light' | 'regular' | 'strong', number> = {
+    light: 25,
+    regular: 50,
+    strong: 80,
+};
 
 /**
  * Floating, rounded iOS-26-style chrome shell for the bottom tab bars.
@@ -31,7 +38,7 @@ const FLOATING_MIN_BOTTOM_GAP = 8;
 // Sit the bar lower/closer to the home indicator: use most of the safe-area
 // inset as the float gap rather than the whole inset, while keeping clearance.
 const SAFE_AREA_BOTTOM_TRIM = 12;
-const PILL_PADDING_VERTICAL = 8;
+const PILL_PADDING_VERTICAL = 4;
 const PILL_PADDING_HORIZONTAL = 8;
 
 const styles = StyleSheet.create((theme) => ({
@@ -40,6 +47,12 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: FLOATING_SIDE_GUTTER,
         paddingTop: FLOATING_TOP_GAP,
         backgroundColor: 'transparent',
+    },
+    // Opaque reserved band for in-flow (cockpit) chrome so the area behind the
+    // floating capsule matches the transcript/composer background instead of the
+    // window canvas showing through.
+    positionerBand: {
+        backgroundColor: theme.colors.surface.base,
     },
     shadow: {
         maxWidth: layout.maxWidth,
@@ -59,16 +72,28 @@ const styles = StyleSheet.create((theme) => ({
 export type FloatingTabBarSurfaceProps = Readonly<{
     children: React.ReactNode;
     bottomInset: number;
+    /** Paint the reserved band behind the capsule (for in-flow cockpit chrome). */
+    opaqueBand?: boolean;
     testID?: string;
 }>;
 
 export const FloatingTabBarSurface = React.memo(function FloatingTabBarSurface(props: FloatingTabBarSurfaceProps) {
     const bottomPadding = Math.max(props.bottomInset - SAFE_AREA_BOTTOM_TRIM, FLOATING_MIN_BOTTOM_GAP);
+    const blurEnabled = useSetting('tabBarBlurEnabled');
+    const blurIntensity = BLUR_INTENSITY[useSetting('tabBarBlurIntensity')] ?? BLUR_INTENSITY.regular;
 
     return (
-        <View pointerEvents="box-none" style={[styles.positioner, { paddingBottom: bottomPadding }]}>
+        <View
+            pointerEvents="box-none"
+            style={[styles.positioner, props.opaqueBand ? styles.positionerBand : null, { paddingBottom: bottomPadding }]}
+        >
             <View style={styles.shadow}>
-                <GlassSurface testID={props.testID} style={styles.pill}>
+                <GlassSurface
+                    testID={props.testID}
+                    style={styles.pill}
+                    enabled={blurEnabled}
+                    blurIntensity={blurIntensity}
+                >
                     {props.children}
                 </GlassSurface>
             </View>

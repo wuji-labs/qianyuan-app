@@ -2493,23 +2493,6 @@ const ChatListInternal = React.memo((props: {
         pinThresholdPx,
         readCurrentNativeDistanceFromBottom,
     ]);
-    React.useEffect(() => {
-        (globalThis as { __FLK__?: unknown }).__FLK__ = [];
-        const t0 = Date.now();
-        const id = setInterval(() => {
-            try {
-                const g = globalThis as { __FLK__?: Array<unknown> };
-                const arr = g.__FLK__ ?? [];
-                if (arr.length < 60) {
-                    arr.push({ t: Date.now() - t0, raw: listRef.current?.getAbsoluteLastScrollOffset?.() ?? null, dfb: readCurrentNativeDistanceFromBottom() ?? null });
-                    g.__FLK__ = arr;
-                }
-            } catch {
-                // debug-only
-            }
-        }, 80);
-        return () => clearInterval(id);
-    }, [props.sessionId, readCurrentNativeDistanceFromBottom]);
     /**
      * Trusted arrival back at the bottom (plan B8): re-arming follow is a first-class
      * live-tail transition — the viewport emission must agree with the mode within the
@@ -3562,14 +3545,7 @@ const ChatListInternal = React.memo((props: {
                 viewportTransactionOpen,
                 commitToken,
             });
-        // Also suppress the clear during the cold-open settle window. The inverted follow-bottom fix
-        // marks the initial viewport applied early (to arm the pin), which closes the entry transaction
-        // sooner — but a structural clearLayoutCacheOnUpdate here resets FlashList bottom-maintenance
-        // and yanks the freshly-pinned inverted list off the bottom (the visible open flicker). Per-row
-        // onLayout settles the cold-open; clears resume once mount-settle is stable (a clear is a
-        // refresh, not a debt — the next post-settle structural mutation re-requests it).
-        const coldOpenSettling = mountSettleCoordinatorRef.current?.getSnapshot().isMountSettleActive === true;
-        if (decision.clear && !coldOpenSettling) {
+        if (decision.clear) {
             listRef.current?.clearLayoutCacheOnUpdate?.();
         }
     }, [
