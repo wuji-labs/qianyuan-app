@@ -109,6 +109,7 @@ describe('core e2e: direct-session transcript delta socket updates', () => {
         sessionId,
         itemId,
         localId,
+        fromCursor: 'tail',
         nextCursor: `cursor-${randomUUID()}`,
       });
 
@@ -121,6 +122,7 @@ describe('core e2e: direct-session transcript delta socket updates', () => {
 
       const event = findDirectSessionTranscriptDeltaEvent(userObserver.getEvents(), { sessionId, itemId });
       expect(event?.items).toEqual(payload.items);
+      expect(event?.fromCursor).toBe(payload.fromCursor);
       expect(event?.nextCursor).toBe(payload.nextCursor);
       expect(event?.truncated).toBe(false);
 

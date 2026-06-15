@@ -11,6 +11,7 @@ export type DirectSessionTranscriptDeltaPayload = {
   type: 'direct-session-transcript-delta';
   sessionId: string;
   items: DirectSessionTranscriptDeltaItem[];
+  fromCursor?: string | null;
   nextCursor?: string | null;
   truncated: boolean;
 };
@@ -56,12 +57,19 @@ function readDirectSessionTranscriptDeltaPayload(value: unknown): DirectSessionT
 
   const nextCursor = value.nextCursor;
   if (!(nextCursor === undefined || nextCursor === null || typeof nextCursor === 'string')) return null;
+  const fromCursor = value.fromCursor;
+  if (!(fromCursor === undefined || fromCursor === null || typeof fromCursor === 'string')) return null;
+  const hasNextCursor = Object.prototype.hasOwnProperty.call(value, 'nextCursor');
+  if (value.truncated !== true && hasNextCursor && (typeof fromCursor !== 'string' || fromCursor.length === 0)) {
+    return null;
+  }
 
   return {
     type: 'direct-session-transcript-delta',
     sessionId: value.sessionId,
     items,
-    ...(nextCursor === undefined || nextCursor === null || typeof nextCursor === 'string' ? { nextCursor } : {}),
+    ...(fromCursor !== undefined ? { fromCursor } : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
     truncated: value.truncated,
   };
 }
@@ -70,11 +78,20 @@ export function createDirectSessionTranscriptDeltaPayload(params: {
   sessionId: string;
   itemId: string;
   localId: string;
+  fromCursor?: string | null;
   nextCursor?: string | null;
   truncated?: boolean;
   createdAtMs?: number;
 }): DirectSessionTranscriptDeltaPayload {
-  return {
+  const hasNextCursor = Object.prototype.hasOwnProperty.call(params, 'nextCursor');
+  if (
+    params.truncated !== true
+    && hasNextCursor
+    && (typeof params.fromCursor !== 'string' || params.fromCursor.length === 0)
+  ) {
+    throw new Error('fromCursor is required when nextCursor is present on non-truncated direct-session transcript deltas');
+  }
+  const payload: DirectSessionTranscriptDeltaPayload = {
     type: 'direct-session-transcript-delta',
     sessionId: params.sessionId,
     items: [
@@ -89,9 +106,15 @@ export function createDirectSessionTranscriptDeltaPayload(params: {
         },
       },
     ],
-    nextCursor: params.nextCursor ?? null,
     truncated: params.truncated ?? false,
   };
+  if (params.fromCursor !== undefined) {
+    payload.fromCursor = params.fromCursor;
+  }
+  if (hasNextCursor) {
+    payload.nextCursor = params.nextCursor ?? null;
+  }
+  return payload;
 }
 
 export function findDirectSessionTranscriptDeltaEvent(
