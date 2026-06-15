@@ -1,5 +1,5 @@
 import React from 'react';
-import renderer from 'react-test-renderer';
+import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installConnectedServicesCommonModuleMocks } from '../connectedServicesTestHelpers';
@@ -8,6 +8,14 @@ import { installConnectedServicesCommonModuleMocks } from '../connectedServicesT
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const applySettingsSpy = vi.fn(async () => {});
+const modalSpies = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  prompt: vi.fn(),
+  alert: vi.fn(),
+}));
+const textSpies = vi.hoisted(() => ({
+  translate: vi.fn((key: string, _params?: Record<string, unknown>) => key),
+}));
 const routeParams = { serviceId: 'openai-codex', profileId: 'work' };
 const profileState = {
   connectedServicesV2: [
@@ -17,8 +25,37 @@ const profileState = {
     },
   ],
 };
+const settingsState = vi.hoisted(() => ({
+  current: {
+    connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
+    connectedServicesProfileLabelByKey: {} as Record<string, string>,
+    connectedServicesQuotaPinnedMeterIdsByKey: {},
+    connectedServicesQuotaSummaryStrategyByKey: {},
+  },
+}));
 
-installConnectedServicesCommonModuleMocks({ searchParams: routeParams });
+async function flushAsyncHandlers() {
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+installConnectedServicesCommonModuleMocks({
+  searchParams: routeParams,
+  modal: async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
+      spies: {
+        confirm: modalSpies.confirm,
+        prompt: modalSpies.prompt,
+        alert: modalSpies.alert,
+      },
+    }).module;
+  },
+  text: async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: textSpies.translate });
+  },
+});
 
 const stableCredentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') } as const;
 vi.mock('@/auth/context/AuthContext', () => ({
@@ -34,12 +71,7 @@ vi.mock('@/sync/store/hooks', async () => {
   return {
     ...actual,
     useProfile: () => profileState,
-    useSettings: () => ({
-      connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
-      connectedServicesProfileLabelByKey: {},
-      connectedServicesQuotaPinnedMeterIdsByKey: {},
-      connectedServicesQuotaSummaryStrategyByKey: {},
-    }),
+    useSettings: () => settingsState.current,
   };
 });
 
@@ -82,7 +114,52 @@ describe('ConnectedServiceProfileDetailView', () => {
     routeParams.serviceId = 'openai-codex';
     routeParams.profileId = 'work';
     applySettingsSpy.mockClear();
+    modalSpies.confirm.mockReset();
+    modalSpies.prompt.mockReset();
+    modalSpies.alert.mockReset();
+    textSpies.translate.mockClear();
+    settingsState.current = {
+      connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
+      connectedServicesProfileLabelByKey: {},
+      connectedServicesQuotaPinnedMeterIdsByKey: {},
+      connectedServicesQuotaSummaryStrategyByKey: {},
+    };
   });
+
+    it('passes the resolved profile label to destructive disconnect confirmation text', async () => {
+        settingsState.current = {
+            ...settingsState.current,
+            connectedServicesProfileLabelByKey: { 'openai-codex/work': 'Work laptop' },
+        };
+        modalSpies.confirm.mockResolvedValueOnce(false);
+        const { ConnectedServiceProfileDetailView } = await import('./ConnectedServiceProfileDetailView');
+
+        const screen = await renderScreen(<ConnectedServiceProfileDetailView />);
+        const disconnectRow = screen.tree.root.find((node) =>
+            node.props?.title === 'modals.disconnect'
+            && typeof node.props?.onPress === 'function');
+
+        await act(async () => {
+            disconnectRow.props.onPress();
+            await flushAsyncHandlers();
+        });
+
+        const disconnectBodyCall = textSpies.translate.mock.calls.find(([key]) =>
+            key === 'connectedServices.detail.disconnectConfirmBody');
+        const params = disconnectBodyCall?.[1] as { profileId?: unknown } | undefined;
+        const profileLabel = String(params?.profileId ?? '');
+        expect(profileLabel).toContain('Work laptop');
+        expect(profileLabel).toContain('work');
+        expect(profileLabel).not.toBe('work');
+        expect(modalSpies.confirm).toHaveBeenCalledWith(
+            'modals.disconnect',
+            'connectedServices.detail.disconnectConfirmBody',
+            expect.objectContaining({
+                confirmText: 'modals.disconnect',
+                cancelText: 'common.cancel',
+            }),
+        );
+    });
 
     it('renders profile details and quota card when quotas are enabled', async () => {
         const { ConnectedServiceProfileDetailView } = await import('./ConnectedServiceProfileDetailView');

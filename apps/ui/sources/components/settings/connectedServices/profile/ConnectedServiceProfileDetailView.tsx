@@ -29,6 +29,7 @@ import {
   formatConnectedServiceProfileGroupReferenceLabels,
   resolveConnectedServiceProfileGroupReferenceLabels,
 } from '../model/resolveConnectedServiceProfileGroupReferences';
+import { resolveConnectedServiceProfileIdentityDisplay } from '../model/resolveConnectedServiceIdentityDisplay';
 import { promptConnectedServiceTokenValue } from '../promptConnectedServiceTokenValue';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from '../storeConnectedServiceCredentialWithIdentityConfirmation';
@@ -117,6 +118,11 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
     profileId,
   });
   const title = label || profileId;
+  const profileConfirmationLabel = resolveConnectedServiceProfileIdentityDisplay({
+    profileId,
+    label,
+    providerEmail,
+  }).diagnosticLabel;
 
   const isDefault = (settings.connectedServicesDefaultProfileByServiceId[serviceId] ?? '') === profileId;
 
@@ -140,10 +146,10 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
       cleanupGroupReferences
         ? t('connectedServices.detail.disconnectGroupCleanupConfirmBody', {
           service: serviceLabel,
-          profileId,
+          profileId: profileConfirmationLabel,
           groups: formatConnectedServiceProfileGroupReferenceLabels(groupReferenceLabels),
         })
-        : t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId }),
+        : t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId: profileConfirmationLabel }),
       { confirmText: t('modals.disconnect'), cancelText: t('common.cancel') },
     );
     if (!ok) return;
@@ -163,7 +169,7 @@ export const ConnectedServiceProfileDetailView = React.memo(function ConnectedSe
       if (!cleanupGroupReferences && isConnectedServiceCredentialReferencedByGroupError(error)) {
         const retry = await Modal.confirm(
           t('connectedServices.detail.errors.disconnectGroupCleanupRetryTitle'),
-          t('connectedServices.detail.errors.disconnectGroupCleanupRetryBody', { service: serviceLabel, profileId }),
+          t('connectedServices.detail.errors.disconnectGroupCleanupRetryBody', { service: serviceLabel, profileId: profileConfirmationLabel }),
           {
             confirmText: t('connectedServices.detail.errors.disconnectGroupCleanupRetryConfirm'),
             cancelText: t('common.cancel'),

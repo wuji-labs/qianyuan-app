@@ -74,6 +74,10 @@ vi.mock('./SessionCockpitChromeRegistry', () => ({
     },
 }));
 
+vi.mock('@/components/appShell/panes/hooks/useDetailsTabCount', () => ({
+    useDetailsTabCount: () => 0,
+}));
+
 vi.mock('@/sync/domains/state/storage', () => ({
     useLocalSetting: (key: string) => {
         navigatorState.localSettingReads.push(key);

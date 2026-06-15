@@ -11,6 +11,9 @@ let translationPrefix = 'en';
 let sessionState: { metadata?: Record<string, unknown> | null } | null = {
     metadata: { flavor: 'codex' },
 };
+let scmState: Record<string, unknown> | null = null;
+let gitBadgeMode: 'changedFiles' | 'diffLines' | 'off' = 'changedFiles';
+let openTabsBadgeEnabled = true;
 
 installNavigationCommonModuleMocks({
     reactNative: async () => {
@@ -30,11 +33,24 @@ installNavigationCommonModuleMocks({
     },
     storage: async () => ({
         useSessionMetadata: () => sessionState?.metadata ?? null,
+        useSessionProjectScmStatus: () => scmState,
+        useSetting: (key: string) => {
+            if (key === 'tabBarGitBadgeMode') return gitBadgeMode;
+            if (key === 'tabBarOpenTabsBadgeEnabled') return openTabsBadgeEnabled;
+            if (key === 'tabBarShowLabels') return true;
+            if (key === 'tabBarSize') return 'regular';
+            return undefined;
+        },
     }),
 });
 
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+vi.mock('expo-blur', () => ({
+    BlurView: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) =>
+        React.createElement('BlurView', props, children),
 }));
 
 vi.mock('@/agents/registry/AgentIcon', () => ({
@@ -49,6 +65,9 @@ describe('cockpit tab bars', () => {
     afterEach(() => {
         translationPrefix = 'en';
         sessionState = { metadata: { flavor: 'codex' } };
+        scmState = null;
+        gitBadgeMode = 'changedFiles';
+        openTabsBadgeEnabled = true;
     });
 
     it('renders session surfaces and omits terminal when unavailable', async () => {
@@ -59,6 +78,7 @@ describe('cockpit tab bars', () => {
                 sessionId="sess_1"
                 activeSurface="git"
                 terminalTabAvailable={false}
+                openDetailsTabCount={0}
                 onSurfacePress={() => {}}
             />,
         );
@@ -66,6 +86,115 @@ describe('cockpit tab bars', () => {
         expect(screen.findByTestId('session-cockpit-tabbar-sess_1')).not.toBeNull();
         expect(screen.findByTestId('session-cockpit-tab-git')).not.toBeNull();
         expect(screen.findByTestId('session-cockpit-tab-terminal')).toBeNull();
+    });
+
+    it('shows a changed-files count badge by default when the session is dirty', async () => {
+        scmState = { isDirty: true, modifiedCount: 3, linesAdded: 42, linesRemoved: 8 };
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="git"
+                terminalTabAvailable={false}
+                openDetailsTabCount={0}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        expect(screen.findByTestId('session-cockpit-tab-git-badge')).not.toBeNull();
+        const content = screen.getTextContent();
+        expect(content).toContain('3');
+        expect(content).not.toContain('+42');
+    });
+
+    it('shows the added/removed line chip when git badge mode is diffLines', async () => {
+        gitBadgeMode = 'diffLines';
+        scmState = { isDirty: true, modifiedCount: 3, linesAdded: 42, linesRemoved: 8 };
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="git"
+                terminalTabAvailable={false}
+                openDetailsTabCount={0}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        const content = screen.getTextContent();
+        expect(content).toContain('+42');
+        expect(content).toContain('8');
+    });
+
+    it('hides the git badge when git badge mode is off', async () => {
+        gitBadgeMode = 'off';
+        scmState = { isDirty: true, modifiedCount: 3, linesAdded: 42, linesRemoved: 8 };
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="git"
+                terminalTabAvailable={false}
+                openDetailsTabCount={0}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        expect(screen.findByTestId('session-cockpit-tab-git-badge')).toBeNull();
+    });
+
+    it('omits the git badge for a clean working tree', async () => {
+        scmState = { isDirty: false, modifiedCount: 0, linesAdded: 0, linesRemoved: 0 };
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="git"
+                terminalTabAvailable={false}
+                openDetailsTabCount={0}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        expect(screen.findByTestId('session-cockpit-tab-git-badge')).toBeNull();
+    });
+
+    it('shows an open-tab count badge on the tabs surface', async () => {
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="tabs"
+                terminalTabAvailable={false}
+                openDetailsTabCount={4}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        expect(screen.findByTestId('session-cockpit-tab-tabs-badge')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('4');
+    });
+
+    it('hides the open-tab count badge when disabled in settings', async () => {
+        openTabsBadgeEnabled = false;
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="tabs"
+                terminalTabAvailable={false}
+                openDetailsTabCount={4}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        expect(screen.findByTestId('session-cockpit-tab-tabs-badge')).toBeNull();
     });
 
     it('labels the chat surface with the current session agent and renders its provider logo', async () => {
@@ -77,6 +206,7 @@ describe('cockpit tab bars', () => {
                 sessionId="sess_1"
                 activeSurface="chat"
                 terminalTabAvailable={true}
+                openDetailsTabCount={0}
                 onSurfacePress={() => {}}
             />,
         );
@@ -96,6 +226,7 @@ describe('cockpit tab bars', () => {
                 sessionId="sess_1"
                 activeSurface="chat"
                 terminalTabAvailable={true}
+                openDetailsTabCount={0}
                 onSurfacePress={() => {}}
             />,
         );
@@ -110,6 +241,7 @@ describe('cockpit tab bars', () => {
                     sessionId="sess_1"
                     activeSurface="chat"
                     terminalTabAvailable={true}
+                    openDetailsTabCount={0}
                     onSurfacePress={() => {}}
                 />,
             );

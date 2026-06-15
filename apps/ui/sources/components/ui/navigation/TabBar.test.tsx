@@ -16,6 +16,11 @@ const inboxState = vi.hoisted(() => ({
     hasContent: false,
 }));
 
+const badgeSettingsState = vi.hoisted(() => ({
+    friends: true,
+    inbox: true,
+}));
+
 installNavigationCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -29,6 +34,13 @@ installNavigationCommonModuleMocks({
         return {
             ...actual,
             useFriendRequests: (() => friendRequestsState.items) as typeof import('@/sync/domains/state/storage').useFriendRequests,
+            useSetting: ((key: string) => {
+                if (key === 'tabBarFriendsBadgeEnabled') return badgeSettingsState.friends;
+                if (key === 'tabBarInboxBadgeEnabled') return badgeSettingsState.inbox;
+                if (key === 'tabBarShowLabels') return true;
+                if (key === 'tabBarSize') return 'regular';
+                return undefined;
+            }) as typeof import('@/sync/domains/state/storage').useSetting,
         };
     },
 });
@@ -39,6 +51,11 @@ vi.mock('react-native-safe-area-context', () => ({
 
 vi.mock('expo-image', () => ({
     Image: 'Image',
+}));
+
+vi.mock('expo-blur', () => ({
+    BlurView: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) =>
+        React.createElement('BlurView', props, children),
 }));
 
 vi.mock('@/components/ui/layout/layout', () => ({
@@ -73,6 +90,23 @@ describe('TabBar', () => {
     beforeEach(() => {
         friendRequestsState.items = [];
         inboxState.hasContent = false;
+        badgeSettingsState.friends = true;
+        badgeSettingsState.inbox = true;
+    });
+
+    it('hides tab badges when disabled in settings', async () => {
+        friendRequestsState.items = [{ id: 'fr-1' }, { id: 'fr-2' }];
+        inboxState.hasContent = true;
+        badgeSettingsState.friends = false;
+        badgeSettingsState.inbox = false;
+        const { TabBar } = await import('./TabBar');
+
+        const tree = (await renderScreen(<TabBar activeTab="sessions" onTabPress={() => {}} />)).tree;
+
+        const tabs = tree.findAll((node) => typeof node.props?.onPress === 'function');
+        const allTextNodes = tree.findAllByType('Text' as never);
+        expect(tabs.some((tab) => hasIndicatorDot(tab))).toBe(false);
+        expect(allTextNodes.some((node) => String(node.props.children) === '2')).toBe(false);
     });
 
     it('shows friend request counts on the friends tab and a dot for inbox content', async () => {

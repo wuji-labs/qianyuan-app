@@ -11,7 +11,7 @@ import * as Localization from 'expo-localization';
 import { useUnistyles } from 'react-native-unistyles';
 import { Switch } from '@/components/ui/forms/Switch';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { ThemeSelectionDropdown } from '@/components/settings/appearance/themeProfiles/ThemeSelectionDropdown';
+import { ThemeSelectionDropdown, type ThemeSelectionOption } from '@/components/settings/appearance/themeProfiles/ThemeSelectionDropdown';
 import { t, getLanguageNativeName, SUPPORTED_LANGUAGES } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import {
@@ -25,9 +25,12 @@ import { resolveStatusBarStyleForThemePreference } from '@/components/ui/layout/
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { runThemePreferenceChange } from '@/components/settings/appearance/themePreferenceTransition';
 import { applyThemeRuntimeSelection } from '@/theme/profiles/themeProfileRuntime';
-import { DEFAULT_THEME_PROFILES_LOCAL_STATE, findThemeProfileById } from '@/theme/profiles/themeProfilePersistence';
-import { getBuiltInThemeProfileDefinition, isBuiltInThemeProfilePresetId } from '@/theme/profiles/builtInThemeProfiles';
-import type { ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
+import {
+    DEFAULT_THEME_PROFILES_LOCAL_STATE,
+    findActiveThemeProfileForMode,
+    setActiveThemeProfileForMode,
+} from '@/theme/profiles/themeProfilePersistence';
+import type { ThemeProfileMode, ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 
 const UI_FONT_SCALE_PRESETS = {
@@ -86,18 +89,36 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [uiMultiPanePanelsEnabled, setUiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
     const [uiBackdropBlurEnabled, setUiBackdropBlurEnabled] = useLocalSettingMutable('uiBackdropBlurEnabled');
     const [detailsPaneTabsBehavior, setDetailsPaneTabsBehavior] = useLocalSettingMutable('detailsPaneTabsBehavior');
+    const [tabBarGitBadgeMode, setTabBarGitBadgeMode] = useSettingMutable('tabBarGitBadgeMode');
+    const [tabBarFriendsBadgeEnabled, setTabBarFriendsBadgeEnabled] = useSettingMutable('tabBarFriendsBadgeEnabled');
+    const [tabBarInboxBadgeEnabled, setTabBarInboxBadgeEnabled] = useSettingMutable('tabBarInboxBadgeEnabled');
+    const [tabBarOpenTabsBadgeEnabled, setTabBarOpenTabsBadgeEnabled] = useSettingMutable('tabBarOpenTabsBadgeEnabled');
+    const [tabBarShowLabels, setTabBarShowLabels] = useSettingMutable('tabBarShowLabels');
+    const [tabBarSize, setTabBarSize] = useSettingMutable('tabBarSize');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [openTextSizeMenu, setOpenTextSizeMenu] = React.useState(false);
     const [openThemeMenu, setOpenThemeMenu] = React.useState(false);
+    const [openLightThemeMenu, setOpenLightThemeMenu] = React.useState(false);
+    const [openDarkThemeMenu, setOpenDarkThemeMenu] = React.useState(false);
     const [openItemDensityMenu, setOpenItemDensityMenu] = React.useState(false);
     const [openContentWidthMenu, setOpenContentWidthMenu] = React.useState(false);
     const [openDetailsTabsMenu, setOpenDetailsTabsMenu] = React.useState(false);
     const [openAvatarStyleMenu, setOpenAvatarStyleMenu] = React.useState(false);
+    const [openGitBadgeMenu, setOpenGitBadgeMenu] = React.useState(false);
+    const [openTabBarSizeMenu, setOpenTabBarSizeMenu] = React.useState(false);
     const safeThemeProfiles = themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE;
-    const activeThemeProfile = React.useMemo(
-        () => findThemeProfileById(safeThemeProfiles, safeThemeProfiles.activeProfileId),
+    const activeLightThemeProfile = React.useMemo(
+        () => findActiveThemeProfileForMode(safeThemeProfiles, 'light'),
         [safeThemeProfiles],
     );
+    const activeDarkThemeProfile = React.useMemo(
+        () => findActiveThemeProfileForMode(safeThemeProfiles, 'dark'),
+        [safeThemeProfiles],
+    );
+    const activeThemeProfilesSubtitle = React.useMemo(() => {
+        const defaultTheme = t('settingsAppearance.themeProfiles.defaultTheme');
+        return `${activeLightThemeProfile?.name ?? defaultTheme} / ${activeDarkThemeProfile?.name ?? defaultTheme}`;
+    }, [activeDarkThemeProfile?.name, activeLightThemeProfile?.name]);
     const textSizeMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
         return [
             { id: 'xxsmall', title: t('settingsAppearance.textSizeOptions.xxsmall') },
@@ -123,6 +144,22 @@ export default React.memo(function AppearanceSettingsScreen() {
             title: t(option.labelKey),
             icon: <AvatarStylePreviewIcon styleId={option.id} />,
         }));
+    }, []);
+
+    const gitBadgeMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
+        return [
+            { id: 'changedFiles', title: t('settingsAppearance.tabBarBadges.gitChangedFiles') },
+            { id: 'diffLines', title: t('settingsAppearance.tabBarBadges.gitDiffLines') },
+            { id: 'off', title: t('settingsAppearance.tabBarBadges.gitOff') },
+        ];
+    }, []);
+
+    const tabBarSizeMenuItems = React.useMemo((): readonly DropdownMenuItem[] => {
+        return [
+            { id: 'compact', title: t('settingsAppearance.tabBarAppearance.sizeCompact') },
+            { id: 'regular', title: t('settingsAppearance.tabBarAppearance.sizeRegular') },
+            { id: 'large', title: t('settingsAppearance.tabBarAppearance.sizeLarge') },
+        ];
     }, []);
 
     const itemDensityMenuItems = React.useMemo(() => {
@@ -206,16 +243,24 @@ export default React.memo(function AppearanceSettingsScreen() {
         });
     }, [reduceMotion, setThemePreference, setThemeProfiles, themePreference]);
 
-    const selectBaseTheme = React.useCallback((nextThemePreference: 'adaptive' | 'light' | 'dark') => {
-        applyThemeSelection(nextThemePreference, { ...safeThemeProfiles, activeProfileId: null });
+    const selectCurrentTheme = React.useCallback((option: ThemeSelectionOption) => {
+        if (option.kind === 'adaptive') {
+            applyThemeSelection('adaptive', safeThemeProfiles);
+            return;
+        }
+
+        applyThemeSelection(
+            option.preferredMode,
+            setActiveThemeProfileForMode(
+                safeThemeProfiles,
+                option.preferredMode,
+                option.kind === 'base' ? null : option.id,
+            ),
+        );
     }, [applyThemeSelection, safeThemeProfiles]);
 
-    const selectThemeProfile = React.useCallback((profileId: string) => {
-        const builtInDefinition = isBuiltInThemeProfilePresetId(profileId) ? getBuiltInThemeProfileDefinition(profileId) : undefined;
-        const nextThemePreference = isBuiltInThemeProfilePresetId(profileId)
-            ? builtInDefinition?.preferredMode ?? 'light'
-            : themePreference;
-        applyThemeSelection(nextThemePreference, { ...safeThemeProfiles, activeProfileId: profileId });
+    const selectThemeProfileForMode = React.useCallback((mode: ThemeProfileMode, profileId: string | null) => {
+        applyThemeSelection(themePreference, setActiveThemeProfileForMode(safeThemeProfiles, mode, profileId));
     }, [applyThemeSelection, safeThemeProfiles, themePreference]);
 
     // Ensure we have a valid style for display, defaulting to gradient for unknown values
@@ -243,17 +288,39 @@ export default React.memo(function AppearanceSettingsScreen() {
                 <ThemeSelectionDropdown
                     open={openThemeMenu}
                     onOpenChange={setOpenThemeMenu}
+                    variant="current"
                     themePreference={themePreference}
                     themeProfiles={safeThemeProfiles}
-                    onSelectBaseTheme={selectBaseTheme}
-                    onSelectProfile={selectThemeProfile}
+                    onSelectTheme={selectCurrentTheme}
                 />
+                {themePreference === 'adaptive' ? (
+                    <>
+                        <ThemeSelectionDropdown
+                            open={openLightThemeMenu}
+                            onOpenChange={setOpenLightThemeMenu}
+                            variant="slot"
+                            mode="light"
+                            themeProfiles={safeThemeProfiles}
+                            onSelectProfile={(profileId) => selectThemeProfileForMode('light', profileId)}
+                        />
+                        <ThemeSelectionDropdown
+                            open={openDarkThemeMenu}
+                            onOpenChange={setOpenDarkThemeMenu}
+                            variant="slot"
+                            mode="dark"
+                            themeProfiles={safeThemeProfiles}
+                            onSelectProfile={(profileId) => selectThemeProfileForMode('dark', profileId)}
+                        />
+                    </>
+                ) : null}
                 <Item
                     testID="settings-appearance-themeProfiles"
                     title={t('settingsAppearance.themeProfiles.title')}
-                    subtitle={activeThemeProfile?.name ?? t('settingsAppearance.themeProfiles.defaultThemeSubtitle')}
+                    subtitle={activeThemeProfilesSubtitle}
                     icon={<Ionicons name="color-palette-outline" size={29} color={theme.colors.accent.indigo} />}
-                    detail={activeThemeProfile ? t('settingsAppearance.themeProfiles.active') : t('settingsAppearance.themeProfiles.defaultTheme')}
+                    detail={activeLightThemeProfile || activeDarkThemeProfile
+                        ? t('settingsAppearance.themeProfiles.active')
+                        : t('settingsAppearance.themeProfiles.defaultTheme')}
                     onPress={() => router.push('/settings/appearance/themes')}
                 />
             </ItemGroup>
@@ -423,6 +490,106 @@ export default React.memo(function AppearanceSettingsScreen() {
                             onValueChange={setShowFlavorIcons}
                         />
                     }
+                />
+            </ItemGroup>
+
+            {/* Tab bar appearance */}
+            <ItemGroup title={t('settingsAppearance.tabBarAppearance.title')} footer={t('settingsAppearance.tabBarAppearance.footer')}>
+                <DropdownMenu
+                    open={openTabBarSizeMenu}
+                    onOpenChange={setOpenTabBarSizeMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={tabBarSize}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    itemTrigger={{
+                        title: t('settingsAppearance.tabBarAppearance.size'),
+                        icon: <Ionicons name="resize-outline" size={29} color={theme.colors.accent.blue} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-appearance-tabBarSize-select' },
+                    }}
+                    items={tabBarSizeMenuItems}
+                    onSelect={(itemId) => {
+                        if (itemId !== 'compact' && itemId !== 'regular' && itemId !== 'large') return;
+                        setTabBarSize(itemId);
+                    }}
+                />
+                <Item
+                    title={t('settingsAppearance.tabBarAppearance.showLabels')}
+                    icon={<Ionicons name="text-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-tabBarShowLabels-switch"
+                            value={tabBarShowLabels}
+                            onValueChange={setTabBarShowLabels}
+                        />
+                    }
+                    showChevron={false}
+                />
+            </ItemGroup>
+
+            {/* Tab bar badges */}
+            <ItemGroup title={t('settingsAppearance.tabBarBadges.title')} footer={t('settingsAppearance.tabBarBadges.footer')}>
+                <DropdownMenu
+                    open={openGitBadgeMenu}
+                    onOpenChange={setOpenGitBadgeMenu}
+                    variant="selectable"
+                    search={false}
+                    selectedId={tabBarGitBadgeMode}
+                    showCategoryTitles={false}
+                    matchTriggerWidth={true}
+                    connectToTrigger={true}
+                    rowKind="item"
+                    itemTrigger={{
+                        title: t('settingsAppearance.tabBarBadges.gitTitle'),
+                        icon: <Ionicons name="git-branch-outline" size={29} color={theme.colors.accent.blue} />,
+                        showSelectedSubtitle: false,
+                        itemProps: { testID: 'settings-appearance-tabBarGitBadge-select' },
+                    }}
+                    items={gitBadgeMenuItems}
+                    onSelect={(itemId) => {
+                        if (itemId !== 'changedFiles' && itemId !== 'diffLines' && itemId !== 'off') return;
+                        setTabBarGitBadgeMode(itemId);
+                    }}
+                />
+                <Item
+                    title={t('tabs.friends')}
+                    icon={<Ionicons name="people-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-tabBarFriendsBadge-switch"
+                            value={tabBarFriendsBadgeEnabled}
+                            onValueChange={setTabBarFriendsBadgeEnabled}
+                        />
+                    }
+                    showChevron={false}
+                />
+                <Item
+                    title={t('tabs.inbox')}
+                    icon={<Ionicons name="mail-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-tabBarInboxBadge-switch"
+                            value={tabBarInboxBadgeEnabled}
+                            onValueChange={setTabBarInboxBadgeEnabled}
+                        />
+                    }
+                    showChevron={false}
+                />
+                <Item
+                    title={t('workspaceCockpit.tabs')}
+                    icon={<Ionicons name="albums-outline" size={29} color={theme.colors.accent.blue} />}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-tabBarOpenTabsBadge-switch"
+                            value={tabBarOpenTabsBadgeEnabled}
+                            onValueChange={setTabBarOpenTabsBadgeEnabled}
+                        />
+                    }
+                    showChevron={false}
                 />
             </ItemGroup>
         </ItemList>

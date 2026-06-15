@@ -716,6 +716,9 @@ vi.mock('react-native-unistyles', () => {
                 agent: { foreground: '#000000' },
                 event: { foreground: '#666666' },
             },
+            feed: {
+                card: { background: '#f8f8f8' },
+            },
             syntax: {
                 keyword: '#1d4ed8',
                 string: '#059669',

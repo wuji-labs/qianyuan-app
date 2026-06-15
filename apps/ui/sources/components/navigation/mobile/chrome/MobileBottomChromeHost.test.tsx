@@ -507,6 +507,7 @@ describe('MobileBottomChromeHost', () => {
                 sessionId: 'session-1',
                 activeSurface: 'browse',
                 terminalTabAvailable: true,
+                openDetailsTabCount: 2,
                 switchSurface: vi.fn(),
             }), [register]);
             return null;
@@ -526,6 +527,7 @@ describe('MobileBottomChromeHost', () => {
         const cockpitBar = screen.tree.findByType('SessionCockpitTabBar' as never);
         expect(cockpitBar.props.sessionId).toBe('session-1');
         expect(cockpitBar.props.activeSurface).toBe('browse');
+        expect(cockpitBar.props.openDetailsTabCount).toBe(2);
     });
 
     it('shows session cockpit chrome when cockpit mode is enabled while already viewing a session', async () => {

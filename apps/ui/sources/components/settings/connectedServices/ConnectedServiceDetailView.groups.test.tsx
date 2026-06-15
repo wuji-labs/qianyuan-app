@@ -23,6 +23,9 @@ const modalSpies = vi.hoisted(() => ({
     confirm: vi.fn(),
     alert: vi.fn(),
 }));
+const textSpies = vi.hoisted(() => ({
+    translate: vi.fn((key: string, _params?: Record<string, unknown>) => key),
+}));
 
 const authGroupApiSpies = vi.hoisted(() => ({
     listConnectedServiceAuthGroupsV3: vi.fn(),
@@ -57,6 +60,14 @@ const profileState = vi.hoisted(() => ({
 }));
 const authoritativeGroupState = vi.hoisted(() => ({
     groups: [] as unknown[],
+}));
+const settingsState = vi.hoisted(() => ({
+    current: {
+        connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
+        connectedServicesProfileLabelByKey: {} as Record<string, string>,
+        connectedServicesQuotaPinnedMeterIdsByKey: {},
+        connectedServicesQuotaSummaryStrategyByKey: {},
+    },
 }));
 
 function notifyProfileStateChanged() {
@@ -182,6 +193,10 @@ installConnectedServicesCommonModuleMocks({
             },
         }).module;
     },
+    text: async () => {
+        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+        return createTextModuleMock({ translate: textSpies.translate });
+    },
 });
 
 vi.mock('@/auth/context/AuthContext', () => ({
@@ -207,12 +222,7 @@ vi.mock('@/sync/store/hooks', async () => {
             () => profileState.current,
             () => profileState.current,
         ),
-        useSettings: () => ({
-            connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
-            connectedServicesProfileLabelByKey: {},
-            connectedServicesQuotaPinnedMeterIdsByKey: {},
-            connectedServicesQuotaSummaryStrategyByKey: {},
-        }),
+        useSettings: () => settingsState.current,
     };
 });
 
@@ -268,6 +278,7 @@ describe('ConnectedServiceDetailView groups', () => {
         modalSpies.prompt.mockReset();
         modalSpies.confirm.mockReset();
         modalSpies.alert.mockReset();
+        textSpies.translate.mockClear();
         syncSpies.refreshProfile.mockReset();
         syncSpies.applySettings.mockReset();
         connectedServicesModuleState.searchParams = { serviceId: 'openai-codex' };
@@ -275,6 +286,12 @@ describe('ConnectedServiceDetailView groups', () => {
         connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount.mockClear();
         authState.credentials = { token: 't', secret: Buffer.from(new Uint8Array(32).fill(3)).toString('base64url') };
         featureEnabledById.clear();
+        settingsState.current = {
+            connectedServicesDefaultProfileByServiceId: { 'openai-codex': 'work' },
+            connectedServicesProfileLabelByKey: {},
+            connectedServicesQuotaPinnedMeterIdsByKey: {},
+            connectedServicesQuotaSummaryStrategyByKey: {},
+        };
         profileState.current = createProfileSnapshot([
             {
                 groupId: 'primary',
@@ -403,6 +420,12 @@ describe('ConnectedServiceDetailView groups', () => {
 
     it('refetches authoritative groups after disconnect even when the service projection stays equivalent', async () => {
         const { ConnectedServiceDetailView } = await import('./ConnectedServiceDetailView');
+        settingsState.current = {
+            ...settingsState.current,
+            connectedServicesProfileLabelByKey: {
+                'openai-codex/work': 'Work account',
+            },
+        };
         authoritativeGroupState.groups = [
             createAuthoritativeGroup({
                 displayName: 'Initial pool',
@@ -451,6 +474,12 @@ describe('ConnectedServiceDetailView groups', () => {
                 cancelText: 'common.cancel',
             }),
         );
+        const disconnectBodyCall = textSpies.translate.mock.calls.find(
+            ([key]) => key === 'connectedServices.detail.disconnectGroupCleanupConfirmBody',
+        );
+        expect(disconnectBodyCall?.[1]).toEqual(expect.objectContaining({
+            profileId: 'Work account · work@example.com · work',
+        }));
         expect(connectedServiceCredentialSpies.deleteConnectedServiceCredentialForAccount).toHaveBeenCalledWith(
             expect.objectContaining({ token: 't' }),
             { serviceId: 'openai-codex', profileId: 'work', cleanupGroupReferences: true },
@@ -807,6 +836,32 @@ describe('ConnectedServiceDetailView groups', () => {
         expect(authGroupApiSpies.listConnectedServiceAuthGroupsV3.mock.calls.length).toBeGreaterThanOrEqual(
             listCallsBeforeActions + 5,
         );
+    });
+
+    it('passes the resolved member label to service-detail remove-member confirmation text', async () => {
+        settingsState.current = {
+            ...settingsState.current,
+            connectedServicesProfileLabelByKey: { 'openai-codex/backup': 'Backup laptop' },
+        };
+        modalSpies.confirm.mockResolvedValueOnce(false);
+
+        const screen = await renderGroupsScreen();
+        const backupActions = screen.tree
+            .root
+            .findAll((node) => isItemRowActionsNode(node) && node.props?.title === 'backup')
+            .find((node) => Array.isArray(node.props.actions)
+                && node.props.actions.some((action: { id?: string }) => action.id === 'connected-services-group:primary:member:backup:action:remove'));
+        const actions = backupActions?.props.actions as ReadonlyArray<{ id: string; onPress: () => void }> | undefined;
+
+        await invokeRowAction(actions!.find((action) => action.id === 'connected-services-group:primary:member:backup:action:remove')!);
+
+        const removeBodyCall = textSpies.translate.mock.calls.find(([key]) =>
+            key === 'connectedServices.detail.groupActions.removeMemberConfirmBody');
+        const params = removeBodyCall?.[1] as { profileId?: unknown } | undefined;
+        const memberLabel = String(params?.profileId ?? '');
+        expect(memberLabel).toContain('Backup laptop');
+        expect(memberLabel).toContain('backup');
+        expect(memberLabel).not.toBe('backup');
     });
 
     it('confirms and retries manual active-member switches when runtime cooldown blocks the first attempt', async () => {

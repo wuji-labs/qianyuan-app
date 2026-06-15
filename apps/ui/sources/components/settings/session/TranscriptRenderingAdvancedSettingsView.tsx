@@ -47,10 +47,12 @@ export const TranscriptRenderingAdvancedSettingsView = React.memo(function Trans
 
     const [openListImplementationMenu, setOpenListImplementationMenu] = React.useState(false);
 
-    const normalizedTranscriptListImplementation: 'flash_v2' | 'flatlist_legacy' =
-        transcriptListImplementation === 'flatlist_legacy' ? 'flatlist_legacy' : 'flash_v2';
+    const normalizedTranscriptListImplementation: 'flash_v2' | 'flatlist_legacy' | 'flash_v2_inverted' =
+        transcriptListImplementation === 'flatlist_legacy' || transcriptListImplementation === 'flash_v2_inverted'
+            ? transcriptListImplementation
+            : 'flash_v2';
 
-    const listImplementationOptions: Array<{ key: 'flash_v2' | 'flatlist_legacy'; title: string; subtitle: string }> = [
+    const listImplementationOptions: Array<{ key: 'flash_v2' | 'flatlist_legacy' | 'flash_v2_inverted'; title: string; subtitle: string }> = [
         {
             key: 'flash_v2',
             title: t('settingsSession.transcript.advanced.listImplementation.flashTitle'),
@@ -60,6 +62,11 @@ export const TranscriptRenderingAdvancedSettingsView = React.memo(function Trans
             key: 'flatlist_legacy',
             title: t('settingsSession.transcript.advanced.listImplementation.legacyTitle'),
             subtitle: t('settingsSession.transcript.advanced.listImplementation.legacySubtitle'),
+        },
+        {
+            key: 'flash_v2_inverted',
+            title: t('settingsSession.transcript.advanced.listImplementation.flashInvertedTitle'),
+            subtitle: t('settingsSession.transcript.advanced.listImplementation.flashInvertedSubtitle'),
         },
     ];
 

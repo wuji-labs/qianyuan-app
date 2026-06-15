@@ -6,6 +6,7 @@ import {
 import { NavigationContainer, NavigationIndependentTree } from '@react-navigation/native';
 
 import { usePersistSessionLastMobileSurface } from '@/sync/domains/state/storage';
+import { useDetailsTabCount } from '@/components/appShell/panes/hooks/useDetailsTabCount';
 
 import {
     type SessionMobileSurface,
@@ -117,6 +118,7 @@ const SessionCockpitNavigatorChromeBridge = React.memo((props: BottomTabBarProps
 }>) => {
     const register = useSessionCockpitChromeRegister();
     const persistSessionLastMobileSurface = usePersistSessionLastMobileSurface();
+    const openDetailsTabCount = useDetailsTabCount(`session:${props.sessionId}`);
     const activeSurface = normalizeSurface(props.state.routes[props.state.index]?.name) ?? 'chat';
 
     const persistSessionSurface = React.useCallback((surface: SessionMobileSurface) => {
@@ -144,9 +146,11 @@ const SessionCockpitNavigatorChromeBridge = React.memo((props: BottomTabBarProps
         sessionId: props.sessionId,
         activeSurface,
         terminalTabAvailable: props.terminalTabAvailable,
+        openDetailsTabCount,
         switchSurface,
     }), [
         activeSurface,
+        openDetailsTabCount,
         props.sessionId,
         props.terminalTabAvailable,
         register,

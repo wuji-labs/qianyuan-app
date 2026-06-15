@@ -60,6 +60,15 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__permissionPromptSurface).toBe('both');
     });
 
+    it('tracks the flash_v2_inverted transcript list implementation pilot value', () => {
+        const snapshot = buildAccountSettingsSnapshot({
+            ...settingsDefaults,
+            transcriptListImplementation: 'flash_v2_inverted',
+        });
+
+        expect(snapshot.properties.acct_setting__transcriptListImplementation).toBe('flash_v2_inverted');
+    });
+
     it('tracks runtime and tool override summaries from canonical analytics serializers', () => {
         const snapshot = buildAccountSettingsSnapshot({
             ...settingsDefaults,

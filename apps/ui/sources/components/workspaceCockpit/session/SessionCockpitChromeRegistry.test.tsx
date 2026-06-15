@@ -45,6 +45,7 @@ function RegisteringBridge(props: Readonly<{
         sessionId: 'session-1',
         activeSurface: 'chat',
         terminalTabAvailable: true,
+        openDetailsTabCount: 0,
         switchSurface,
     }), [register, switchSurface]);
 
@@ -126,11 +127,50 @@ describe('SessionCockpitChromeRegistry', () => {
                 sessionId: 'session-1',
                 activeSurface: 'chat',
                 terminalTabAvailable: true,
+                openDetailsTabCount: 0,
                 switchSurface: () => {},
             });
         });
 
         expect(readRegistration(screen).activeSurface).toBe('chat');
         expect(renderCount).toBe(1);
+    });
+
+    it('republishes the registration when the open details tab count changes', async () => {
+        let register: ((registration: SessionCockpitChromeRegistration) => () => void) | null = null;
+
+        const screen = await renderScreen(
+            <SessionCockpitChromeRegistryProvider>
+                <RegisterConsumerProbe
+                    onRegister={(nextRegister) => {
+                        register = nextRegister;
+                    }}
+                    onRender={() => {}}
+                />
+                <RegistrationProbe />
+            </SessionCockpitChromeRegistryProvider>,
+        );
+
+        await act(async () => {
+            register?.({
+                sessionId: 'session-1',
+                activeSurface: 'tabs',
+                terminalTabAvailable: true,
+                openDetailsTabCount: 1,
+                switchSurface: () => {},
+            });
+        });
+        expect(readRegistration(screen).openDetailsTabCount).toBe(1);
+
+        await act(async () => {
+            register?.({
+                sessionId: 'session-1',
+                activeSurface: 'tabs',
+                terminalTabAvailable: true,
+                openDetailsTabCount: 3,
+                switchSurface: () => {},
+            });
+        });
+        expect(readRegistration(screen).openDetailsTabCount).toBe(3);
     });
 });

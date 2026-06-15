@@ -43,6 +43,7 @@ import {
     normalizeConnectedServiceGroupMember,
     readConnectedServiceGroupString,
     resolveConnectedServiceGroupProbeIfSnapshotOlderThanMs,
+    resolveConnectedServiceGroupMemberIdentity,
     resolveConnectedServiceGroupProfileTitle,
     resolveConnectedServiceGroupRecoveryMode,
     resolveConnectedServiceGroupSoftSwitchRemainingPercent,
@@ -384,9 +385,15 @@ export const ConnectedServiceGroupDetailView = React.memo(function ConnectedServ
         if (!serviceId || !group) return;
         const existing = group.members.some((member) => member.profileId === profileId);
         if (existing) {
+            const memberLabel = resolveConnectedServiceGroupMemberIdentity({
+                serviceId,
+                profileId,
+                labelsByKey: settings.connectedServicesProfileLabelByKey,
+                profiles,
+            }).diagnosticLabel;
             const ok = await Modal.confirm(
                 t('connectedServices.detail.groupActions.removeMemberConfirmTitle'),
-                t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId }),
+                t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId: memberLabel }),
                 { confirmText: t('common.remove'), cancelText: t('common.cancel') },
             );
             if (!ok) return;

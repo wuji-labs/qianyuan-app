@@ -6,6 +6,7 @@ export type SessionCockpitChromeRegistration = Readonly<{
     sessionId: string;
     activeSurface: SessionMobileSurface;
     terminalTabAvailable: boolean;
+    openDetailsTabCount: number;
     switchSurface: (surface: SessionMobileSurface) => void;
 }>;
 
@@ -48,6 +49,7 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
                 currentRegistration?.sessionId === nextRegistration.sessionId
                 && currentRegistration.activeSurface === nextRegistration.activeSurface
                 && currentRegistration.terminalTabAvailable === nextRegistration.terminalTabAvailable
+                && currentRegistration.openDetailsTabCount === nextRegistration.openDetailsTabCount
             ) {
                 return currentRegistration;
             }
@@ -56,6 +58,7 @@ export function SessionCockpitChromeRegistryProvider(props: Readonly<{ children:
                 sessionId: nextRegistration.sessionId,
                 activeSurface: nextRegistration.activeSurface,
                 terminalTabAvailable: nextRegistration.terminalTabAvailable,
+                openDetailsTabCount: nextRegistration.openDetailsTabCount,
                 switchSurface: (surface) => {
                     latestRegistrationRef.current?.switchSurface(surface);
                 },

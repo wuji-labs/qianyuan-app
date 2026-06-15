@@ -4,30 +4,38 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { layout } from '@/components/ui/layout/layout';
 import { Text } from '@/components/ui/text/Text';
+import { FloatingTabBarSurface } from '@/components/ui/navigation/FloatingTabBarSurface';
+import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
+import { resolveTabBarMetrics } from '@/components/ui/navigation/tabBarMetrics';
+import { useSetting } from '@/sync/domains/state/storage';
 import { Typography } from '@/constants/Typography';
 
 const styles = StyleSheet.create((theme) => ({
-    outerContainer: {
-        backgroundColor: theme.colors.surface.base,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border.default,
-    },
     innerContainer: {
         flexDirection: 'row',
-        alignItems: 'flex-start',
-        justifyContent: 'space-around',
-        width: '100%',
-        maxWidth: layout.maxWidth,
-        alignSelf: 'center',
+        alignItems: 'center',
     },
     tab: {
-        flex: 1,
         alignItems: 'center',
-        paddingTop: 8,
-        paddingBottom: 4,
+        justifyContent: 'center',
+        minWidth: 50,
+        flexShrink: 1,
         zIndex: 1,
+    },
+    iconContainer: {
+        position: 'relative',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    activePill: {
+        position: 'absolute',
+        top: -5,
+        bottom: -5,
+        left: -12,
+        right: -12,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surface.ripple,
     },
     label: {
         marginTop: 4,
@@ -43,12 +51,17 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
+export type CockpitTabBadge =
+    | Readonly<{ kind: 'count'; value: number }>
+    | Readonly<{ kind: 'diff'; added: number; removed: number; modifiedCount: number }>;
+
 export type CockpitTabBarTabDefinition<TSurface extends string> = Readonly<{
     id: TSurface;
     label: string;
     icon: keyof typeof Ionicons.glyphMap | Readonly<{
         render: (params: Readonly<{ size: number; tintColor: string; active: boolean }>) => React.ReactNode;
     }>;
+    badge?: CockpitTabBadge;
 }>;
 
 type CockpitTabBarProps<TSurface extends string> = Readonly<{
@@ -62,32 +75,57 @@ type CockpitTabBarProps<TSurface extends string> = Readonly<{
 export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps<TSurface>) {
     const { theme } = useUnistyles();
     const insets = useSafeAreaInsets();
+    const metrics = resolveTabBarMetrics(useSetting('tabBarSize'), useSetting('tabBarShowLabels'));
 
     return (
-        <View testID={props.barTestId} style={[styles.outerContainer, { paddingBottom: insets.bottom }]}>
-            <View style={styles.innerContainer}>
+        <FloatingTabBarSurface testID={props.barTestId} bottomInset={insets.bottom}>
+            <View style={[styles.innerContainer, { gap: metrics.rowGap }]}>
                 {props.tabs.map((tab) => {
                     const active = tab.id === props.activeSurface;
                     const tintColor = active ? theme.colors.text.primary : theme.colors.text.secondary;
                     const icon = typeof tab.icon === 'string'
-                        ? <Ionicons name={tab.icon} size={22} color={tintColor} />
-                        : tab.icon.render({ size: 22, tintColor, active });
+                        ? <Ionicons name={tab.icon} size={metrics.iconSize} color={tintColor} />
+                        : tab.icon.render({ size: metrics.iconSize, tintColor, active });
                     return (
                         <Pressable
                             key={tab.id}
                             testID={`${props.tabTestIdPrefix}${tab.id}`}
                             onPress={() => props.onSurfacePress(tab.id)}
                             hitSlop={8}
-                            style={styles.tab}
+                            style={[styles.tab, { paddingVertical: metrics.tabPaddingVertical, paddingHorizontal: metrics.tabPaddingHorizontal }]}
                         >
-                            {icon}
-                            <Text style={[styles.label, active ? styles.labelActive : styles.labelInactive]}>
-                                {tab.label}
-                            </Text>
+                            <View style={styles.iconContainer}>
+                                {active && !metrics.showLabels ? <View pointerEvents="none" style={styles.activePill} /> : null}
+                                {icon}
+                                {renderTabBadge(tab.badge, `${props.tabTestIdPrefix}${tab.id}-badge`)}
+                            </View>
+                            {metrics.showLabels ? (
+                                <Text style={[styles.label, active ? styles.labelActive : styles.labelInactive]}>
+                                    {tab.label}
+                                </Text>
+                            ) : null}
                         </Pressable>
                     );
                 })}
             </View>
-        </View>
+        </FloatingTabBarSurface>
+    );
+}
+
+function renderTabBadge(badge: CockpitTabBadge | undefined, testID: string): React.ReactNode {
+    if (!badge) {
+        return null;
+    }
+    if (badge.kind === 'count') {
+        return <TabBadge variant="count" value={badge.value} testID={testID} />;
+    }
+    return (
+        <TabBadge
+            variant="diff"
+            added={badge.added}
+            removed={badge.removed}
+            modifiedCount={badge.modifiedCount}
+            testID={testID}
+        />
     );
 }

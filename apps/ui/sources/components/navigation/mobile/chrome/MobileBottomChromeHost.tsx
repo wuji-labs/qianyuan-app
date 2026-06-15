@@ -180,15 +180,17 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
                     : null;
             const activeSurface = matchingRegistration?.activeSurface ?? activeCockpitRoute.surface;
             const terminalTabAvailable = matchingRegistration?.terminalTabAvailable ?? terminalAvailability.sidebarTabAvailable;
+            const openDetailsTabCount = matchingRegistration?.openDetailsTabCount ?? 0;
 
             return {
                 key: `sessionCockpitTabs:${activeCockpitRoute.sessionId}`,
-                signature: `sessionCockpitTabs:${activeCockpitRoute.sessionId}:${activeSurface}:${terminalTabAvailable ? 'terminal' : 'no-terminal'}`,
+                signature: `sessionCockpitTabs:${activeCockpitRoute.sessionId}:${activeSurface}:${terminalTabAvailable ? 'terminal' : 'no-terminal'}:tabs${openDetailsTabCount}`,
                 node: (
                     <SessionCockpitTabBar
                         sessionId={activeCockpitRoute.sessionId}
                         activeSurface={activeSurface}
                         terminalTabAvailable={terminalTabAvailable}
+                        openDetailsTabCount={openDetailsTabCount}
                         onSurfacePress={handleCockpitSurfacePress}
                     />
                 ),
@@ -338,8 +340,17 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         ],
     } as const;
 
+    // Main-app tabs overlay content (content scrolls under the glass; those screens
+    // pad their own bottom). Session/project cockpit chrome stays in normal flow so
+    // it reserves space and the composer/terminal sit above the bar — the spacing is
+    // transparent (no background band).
+    const isMainAppChrome = renderedChrome.current.key === 'mainAppTabs';
+    const wrapperStyle = isMainAppChrome
+        ? ({ position: 'absolute', left: 0, right: 0, bottom: 0 } as const)
+        : ({ position: 'relative' } as const);
+
     return (
-        <View onLayout={handleChromeLayout} style={{ position: 'relative' }}>
+        <View onLayout={handleChromeLayout} pointerEvents="box-none" style={wrapperStyle}>
             <Animated.View style={currentStyle}>
                 {renderedChrome.current.node}
             </Animated.View>

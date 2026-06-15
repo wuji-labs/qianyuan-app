@@ -4,7 +4,7 @@ import { darkTheme, lightTheme } from './theme';
 import type { ThemeProfilesLocalStateV1 } from './theme/profiles/themeProfileTypes';
 
 const brokenProfileState = {
-    activeProfileId: 'broken',
+    activeProfileIds: { light: 'broken', dark: 'broken' },
     profiles: [{
         schemaVersion: 1,
         id: 'broken',

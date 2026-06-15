@@ -12,6 +12,8 @@ import { installSessionSettingsCommonModuleMocks } from './sessionSettingsViewTe
 
 const setCoalesceEnabled = vi.fn();
 const setPartialOutputEnabled = vi.fn();
+const setListImplementation = vi.fn();
+let listImplementationValue: string = 'flash_v2';
 
 installSessionSettingsCommonModuleMocks({
     reactNative: async () => {
@@ -31,7 +33,7 @@ installSessionSettingsCommonModuleMocks({
                     if (key === 'transcriptStreamingCoalesceMaxBatchSize') return [200, vi.fn()];
                     if (key === 'transcriptStreamingPartialOutputEnabled') return [true, setPartialOutputEnabled];
                     if (key === 'transcriptThinkingPulseStaleMs') return [120_000, vi.fn()];
-                    if (key === 'transcriptListImplementation') return ['flash_v2', vi.fn()];
+                    if (key === 'transcriptListImplementation') return [listImplementationValue, setListImplementation];
                     if (key === 'transcriptMotionPreset') return ['subtle', vi.fn()];
                     if (key === 'transcriptMotionFreshnessMs') return [60_000, vi.fn()];
                     if (key === 'transcriptAnimateNewItemsEnabled') return [true, vi.fn()];
@@ -73,6 +75,8 @@ afterEach(() => {
     standardCleanup();
     setCoalesceEnabled.mockClear();
     setPartialOutputEnabled.mockClear();
+    setListImplementation.mockClear();
+    listImplementationValue = 'flash_v2';
 });
 
 describe('Transcript advanced settings (performance)', () => {
@@ -100,5 +104,33 @@ describe('Transcript advanced settings (performance)', () => {
         });
 
         expect(setPartialOutputEnabled).toHaveBeenCalledWith(false);
+    });
+
+    it('offers the flash_v2_inverted list implementation and persists it on select', async () => {
+        const mod = await import('./TranscriptRenderingAdvancedSettingsView');
+        const screen = await renderSettingsView(React.createElement(mod.default));
+
+        const dropdown = screen.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+        expect(dropdown).toBeTruthy();
+
+        const invertedItem = (dropdown!.props.items as Array<{ id: string; title: string; subtitle: string }>)
+            .find((item) => item.id === 'flash_v2_inverted');
+        expect(invertedItem?.title).toBe('settingsSession.transcript.advanced.listImplementation.flashInvertedTitle');
+        expect(invertedItem?.subtitle).toBe('settingsSession.transcript.advanced.listImplementation.flashInvertedSubtitle');
+
+        await act(async () => {
+            dropdown!.props.onSelect('flash_v2_inverted');
+        });
+
+        expect(setListImplementation).toHaveBeenCalledWith('flash_v2_inverted');
+    });
+
+    it('shows flash_v2_inverted as the selected option when persisted', async () => {
+        listImplementationValue = 'flash_v2_inverted';
+        const mod = await import('./TranscriptRenderingAdvancedSettingsView');
+        const screen = await renderSettingsView(React.createElement(mod.default));
+
+        const dropdown = screen.findAll((node) => String(node.type) === 'DropdownMenu')[0];
+        expect(dropdown?.props.selectedId).toBe('flash_v2_inverted');
     });
 });

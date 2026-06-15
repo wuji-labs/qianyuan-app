@@ -5,12 +5,14 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Image } from 'expo-image';
 import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
-import { layout } from '@/components/ui/layout/layout';
 import { useInboxHasContent } from '@/hooks/inbox/useInboxHasContent';
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import { Text } from '@/components/ui/text/Text';
-import { useFriendRequests } from '@/sync/domains/state/storage';
+import { FloatingTabBarSurface } from '@/components/ui/navigation/FloatingTabBarSurface';
+import { TabBadge } from '@/components/ui/navigation/tabBadge/TabBadge';
+import { resolveTabBarMetrics } from '@/components/ui/navigation/tabBarMetrics';
+import { useFriendRequests, useSetting } from '@/sync/domains/state/storage';
 import type { TabType } from './tabTypes';
 import { resolveTabBarTabs } from './resolveTabBarTabs';
 
@@ -23,28 +25,29 @@ interface TabBarProps {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    outerContainer: {
-        backgroundColor: theme.colors.surface.base,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border.default,
-    },
     innerContainer: {
         flexDirection: 'row',
-        justifyContent: 'space-around',
-        alignItems: 'flex-start',
-        maxWidth: layout.maxWidth,
-        width: '100%',
-        alignSelf: 'center',
+        alignItems: 'center',
     },
     tab: {
-        flex: 1,
         alignItems: 'center',
-        paddingTop: 8,
-        paddingBottom: 4,
+        justifyContent: 'center',
+        minWidth: 50,
+        flexShrink: 1,
     },
     tabContent: {
         alignItems: 'center',
+        justifyContent: 'center',
         position: 'relative',
+    },
+    activePill: {
+        position: 'absolute',
+        top: -5,
+        bottom: -5,
+        left: -12,
+        right: -12,
+        borderRadius: 999,
+        backgroundColor: theme.colors.surface.ripple,
     },
     label: {
         fontSize: 10,
@@ -58,32 +61,6 @@ const styles = StyleSheet.create((theme) => ({
     labelInactive: {
         color: theme.colors.text.secondary,
     },
-    badge: {
-        position: 'absolute',
-        top: -4,
-        right: -8,
-        backgroundColor: theme.colors.status.error,
-        borderRadius: 8,
-        minWidth: 16,
-        height: 16,
-        paddingHorizontal: 4,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    badgeText: {
-        color: theme.colors.button.primary.tint,
-        fontSize: 10,
-        ...Typography.default('semiBold'),
-    },
-    indicatorDot: {
-        position: 'absolute',
-        top: 0,
-        right: -2,
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: theme.colors.text.primary,
-    },
 }));
 
 export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
@@ -93,6 +70,9 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
     const friendRequests = useFriendRequests();
     const inboxEnabled = useInboxAvailable();
     const inboxHasContent = useInboxHasContent();
+    const friendsBadgeEnabled = useSetting('tabBarFriendsBadgeEnabled');
+    const inboxBadgeEnabled = useSetting('tabBarInboxBadgeEnabled');
+    const metrics = resolveTabBarMetrics(useSetting('tabBarSize'), useSetting('tabBarShowLabels'));
 
     const tabs: { key: TabType; icon: any; label: string }[] = React.useMemo(() => {
         const tabKeys = resolveTabBarTabs({ inboxEnabled, friendsEnabled });
@@ -112,47 +92,46 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
     }, [friendsEnabled, inboxEnabled]);
 
     return (
-        <View style={[styles.outerContainer, { paddingBottom: insets.bottom }]}>
-            <View style={styles.innerContainer}>
+        <FloatingTabBarSurface bottomInset={insets.bottom}>
+            <View style={[styles.innerContainer, { gap: metrics.rowGap }]}>
                 {tabs.map((tab) => {
                     const isActive = activeTab === tab.key;
-                    
+
                     return (
                         <Pressable
                             key={tab.key}
                             testID={`tabbar-tab-${tab.key}`}
-                            style={styles.tab}
+                            style={[styles.tab, { paddingVertical: metrics.tabPaddingVertical, paddingHorizontal: metrics.tabPaddingHorizontal }]}
                             onPress={() => onTabPress(tab.key)}
                             hitSlop={8}
                         >
                             <View style={styles.tabContent}>
+                                {isActive && !metrics.showLabels ? <View pointerEvents="none" style={styles.activePill} /> : null}
                                 <Image
                                     source={tab.icon}
                                     contentFit="contain"
-                                    style={[{ width: 24, height: 24 }]}
+                                    style={[{ width: metrics.iconSize, height: metrics.iconSize }]}
                                     tintColor={isActive ? theme.colors.text.primary : theme.colors.text.secondary}
                                 />
-                                {tab.key === 'friends' && friendRequests.length > 0 && (
-                                    <View style={styles.badge}>
-                                        <Text style={styles.badgeText}>
-                                            {friendRequests.length > 99 ? '99+' : friendRequests.length}
-                                        </Text>
-                                    </View>
+                                {tab.key === 'friends' && friendsBadgeEnabled && friendRequests.length > 0 && (
+                                    <TabBadge variant="count" value={friendRequests.length} />
                                 )}
-                                {tab.key === 'inbox' && inboxHasContent && (
-                                    <View style={styles.indicatorDot} />
+                                {tab.key === 'inbox' && inboxBadgeEnabled && inboxHasContent && (
+                                    <TabBadge variant="dot" />
                                 )}
                             </View>
-                            <Text style={[
-                                styles.label,
-                                isActive ? styles.labelActive : styles.labelInactive
-                            ]}>
-                                {tab.label}
-                            </Text>
+                            {metrics.showLabels ? (
+                                <Text style={[
+                                    styles.label,
+                                    isActive ? styles.labelActive : styles.labelInactive
+                                ]}>
+                                    {tab.label}
+                                </Text>
+                            ) : null}
                         </Pressable>
                     );
                 })}
             </View>
-        </View>
+        </FloatingTabBarSurface>
     );
 });

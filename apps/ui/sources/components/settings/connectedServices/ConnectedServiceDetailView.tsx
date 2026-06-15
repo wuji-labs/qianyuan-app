@@ -48,11 +48,13 @@ import {
   resolveConnectedServiceSettingsErrorMessage,
 } from './errors/connectedServiceSettingsErrors';
 import { resolveConnectedServiceRuntimeGroupCapability } from './model/connectedServiceRuntimeFallbackCapability';
+import { resolveConnectedServiceProfileIdentityDisplay } from './model/resolveConnectedServiceIdentityDisplay';
 import { resolveConnectedServiceDisplayName } from './model/resolveConnectedServiceDisplayName';
 import {
   formatConnectedServiceProfileGroupReferenceLabels,
   resolveConnectedServiceProfileGroupReferenceLabels,
 } from './model/resolveConnectedServiceProfileGroupReferences';
+import { resolveConnectedServiceGroupMemberIdentity } from './model/connectedServiceGroupViewModel';
 import { resolveConnectedServiceOauthAddActionModesForPlatform } from './oauth/resolveConnectedServiceOauthAddActionModesForPlatform';
 import { promptConnectedServiceTokenValue } from './promptConnectedServiceTokenValue';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from './storeConnectedServiceCredentialWithIdentityConfirmation';
@@ -208,6 +210,18 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleDisconnect = async (profileId: string) => {
+    const profileRecord = profiles.find((candidate) => candidate.profileId === profileId) ?? null;
+    const profileConfirmationLabel = serviceId
+      ? resolveConnectedServiceProfileIdentityDisplay({
+          profileId,
+          label: resolveConnectedServiceProfileLabel({
+            labelsByKey: settings.connectedServicesProfileLabelByKey,
+            serviceId,
+            profileId,
+          }),
+          providerEmail: typeof profileRecord?.providerEmail === 'string' ? profileRecord.providerEmail : '',
+        }).diagnosticLabel
+      : profileId;
     const groupReferenceLabels = resolveProfileGroupReferenceLabels(profileId);
     const cleanupGroupReferences = groupReferenceLabels.length > 0;
     const ok = await Modal.confirm(
@@ -215,10 +229,10 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       cleanupGroupReferences
         ? t('connectedServices.detail.disconnectGroupCleanupConfirmBody', {
           service: serviceLabel,
-          profileId,
+          profileId: profileConfirmationLabel,
           groups: formatConnectedServiceProfileGroupReferenceLabels(groupReferenceLabels),
         })
-        : t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId }),
+        : t('connectedServices.detail.disconnectConfirmBody', { service: serviceLabel, profileId: profileConfirmationLabel }),
       { confirmText: t('modals.disconnect'), cancelText: t('common.cancel') },
     );
     if (!ok) return;
@@ -228,7 +242,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       if (!cleanupGroupReferences && isConnectedServiceCredentialReferencedByGroupError(e)) {
         const retry = await Modal.confirm(
           t('connectedServices.detail.errors.disconnectGroupCleanupRetryTitle'),
-          t('connectedServices.detail.errors.disconnectGroupCleanupRetryBody', { service: serviceLabel, profileId }),
+          t('connectedServices.detail.errors.disconnectGroupCleanupRetryBody', { service: serviceLabel, profileId: profileConfirmationLabel }),
           {
             confirmText: t('connectedServices.detail.errors.disconnectGroupCleanupRetryConfirm'),
             cancelText: t('common.cancel'),
@@ -755,9 +769,15 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
     if (!serviceId) return;
     const group = authoritativeGroups.find((candidate) => candidate.groupId === groupId);
     if (!group) return;
+    const memberLabel = resolveConnectedServiceGroupMemberIdentity({
+      serviceId,
+      profileId,
+      labelsByKey: settings.connectedServicesProfileLabelByKey,
+      profiles,
+    }).diagnosticLabel;
     const ok = await Modal.confirm(
       t('connectedServices.detail.groupActions.removeMemberConfirmTitle'),
-      t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId }),
+      t('connectedServices.detail.groupActions.removeMemberConfirmBody', { profileId: memberLabel }),
       { confirmText: t('common.remove'), cancelText: t('common.cancel') },
     );
     if (!ok) return;
