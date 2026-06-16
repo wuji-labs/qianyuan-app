@@ -4923,8 +4923,12 @@ describe('ChatList (FlashList v2)', () => {
                     });
                 });
                 await screen.settle({ turns: 1 });
-                expect(loadOlderMessagesMock).not.toHaveBeenCalled();
+                // A genuine-top web frame (live DOM scrollTop === 0) is classified 'edge-reached',
+                // so the older page loads from the scroll observation itself — it no longer waits
+                // for the FlashList onStartReached nudge.
+                expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
 
+                // The redundant onStartReached edge nudge does not double-load within the cooldown.
                 await triggerFlashListChatListStartReached({ turns: 1 });
             },
             {
@@ -4988,6 +4992,58 @@ describe('ChatList (FlashList v2)', () => {
             await act(async () => {
                 await vi.advanceTimersByTimeAsync(2500);
             });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    it('re-arms a parked-inside web viewport from a genuine-top frame after cooldown (edge-reached classification)', async () => {
+        await withWebFlashListFakeTimers(0, async () => {
+            sessionState = { ...sessionState, seq: 25 };
+            sessionMessagesState = {
+                isLoaded: true,
+                messages: [{ kind: 'user-text', id: 'u1', localId: null, createdAt: 1, text: 'hi' }],
+            };
+
+            const syncMod = await import('@/sync/sync');
+            const loadOlderMessagesMock = vi.mocked(syncMod.sync.loadOlderMessages);
+            loadOlderMessagesMock.mockResolvedValue({ loaded: 1, hasMore: true, status: 'loaded' as const });
+            loadOlderMessagesMock.mockClear();
+
+            syncTuningState = {
+                ...syncTuningState,
+                transcriptBackwardPrefetchThresholdPx: 800,
+                transcriptOlderLoadCooldownMs: 2500,
+            };
+
+            const { ChatList } = await import('./ChatList');
+            await renderTrackedFlashListChatList(<ChatList session={{ ...sessionState }} />);
+
+            await primeFlashListMetrics(600, 1800, { turns: 1 });
+
+            // Park inside the threshold (a tall top row keeps the offset off zero): one load fires.
+            await scrollFlashListTo(100, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            // Cooldown elapses while still parked inside, with NO observed threshold exit.
+            // A further mid-band scroll must NOT chain another load (anti-burst).
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollFlashListTo(80, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(1);
+
+            // Reaching the genuine top (offset 0) is classified 'edge-reached', which satisfies the
+            // machine's exact-edge re-arm and loads exactly one more older page — independent of any
+            // threshold exit and of the top row's kind/height.
+            await scrollFlashListTo(0, { turns: 1 });
+            expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
+
+            // A mid-band frame after the genuine-top re-arm still does not widen the band: no extra load
+            // without a fresh exit -> re-enter or another genuine-top frame.
+            await act(async () => {
+                await vi.advanceTimersByTimeAsync(2500);
+            });
+            await scrollFlashListTo(120, { turns: 1 });
             expect(loadOlderMessagesMock).toHaveBeenCalledTimes(2);
         });
     });

@@ -9632,13 +9632,27 @@ const ChatListInternal = React.memo((props: {
                                 // Decisions below read the observed distance as-is.
                                 const effectiveDistanceFromBottom = distanceFromBottom;
                                 const effectiveScrollOffset = liveWebMetrics ? liveWebMetrics.scrollTop : y;
+                                // The continuous web DOM-scroll path reports the genuine top as
+                                // `effectiveScrollOffset === 0`. A plain 'scroll' trigger SUSPENDS the
+                                // older-pagination machine at exact zero (offsetSuspended), so a viewport
+                                // parked inside the threshold (e.g. when the top rendered row is a tall tool
+                                // group whose height keeps the offset off zero until the genuine top is
+                                // reached) never re-arms after its cooldown. Classify only the genuine-top
+                                // frame as 'edge-reached' so it satisfies the machine's existing
+                                // `allowsExactEdge` (-> `exactEdgeRetryEligible`) re-arm. Strictly gated on
+                                // web/standard (non-inverted) + exact zero so the 800px band cannot widen
+                                // and a mid-band frame cannot re-arm (anti-burst preserved).
+                                const isGenuineWebTopFrame =
+                                    Platform.OS === 'web' &&
+                                    listOrientationRef.current !== 'inverted' &&
+                                    effectiveScrollOffset === 0;
                                 observeOlderPaginationScroll({
                                     offsetY: effectiveScrollOffset,
                                     layoutHeight: layoutH,
                                     contentHeight: contentH,
                                     distanceFromBottom: effectiveDistanceFromBottom,
                                     webMetrics: liveWebMetrics,
-                                    trigger: 'scroll',
+                                    trigger: isGenuineWebTopFrame ? 'edge-reached' : 'scroll',
                                 });
                                 if (loadOlderInFlight.current) {
                                     refreshInFlightWebPrependAnchor({
