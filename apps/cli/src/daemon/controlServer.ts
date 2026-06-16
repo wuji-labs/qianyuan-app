@@ -102,6 +102,10 @@ type RuntimeAuthRecoverySchedulerForControlServer = Readonly<{
     result: unknown;
     classificationResetsAtMs: number | null;
   }>) => Promise<unknown>;
+  markAwaitingProviderOutcomeProofForResultByKey?: (input: Readonly<{
+    recoveryKey: string;
+    result: unknown;
+  }>) => Promise<unknown>;
   markProviderOutcomeProofByKey?: (input: Readonly<{
     recoveryKey: string;
     proofKind: RuntimeAuthRecoveryProofKind;
@@ -634,6 +638,22 @@ export function createDaemonControlApp({
           });
         });
       }
+      const recoveryKey = buildRuntimeAuthRecoveryKey({
+        sessionId,
+        serviceId: classification.serviceId,
+        profileId: classification.profileId,
+        groupId: classification.groupId,
+      });
+      await runtimeAuthRecoveryScheduler?.markAwaitingProviderOutcomeProofForResultByKey?.({
+        recoveryKey,
+        result,
+      }).catch((error) => {
+        logger.debug('[CONTROL SERVER] Connected-service runtime auth recovery proof-wait mark failed after local recovery result', {
+          sessionId,
+          recoveryKey,
+          error: readSafeDaemonControlErrorDiagnostic(error),
+        });
+      });
       // F0/INC-2 (in-band path): group-exhausted and switch-limited results are
       // durable waits — re-arm the just-intaken intent at the computed/floored
       // wake time instead of terminalizing it. The classification gate runs here
@@ -646,12 +666,6 @@ export function createDaemonControlApp({
         nowMs: Date.now(),
       });
       if (durableWait) {
-        const recoveryKey = buildRuntimeAuthRecoveryKey({
-          sessionId,
-          serviceId: classification.serviceId,
-          profileId: classification.profileId,
-          groupId: classification.groupId,
-        });
         await runtimeAuthRecoveryScheduler?.markDurableWaitForResultByKey?.({
           recoveryKey,
           result,
@@ -667,12 +681,6 @@ export function createDaemonControlApp({
       }
       const terminalReason = readRuntimeAuthTerminalReason(result);
       if (terminalReason) {
-        const recoveryKey = buildRuntimeAuthRecoveryKey({
-          sessionId,
-          serviceId: classification.serviceId,
-          profileId: classification.profileId,
-          groupId: classification.groupId,
-        });
         await runtimeAuthRecoveryScheduler?.markTerminalByKey?.({
           recoveryKey,
           terminalReason,

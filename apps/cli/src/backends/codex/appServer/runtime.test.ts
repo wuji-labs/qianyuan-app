@@ -72,6 +72,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
     dir: string;
     requestLogPath: string;
     rateLimitReadResult?: unknown;
+    accountReadResult?: unknown;
     rejectRateLimitRead?: boolean;
     rollbackError?: Readonly<{
         code: number;
@@ -203,6 +204,10 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            continue;',
         '        }',
         `        process.stdout.write(JSON.stringify({ id: msg.id, result: ${JSON.stringify(params.rateLimitReadResult ?? { plan_type: 'pro', primary: { used_percent: 12, resets_at: '2026-05-17T12:00:00.000Z' } })} }) + "\\n");`,
+        '        continue;',
+        '    }',
+        '    if (msg.method === "account/read") {',
+        `        process.stdout.write(JSON.stringify({ id: msg.id, result: ${JSON.stringify(params.accountReadResult ?? { account: { id: 'acct_live_codex', email: 'codex-user@example.test' } })} }) + "\\n");`,
         '        continue;',
         '    }',
         '    if (msg.method === "thread/goal/get") {',
@@ -366,7 +371,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        const text = Array.isArray(msg.params?.input) ? String(msg.params.input[0]?.text ?? "unknown") : "unknown";',
         '        const matchingTurnStartCount = (await readFile(requestLogPath, "utf8").catch(() => "")).split("\\n").filter((line) => { try { const entry = JSON.parse(line); return entry.method === "turn/start" && Array.isArray(entry.params?.input) && String(entry.params.input[0]?.text ?? "") === text; } catch { return false; } }).length;',
         '        const turnId = matchingTurnStartCount > 1 ? `turn-${text}-${matchingTurnStartCount}` : `turn-${text}`;',
-        '        const completionDelayMs = text === "connected-service-invalidation-active-turn" && matchingTurnStartCount === 1 ? 120000 : text === "cancel-me" ? 50 : 15;',
+        '        const completionDelayMs = text === "connected-service-invalidation-active-turn" && matchingTurnStartCount === 1 ? 120000 : text === "overlap-start" ? 180 : text === "cancel-me" ? 50 : 15;',
         '        if (text === "usage-limit-before-turn-response") {',
         '            process.stdout.write(JSON.stringify({ method: "error", params: { threadId: msg.params?.threadId ?? null, turnId, willRetry: false, error: { message: "Usage limit reached", codexErrorInfo: "UsageLimitExceeded", additionalDetails: null } } }) + "\\n");',
         '            setTimeout(() => {',
@@ -374,7 +379,7 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            }, 15);',
         '            continue;',
         '        }',
-        '        const respondDelayMs = text === "steer-delay" ? 60 : 0;',
+        '        const respondDelayMs = text === "steer-delay" ? 60 : text === "overlap-start" ? 80 : 0;',
         '        if (text === "bridge-stale-terminal-old-turn") {',
         '            staleTerminalTurnId = turnId;',
         '            setTimeout(() => {',
@@ -436,7 +441,11 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '        setTimeout(() => {',
         '            process.stdout.write(JSON.stringify({ id: msg.id, result: { turn: { id: turnId }, threadId: msg.params?.threadId ?? null } }) + "\\n");',
         '        }, respondDelayMs);',
-        `        if (text !== ${JSON.stringify(params.omitTurnStartedForPrompt ?? null)}) {`,
+        '        if (text === "overlap-start") {',
+        '            setTimeout(() => {',
+        '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
+        '            }, 5);',
+        `        } else if (text !== ${JSON.stringify(params.omitTurnStartedForPrompt ?? null)}) {`,
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, respondDelayMs + 5);',
@@ -1183,7 +1192,11 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32602, message: "turn/steer requires expectedTurnId" } }) + "\\n");',
         '            continue;',
         '        }',
-        '        process.stdout.write(JSON.stringify({ id: msg.id, result: { turnId: selected } }) + "\\n");',
+        '        const steerText = Array.isArray(msg.params?.input) ? String(msg.params.input[0]?.text ?? "") : "";',
+        '        const steerResponseDelayMs = steerText === "overlap-steer" ? 120 : 0;',
+        '        setTimeout(() => {',
+        '            process.stdout.write(JSON.stringify({ id: msg.id, result: { turnId: selected } }) + "\\n");',
+        '        }, steerResponseDelayMs);',
         '        continue;',
         '    }',
         '    if (msg.method === "thread/rollback") {',
@@ -1250,6 +1263,7 @@ describe('createCodexAppServerRuntime', () => {
             emitIdleMcpRequestAfterThreadStart?: boolean;
             rejectPermissionsProfileAsStringShape?: boolean;
             rateLimitReadResult?: unknown;
+            accountReadResult?: unknown;
             rejectRateLimitRead?: boolean;
             rejectThreadRead?: boolean;
             requireResumeBeforeThreadRead?: boolean;
@@ -1289,6 +1303,7 @@ describe('createCodexAppServerRuntime', () => {
             emitIdleMcpRequestAfterThreadStart: options.emitIdleMcpRequestAfterThreadStart,
             rejectPermissionsProfileAsStringShape: options.rejectPermissionsProfileAsStringShape,
             rateLimitReadResult: options.rateLimitReadResult,
+            accountReadResult: options.accountReadResult,
             rejectRateLimitRead: options.rejectRateLimitRead,
             rejectThreadRead: options.rejectThreadRead,
             requireResumeBeforeThreadRead: options.requireResumeBeforeThreadRead,
@@ -2914,6 +2929,50 @@ describe('createCodexAppServerRuntime', () => {
         ]);
         expect(requestLog.filter((entry: { method: string }) => entry.method === 'turn/start')).toHaveLength(1);
         expect(acceptedPrompts).toContainEqual({ userMessageSeq: 42 });
+    });
+
+    it('does not let a delayed turn/start response confirm an overlapping steer prompt', async () => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-steer-overlap-');
+        const acceptedPrompts: Array<{ userMessageSeq: number | null }> = [];
+
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn() } as any,
+        });
+        runtime.setOnPromptAcceptedByProvider((prompt) => {
+            acceptedPrompts.push(prompt);
+        });
+
+        await runtime.startOrLoad({});
+        const sendPromptPromise = runtime.sendPrompt('overlap-start', { userMessageSeq: 10 });
+        await waitForCondition(() => acceptedPrompts.some((prompt) => prompt.userMessageSeq === 10), {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'initial turn/start prompt acceptance',
+        });
+        await waitForCondition(() => runtime.canSteerPrompt() === true, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'Codex app-server turn to become steerable',
+        });
+
+        const steerPromise = runtime.steerPrompt('overlap-steer', { userMessageSeq: 11 });
+        await waitForCondition(async () => {
+            const requestLog = await readRequestLog(requestLogPath);
+            return requestLog.some((entry) => entry.method === 'turn/steer');
+        }, {
+            timeoutMs: 1_000,
+            intervalMs: 10,
+            label: 'overlapping turn/steer request',
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(acceptedPrompts).toEqual([{ userMessageSeq: 10 }]);
+
+        await steerPromise;
+        expect(acceptedPrompts).toEqual([{ userMessageSeq: 10 }, { userMessageSeq: 11 }]);
+        await sendPromptPromise;
     });
 
     it('clears stale in-flight state when native steer reports no active turn', async () => {
@@ -5598,12 +5657,18 @@ describe('createCodexAppServerRuntime', () => {
     });
 
     it('prefers current session connected-service bindings over stale app-server env for usage-limit attribution', async () => {
-        const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-limit-stale-env-group-', {
+        const { root, fakeAppServer, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-limit-stale-env-group-', {
             rateLimitReadResult: {
                 plan_type: 'pro',
                 primary: {
                     used_percent: 100,
                     resets_at: '2026-05-17T12:00:00.000Z',
+                },
+            },
+            accountReadResult: {
+                account: {
+                    id: 'acct_team_live',
+                    email: 'team@example.test',
                 },
             },
         });
@@ -5649,11 +5714,13 @@ describe('createCodexAppServerRuntime', () => {
             statusCode: 'switch_attempted_no_eligible_member',
             statusMessage: 'No eligible connected-service account is available.',
         }));
+        const onRateLimitSnapshot = vi.fn();
 
         const runtime = createCodexAppServerRuntime({
             directory: root,
             processEnv,
             onThinkingChange: vi.fn(),
+            onRateLimitSnapshot,
             onUsageLimitGroupRecovery,
             session: {
                 sessionId: 'session-stale-env-group',
@@ -5690,6 +5757,21 @@ describe('createCodexAppServerRuntime', () => {
                     }),
                 }),
             }));
+            expect(onRateLimitSnapshot).toHaveBeenCalledWith({
+                plan_type: 'pro',
+                primary: {
+                    used_percent: 100,
+                    resets_at: '2026-05-17T12:00:00.000Z',
+                },
+            }, {
+                activeAccountId: 'acct_team_live',
+                accountLabel: 'team@example.test',
+            });
+            const requestLogBeforeManualCheck = await readRequestLog(requestLogPath);
+            expect(requestLogBeforeManualCheck.map((entry) => entry.method)).toEqual(expect.arrayContaining([
+                'account/rateLimits/read',
+                'account/read',
+            ]));
             const runtimeControls = runtime as typeof runtime & {
                 enableUsageLimitWaitResume?: (request: { sessionId: string }) => Promise<unknown>;
                 checkUsageLimitRecoveryNow?: (request: { sessionId: string }) => Promise<unknown>;
@@ -5868,9 +5950,11 @@ describe('createCodexAppServerRuntime', () => {
             } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
         });
 
+        const onPromptAcceptedByProvider = vi.fn();
+        runtime.setOnPromptAcceptedByProvider(onPromptAcceptedByProvider);
         await runtime.startOrLoad({});
 
-        await expect(runtime.sendPrompt('usage-limit-before-turn-response')).rejects.toMatchObject({
+        await expect(runtime.sendPrompt('usage-limit-before-turn-response', { userMessageSeq: 50 })).rejects.toMatchObject({
             runtimeAuthClassification: {
                 kind: 'usage_limit',
                 serviceId: 'openai-codex',
@@ -5896,6 +5980,7 @@ describe('createCodexAppServerRuntime', () => {
                 }),
             }),
         ]));
+        expect(onPromptAcceptedByProvider).not.toHaveBeenCalled();
     });
 
     it('arms usage-limit wait/resume from the latest issue and probes Codex rate limits on check-now', async () => {

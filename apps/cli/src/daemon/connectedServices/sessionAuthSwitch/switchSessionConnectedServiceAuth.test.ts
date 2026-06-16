@@ -188,6 +188,51 @@ describe('switchSessionConnectedServiceAuth', () => {
     expect(restartSession).not.toHaveBeenCalled();
   });
 
+  it('uses the canonical tracked-agent resolver for reattached sessions whose spawn options lost backendTarget', async () => {
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        connectedServices: codexBindings('codex-profile'),
+      },
+      happySessionMetadataFromLocalWebhook: metadata({
+        agentRuntimeDescriptorV1: {
+          v: 1,
+          providerId: 'codex',
+          provider: { backendMode: 'appServer', vendorSessionId: 'codex-session' },
+        },
+      }),
+    });
+
+    await expect(switchSessionConnectedServiceAuth({
+      core: createCore(),
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'agent resolution regression only',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'openai-codex' as const,
+          profiles: [{ profileId: 'codex-profile', status: 'connected' as const }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      resolveContinuity: async () => ({ mode: 'hot_apply' }),
+      restartSession: vi.fn(),
+      hotApply: async () => ({ ok: true }),
+      registerHotApplyTargets: vi.fn(),
+      emitSessionEvent: vi.fn(),
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'codex',
+        bindings: codexBindings('codex-profile'),
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      action: 'unchanged',
+    });
+  });
+
   it('updates inactive session bindings without requesting a restart', async () => {
     const restartSession = vi.fn();
     const persistSessionBindings = vi.fn();
@@ -3999,6 +4044,90 @@ describe('switchSessionConnectedServiceAuth', () => {
         }),
       }),
     }));
+  });
+
+  it('uses preflight runtime-auth materialization during dry-run switches without applying side effects', async () => {
+    const tracked = trackedSession({
+      spawnOptions: {
+        directory: '/tmp/project',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        connectedServices: codexBindings('old-codex-profile'),
+      },
+    });
+    const runtimeAuthSelection = {
+      serviceId: 'openai-codex',
+      binding: { source: 'connected', selection: 'profile', profileId: 'new-codex-profile' },
+      profileId: 'new-codex-profile',
+      record: buildConnectedServiceCredentialRecord({
+        now: 1_000,
+        serviceId: 'openai-codex',
+        profileId: 'new-codex-profile',
+        kind: 'oauth',
+        expiresAt: 2_000,
+        oauth: {
+          accessToken: 'access',
+          refreshToken: 'refresh',
+          idToken: 'id',
+          scope: null,
+          tokenType: null,
+          providerAccountId: 'acct',
+          providerEmail: null,
+        },
+      }),
+    };
+    const materializeRuntimeAuthSelection = vi.fn(async () => runtimeAuthSelection);
+    const resolveContinuity = vi.fn(async ({ runtimeAuthSelection: receivedSelection }) => {
+      expect(receivedSelection).toBe(runtimeAuthSelection);
+      return { mode: 'hot_apply' as const };
+    });
+    const restartSession = vi.fn();
+    const hotApply = vi.fn(async () => ({ ok: true as const }));
+    const persistSessionBindings = vi.fn();
+    const registerHotApplyTargets = vi.fn();
+    const emitSessionEvent = vi.fn();
+
+    await expect(switchSessionConnectedServiceAuth({
+      core: createCore(),
+      dryRun: true,
+      postSwitchVerificationMode: {
+        kind: 'disabled_for_test_only',
+        reason: 'dry-run preflight does not perform post-switch verification',
+      },
+      getChildren: () => [tracked],
+      api: {
+        listConnectedServiceProfiles: async () => ({
+          serviceId: 'openai-codex' as const,
+          profiles: [{ profileId: 'new-codex-profile', status: 'connected' as const }],
+        }),
+        getConnectedServiceAuthGroup: async () => null,
+      },
+      materializeRuntimeAuthSelection,
+      resolveContinuity,
+      restartSession,
+      hotApply,
+      persistSessionBindings,
+      registerHotApplyTargets,
+      emitSessionEvent,
+      request: {
+        sessionId: 'sess_1',
+        agentId: 'codex',
+        bindings: codexBindings('new-codex-profile'),
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      action: 'hot_applied',
+      continuityByServiceId: { 'openai-codex': 'hot_apply' },
+    });
+
+    expect(materializeRuntimeAuthSelection).toHaveBeenCalledWith(expect.objectContaining({
+      mode: 'preflight',
+      serviceId: 'openai-codex',
+    }));
+    expect(restartSession).not.toHaveBeenCalled();
+    expect(hotApply).not.toHaveBeenCalled();
+    expect(persistSessionBindings).not.toHaveBeenCalled();
+    expect(registerHotApplyTargets).not.toHaveBeenCalled();
+    expect(emitSessionEvent).not.toHaveBeenCalled();
   });
 
   it('ignores implicit native defaults for unrelated Codex services when computing changed bindings', async () => {

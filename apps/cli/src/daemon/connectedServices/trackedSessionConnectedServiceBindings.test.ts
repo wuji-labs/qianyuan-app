@@ -36,6 +36,10 @@ describe('trackedSessionConnectedServiceBindings', () => {
       happySessionMetadataFromLocalWebhook: {
         path: '/tmp/project',
         host: 'test-host',
+        homeDir: '/tmp/home',
+        happyHomeDir: '/tmp/home/.happier',
+        happyLibDir: '/tmp/home/.happier/lib',
+        happyToolsDir: '/tmp/home/.happier/tools',
         connectedServices: metadataBindings,
       },
     });
@@ -67,6 +71,10 @@ describe('trackedSessionConnectedServiceBindings', () => {
       happySessionMetadataFromLocalWebhook: {
         path: '/tmp/project',
         host: 'test-host',
+        homeDir: '/tmp/home',
+        happyHomeDir: '/tmp/home/.happier',
+        happyLibDir: '/tmp/home/.happier/lib',
+        happyToolsDir: '/tmp/home/.happier/tools',
         connectedServices: {
           v: 1,
           bindingsByServiceId: {

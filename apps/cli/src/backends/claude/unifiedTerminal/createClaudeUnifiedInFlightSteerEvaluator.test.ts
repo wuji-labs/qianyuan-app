@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TerminalHostHandle, TerminalInputState } from '@/integrations/terminalHost/_types';
 
 import { createClaudeUnifiedInFlightSteerEvaluator } from './createClaudeUnifiedInFlightSteerEvaluator';
+import type { ClaudeUnifiedPromptBatch } from './_types';
 import type { EnhancedMode } from '../loop';
 
 const handle: TerminalHostHandle = {
@@ -48,11 +49,20 @@ const queuedBannerScreen = [
   '  Press up to edit queued messages',
 ].join('\n');
 
+const queuedBannerScreenWithDraft = [
+  '✶ Forging… (44s · esc to interrupt)',
+  '  Press up to edit queued messages',
+  '╭───────────────────────────────────────────────╮',
+  '│ > not actually queued yet                     │',
+  '╰───────────────────────────────────────────────╯',
+].join('\n');
+
 function createHarness(opts?: Readonly<{
   screen?: string | (() => string);
   captureInputState?: ((handle: TerminalHostHandle) => Promise<TerminalInputState>) | undefined | 'absent';
   initialPermissionMode?: EnhancedMode['permissionMode'] | undefined;
   queuedBannerCheckDelayMs?: number | undefined;
+  onPromptCustodyByTerminal?: ((batch: ClaudeUnifiedPromptBatch<EnhancedMode>) => void | Promise<void>) | undefined;
 }>) {
   const telemetry = { emit: vi.fn() };
   const screen = opts?.screen ?? generatingScreen;
@@ -69,6 +79,9 @@ function createHarness(opts?: Readonly<{
     telemetry,
     initialPermissionMode: opts?.initialPermissionMode ?? 'default',
     queuedBannerCheckDelayMs: opts?.queuedBannerCheckDelayMs ?? 0,
+    ...(opts?.onPromptCustodyByTerminal
+      ? { onPromptCustodyByTerminal: opts.onPromptCustodyByTerminal }
+      : {}),
   });
   return { telemetry, captureInputState, wiring };
 }
@@ -223,9 +236,11 @@ describe('createClaudeUnifiedInFlightSteerEvaluator', () => {
   });
 
   it('verifies the queued-message banner after a steer injection and reports visibility', async () => {
-    const visible = createHarness({ screen: queuedBannerScreen });
+    const custody = vi.fn();
+    const visibleBatch = pendingBatch('steer me');
+    const visible = createHarness({ screen: queuedBannerScreen, onPromptCustodyByTerminal: custody });
     visible.wiring.observeInjectedPrompt(
-      pendingBatch('steer me'),
+      visibleBatch,
       { acceptedAs: 'in_flight_steer', turnStateAtInjection: 'running' },
     );
     await vi.waitFor(() => {
@@ -234,8 +249,11 @@ describe('createClaudeUnifiedInFlightSteerEvaluator', () => {
         properties: expect.objectContaining({ decision: 'queued_banner_check', queuedBannerVisible: true }),
       });
     });
+    expect(custody).toHaveBeenCalledTimes(1);
+    expect(custody).toHaveBeenCalledWith(visibleBatch);
 
-    const hidden = createHarness({ screen: generatingScreen });
+    const hiddenCustody = vi.fn();
+    const hidden = createHarness({ screen: generatingScreen, onPromptCustodyByTerminal: hiddenCustody });
     hidden.wiring.observeInjectedPrompt(
       pendingBatch('steer me'),
       { acceptedAs: 'in_flight_steer', turnStateAtInjection: 'running' },
@@ -246,6 +264,29 @@ describe('createClaudeUnifiedInFlightSteerEvaluator', () => {
         properties: expect.objectContaining({ decision: 'queued_banner_check', queuedBannerVisible: false }),
       });
     });
+    expect(hiddenCustody).not.toHaveBeenCalled();
+  });
+
+  it('does not report terminal custody when the queued banner is visible but the composer still has a draft', async () => {
+    const custody = vi.fn();
+    const harness = createHarness({ screen: queuedBannerScreenWithDraft, onPromptCustodyByTerminal: custody });
+
+    harness.wiring.observeInjectedPrompt(
+      pendingBatch('not actually queued yet'),
+      { acceptedAs: 'in_flight_steer', turnStateAtInjection: 'running' },
+    );
+
+    await vi.waitFor(() => {
+      expect(harness.telemetry.emit).toHaveBeenCalledWith({
+        name: 'unified.steer.decision',
+        properties: expect.objectContaining({
+          decision: 'queued_banner_check',
+          queuedBannerVisible: true,
+          composerDraftPresent: true,
+        }),
+      });
+    });
+    expect(custody).not.toHaveBeenCalled();
   });
 
   it('does not run a queued-banner check once disposed', async () => {

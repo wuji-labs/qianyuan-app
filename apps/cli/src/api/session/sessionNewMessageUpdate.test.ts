@@ -142,6 +142,111 @@ describe('handleSessionNewMessageUpdate', () => {
     expect(pendingMessages).toHaveLength(0);
   });
 
+  it('treats self-echo-suppressed CLI user rows as delivered without replaying them to the agent queue', () => {
+    const pendingMessages: any[] = [];
+    const provenSeqs: number[] = [];
+    const update = {
+      id: 'update-typed-in-provider',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm-typed-in-provider',
+          seq: 42,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: { type: 'text', text: 'typed directly in the provider TUI' },
+              localId: 'provider-jsonl:user:typed-1',
+              meta: { source: 'cli', sentFrom: 'cli' },
+            },
+          },
+          localId: 'provider-jsonl:user:typed-1',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(),
+      lastObservedMessageSeq: 0,
+      lastObservedUserMessageSeq: 0,
+      hasSelfEchoSuppressedLocalId: (localId) => localId === 'provider-jsonl:user:typed-1',
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: null,
+      pendingMessages,
+      onUserMessageDeliveryProvenByLocalEcho: (seq) => provenSeqs.push(seq),
+      emit: () => void 0,
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(pendingMessages).toHaveLength(0);
+    expect(provenSeqs).toEqual([42]);
+  });
+
+  it('treats legacy self-echo-suppressed CLI user rows as delivered without coercing them back into the agent queue', () => {
+    const pendingMessages: any[] = [];
+    const provenSeqs: number[] = [];
+    const update = {
+      id: 'update-legacy-typed-in-provider',
+      createdAt: Date.now(),
+      body: {
+        t: 'new-message',
+        sid: 'sess_1',
+        message: {
+          id: 'm-legacy-typed-in-provider',
+          seq: 43,
+          content: {
+            t: 'plain',
+            v: {
+              role: 'user',
+              content: 'legacy typed directly in the provider TUI',
+              meta: { source: 'cli', sentFrom: 'cli' },
+            },
+          },
+          localId: 'provider-jsonl:user:typed-legacy-1',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    } as unknown as Update;
+
+    handleSessionNewMessageUpdate({
+      update,
+      sessionId: 'sess_1',
+      encryptionKey: new Uint8Array(32),
+      encryptionVariant: 'legacy',
+      receivedMessageIds: new Set<string>(),
+      lastObservedMessageSeq: 0,
+      lastObservedUserMessageSeq: 0,
+      hasSelfEchoSuppressedLocalId: (localId) => localId === 'provider-jsonl:user:typed-legacy-1',
+      hasAgentQueueEchoSuppressedLocalId: () => false,
+      markAgentQueueEchoSuppressedLocalId: () => void 0,
+      hasPendingQueueMaterializedLocalId: () => false,
+      deleteMaterializedLocalId: () => void 0,
+      pendingMessageCallback: null,
+      pendingMessages,
+      onUserMessageDeliveryProvenByLocalEcho: (seq) => provenSeqs.push(seq),
+      emit: () => void 0,
+      debug: () => void 0,
+      debugLargeJson: () => void 0,
+    });
+
+    expect(pendingMessages).toHaveLength(0);
+    expect(provenSeqs).toEqual([43]);
+  });
+
   it('delivers legacy string user prompts to the agent queue', () => {
     const pendingMessages: any[] = [];
     const emitted: any[] = [];
@@ -532,7 +637,7 @@ describe('handleSessionNewMessageUpdate', () => {
       expect(seqs).toEqual([7, 9, null]);
     });
 
-    it('does not report for a self-echo CLI transcript write (never handed to the agent loop)', () => {
+    it('routes a self-echo CLI transcript write to the echo-proof hook, NOT the queue-handoff hook', () => {
       const update = {
         id: 'u-cli-echo',
         createdAt: Date.now(),
@@ -549,10 +654,13 @@ describe('handleSessionNewMessageUpdate', () => {
           },
         },
       } as unknown as Update;
+      const echoProven: number[] = [];
       const delivered = runWithDeliveredHook(update, {
         hasSelfEchoSuppressedLocalId: () => true,
+        onUserMessageDeliveryProvenByLocalEcho: (seq: number) => echoProven.push(seq),
       });
       expect(delivered).toEqual([]);
+      expect(echoProven).toEqual([12]);
     });
   });
 });

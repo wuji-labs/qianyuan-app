@@ -31,6 +31,7 @@ describe('createConnectedServicesAuthUpdatedRestartHandler', () => {
       spawnPreflightOauthRefresh: { mode: 'expiry_window' },
       refreshedCredentialApplication: { mode },
       predictiveSoftSwitch: { mode: agentId === 'codex' ? 'supported' : 'unsupported' },
+      sameAccountFanoutStrategy: agentId === 'codex' ? 'provider_account_id' : 'none',
     };
   }
 

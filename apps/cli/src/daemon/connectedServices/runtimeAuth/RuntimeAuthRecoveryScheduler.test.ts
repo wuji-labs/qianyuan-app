@@ -2022,7 +2022,7 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     });
   });
 
-  it('does not consume another retry attempt when a stale-profile replay re-reports the same pending proof target', async () => {
+  it('keeps stale-profile proof waits pending until provider outcome proof arrives', async () => {
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
       baseBackoffMs: 100,
@@ -2065,13 +2065,12 @@ describe('RuntimeAuthRecoveryScheduler', () => {
 
     expect(scheduler.read('session-1')).toMatchObject({
       status: 'resumed_awaiting_proof',
-      attemptCount: 1,
       pendingTargetProfileId: 'backup',
       pendingTargetGeneration: 2,
     });
   });
 
-  it('bounds coalesced stale-profile replays instead of re-running the switch pipeline forever (RD-REC-15)', async () => {
+  it('retains retry and dead-letter state for repeated stale-profile proof waits without provider proof', async () => {
     const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
     let recoverRuns = 0;
     let nowMs = 1_000;
@@ -2104,19 +2103,22 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       classification: classification(),
     });
 
-    // Every wake reproduces the SAME pending proof target without proof. Without a
-    // bound, the attempt rollback re-runs the full switch pipeline indefinitely.
+    // The first wake records the committed target. Later wakes for the original
+    // failing profile must not delete the durable intent merely because the
+    // pending target differs; the scheduler owns bounded retry/dead-letter state
+    // until provider outcome proof or terminal proof arrives.
     for (let i = 0; i < 20; i += 1) {
       nowMs += 10 * 60_000;
       await scheduler.wake({ sessionId: 'session-1', reason: 'manual' });
     }
 
-    // Coalesced budget (2) + the normal attempt budget (3) bound the replays.
-    expect(recoverRuns).toBeLessThanOrEqual(5);
+    expect(recoverRuns).toBeGreaterThan(1);
     expect(scheduler.read('session-1')).toMatchObject({
       status: 'exhausted',
+      pendingTargetProfileId: 'backup',
     });
     expect(diagnostics.map((event) => event.event)).toContain('runtime_auth_recovery_dead_letter');
+    expect(diagnostics.map((event) => event.event)).not.toContain('runtime_auth_recovery_superseded');
   });
 
   it('removes a superseded recovery intent and lets the same key re-arm on a genuine future failure', async () => {
@@ -2256,25 +2258,25 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     expect(scheduler.readByKey(recoveryKey)).toBeNull();
   });
 
-  it('does not consume retry attempts when stale-profile replays reproduce the same target profile across churned generations', async () => {
-    // Sibling sessions bump the shared group generation between replays (incident gen 81→87).
-    // The pending proof target is the PROFILE: a fresher generation for the same target profile
-    // is the same logical switch and must keep the attempt rollback (bounded by the coalesced
-    // replay budget), not burn the dead-letter attempt budget.
+  it('keeps stale-profile proof waits pending across churned group generations', async () => {
+    // Sibling sessions may bump the shared group generation between replays. Once the pending
+    // target profile differs from the original failing profile, the old intent is stale and must
+    // clear instead of chasing newer generations for the same target profile.
     let generation = 2;
+    const recover = vi.fn(async () => ({
+      status: 'switch_attempted' as const,
+      result: {
+        status: 'observed_generation' as const,
+        activeProfileId: 'backup',
+        generation: generation++,
+      },
+    }));
     const scheduler = new RuntimeAuthRecoveryScheduler({
       nowMs: () => 1_000,
       baseBackoffMs: 100,
       maxBackoffMs: 1_000,
       jitterMs: () => 0,
-      recover: async () => ({
-        status: 'switch_attempted',
-        result: {
-          status: 'observed_generation',
-          activeProfileId: 'backup',
-          generation: generation++,
-        },
-      }),
+      recover,
     });
 
     await scheduler.enqueueHandlerFailure({
@@ -2295,9 +2297,9 @@ describe('RuntimeAuthRecoveryScheduler', () => {
     // Replay reproduces the same target PROFILE at a churned generation.
     await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
       .resolves.toEqual({ status: 'waiting' });
+    expect(recover).toHaveBeenCalledTimes(2);
     expect(scheduler.read('session-1')).toMatchObject({
       status: 'resumed_awaiting_proof',
-      attemptCount: 1,
       pendingTargetProfileId: 'backup',
       pendingTargetGeneration: 3,
     });
@@ -2346,6 +2348,63 @@ describe('RuntimeAuthRecoveryScheduler', () => {
       pendingTargetProfileId: 'backup',
       pendingTargetGeneration: 2,
     });
+  });
+
+  it('does not supersede an original-profile proof wait before provider outcome proof', async () => {
+    const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
+    const recover = vi.fn(async () => ({
+      status: 'switch_attempted' as const,
+      result: {
+        status: 'observed_generation' as const,
+        activeProfileId: 'backup',
+        generation: 2,
+      },
+    }));
+    const scheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      recover,
+      recordDiagnostic: (event) => {
+        diagnostics.push(event);
+      },
+    });
+
+    await scheduler.enqueueHandlerFailure({
+      sessionId: 'session-1',
+      switchesThisTurn: 1,
+      classification: classificationFor({
+        serviceId: 'openai-codex',
+        groupId: 'codex-group',
+        profileId: 'primary',
+      }),
+      error: new Error('timeout of 5000ms exceeded'),
+    });
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+    expect(scheduler.read('session-1')).toMatchObject({
+      status: 'resumed_awaiting_proof',
+      classification: expect.objectContaining({ profileId: 'primary' }),
+      pendingTargetProfileId: 'backup',
+      pendingTargetGeneration: 2,
+    });
+
+    await expect(scheduler.wake({ sessionId: 'session-1', reason: 'manual' }))
+      .resolves.toEqual({ status: 'waiting' });
+
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(scheduler.readByKey(buildRuntimeAuthRecoveryKey({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'codex-group',
+    }))).toMatchObject({
+      status: 'resumed_awaiting_proof',
+      pendingTargetProfileId: 'backup',
+    });
+    expect(diagnostics.map((event) => event.event)).not.toContain('runtime_auth_recovery_superseded');
+    expect(diagnostics.map((event) => event.event)).not.toContain('runtime_auth_recovery_dead_letter');
   });
 
   it('sanitizes provider handler error messages before persisting recovery diagnostics', async () => {

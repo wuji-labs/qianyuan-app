@@ -20,10 +20,16 @@ import { configuration } from '@/configuration';
 import { Credentials } from '@/persistence';
 
 import { resolveMachineEncryptionContext, resolveSessionEncryptionContext } from './client/encryptionKey';
-import { resolveLoopbackHttpUrl } from './client/loopbackUrl';
 import { openSessionDataEncryptionKey } from './client/openSessionDataEncryptionKey';
 import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
-import { createHttpStatusError, HttpStatusError } from './client/httpStatusError';
+import { HttpStatusError } from './client/httpStatusError';
+import { resolveServerHttpBaseUrl } from './client/serverHttpBaseUrl';
+import {
+  ConnectedServiceAuthGroupGenerationConflictError,
+  createConnectedServiceCredentialApi,
+  type ConnectedServiceAuthGroupApi,
+  type ConnectedServiceCredentialApi,
+} from './connectedServices/connectedServiceCredentialApi';
 import {
   ConnectedServiceQuotaApiError,
   createConnectedServiceQuotaApiError,
@@ -35,15 +41,12 @@ import {
   shouldTreatGetOrCreateSessionErrorAsOffline,
 } from './client/offlineErrors';
 import {
-  AccountEncryptionModeResponseSchema,
   ConnectedServiceAuthGroupErrorResponseV1Schema,
   ConnectedServiceAuthGroupResponseV1Schema,
   ConnectedServiceCredentialHealthV1Schema,
   ConnectedServiceCredentialHealthStatusV1Schema,
-  ConnectedServiceCredentialRecordV1Schema,
   ConnectedServiceIdSchema,
   ConnectedServiceQuotaSnapshotV1Schema,
-  SealedConnectedServiceCredentialV1Schema,
   SealedConnectedServiceQuotaSnapshotV1Schema,
   StoredJsonContentEnvelopeSchema,
 } from '@happier-dev/protocol';
@@ -62,6 +65,11 @@ import { resolveSessionCreateEncryptionMode } from '@/api/session/resolveSession
 import { createScmConnectedAccountCredentialResolver } from './connectedServices/scmConnectedAccountCredentialResolver';
 import { resolveMachineRegistrationIdentity } from '@/daemon/machineIdentity/resolveMachineRegistrationIdentity';
 import { consumeMachineReplacementCandidateAfterRegistration } from '@/daemon/machineIdentity/machineReplacementCandidates';
+
+export {
+  ConnectedServiceAuthGroupGenerationConflictError,
+  ConnectedServiceCredentialUnsupportedFormatError,
+} from './connectedServices/connectedServiceCredentialApi';
 
 const CONNECTED_SERVICE_PROFILE_LIST_CACHE_TTL_MS = 10_000;
 const ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS = 10_000;
@@ -146,23 +154,6 @@ export class MachineContentPublicKeyMismatchError extends Error {
   }
 }
 
-export class ConnectedServiceAuthGroupGenerationConflictError extends Error {
-  constructor(public readonly generation: number) {
-    super('connected_service_auth_group_generation_conflict');
-  }
-}
-
-export class ConnectedServiceCredentialUnsupportedFormatError extends Error {
-  readonly serviceId: ConnectedServiceId;
-  readonly profileId: string;
-  constructor(serviceId: ConnectedServiceId, profileId: string) {
-    super(`Connected service credential is in an unsupported legacy format (${serviceId}/${profileId}). Reconnect it in Happier.`);
-    this.name = 'ConnectedServiceCredentialUnsupportedFormatError';
-    this.serviceId = serviceId;
-    this.profileId = profileId;
-  }
-}
-
 export function isMachineIdConflictError(error: unknown): error is MachineIdConflictError {
   // Avoid relying on `instanceof`: bundlers / test runners may load multiple module instances.
   if (!error || typeof error !== 'object') return false;
@@ -201,10 +192,6 @@ export function isMachineContentPublicKeyMismatchError(error: unknown): error is
     && typeof maybe.reason === 'string'
     && maybe.reason.length > 0
   );
-}
-
-function resolveServerHttpBaseUrl(): string {
-  return resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
 }
 
 function didServerAcknowledgeMachineReplacement(
@@ -248,23 +235,6 @@ function readResponseErrorCode(value: unknown): string | null {
   return typeof error === 'string' ? error : null;
 }
 
-/**
- * Re-wrap an error with a new message while preserving its transport `code`
- * (e.g. ECONNREFUSED) and attaching the original as `cause`. This keeps a
- * transient endpoint outage classifiable as network/retryable after it crosses
- * an api.ts catch boundary, instead of being flattened into a code-less Error
- * that downstream classifiers treat as a non-retryable protocol error.
- */
-function createCausePreservingError(message: string, cause: unknown): Error {
-  const wrapped = new Error(message, { cause }) as Error & { code?: string };
-  const causeRecord = readRecord(cause);
-  const code = causeRecord?.code;
-  if (typeof code === 'string' && code.length > 0) {
-    wrapped.code = code;
-  }
-  return wrapped;
-}
-
 function isMachineReplacedResponseErrorCode(error: string | null): boolean {
   return error === 'machine_replaced' || error === 'machine-replaced';
 }
@@ -282,11 +252,13 @@ export class ApiClient {
 
   private readonly credential: Credentials;
   private readonly pushClient: PushNotificationClient;
+  private readonly connectedServiceCredentialApi: ConnectedServiceCredentialApi & ConnectedServiceAuthGroupApi;
   private readonly connectedServiceProfileListCache = new Map<ConnectedServiceId, ConnectedServiceProfileListCacheEntry>();
   private accountEncryptionModeCache: AccountEncryptionModeCacheEntry | null = null;
 
   private constructor(credential: Credentials) {
     this.credential = credential
+    this.connectedServiceCredentialApi = createConnectedServiceCredentialApi(credential);
     this.pushClient = new PushNotificationClient(credential.token, resolveServerHttpBaseUrl())
   }
 
@@ -774,71 +746,7 @@ export class ApiClient {
       expiresAt?: number | null;
     };
   } | null> {
-    const serverUrl = resolveServerHttpBaseUrl();
-    const serviceId = encodeURIComponent(params.serviceId);
-    const profileId = encodeURIComponent(params.profileId);
-
-    try {
-      const response = await axios.get(
-        `${serverUrl}/v2/connect/${serviceId}/profiles/${profileId}/credential`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.credential.token}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000,
-        },
-      );
-      if (response.status !== 200) {
-        throw new Error(`Server returned status ${response.status}`);
-      }
-
-      const raw = response.data;
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new Error('Invalid connected service credential response');
-      }
-
-      const sealedParsed = SealedConnectedServiceCredentialV1Schema.safeParse((raw as any).sealed);
-      if (!sealedParsed.success) {
-        throw new Error('Invalid connected service credential response');
-      }
-
-      const metadataParsed = z.object({
-        kind: z.enum(['oauth', 'token']),
-        providerEmail: z.string().nullable().optional(),
-        providerAccountId: z.string().nullable().optional(),
-        expiresAt: z.number().nullable().optional(),
-      }).safeParse((raw as any).metadata);
-
-      if (!metadataParsed.success) {
-        throw new Error('Invalid connected service credential response');
-      }
-
-      return { sealed: sealedParsed.data, metadata: metadataParsed.data };
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) {
-        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
-        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
-          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
-        }
-      }
-      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-      const code = (() => {
-        if (!axios.isAxiosError(error)) return undefined;
-        const data = error.response?.data;
-        if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
-        const rec = data as Record<string, unknown>;
-        return typeof rec.error === 'string' ? rec.error : undefined;
-      })();
-      if (status === 404) {
-        return null;
-      }
-      if (status === 409 && code === 'connect_credential_unsupported_format') {
-        throw new ConnectedServiceCredentialUnsupportedFormatError(params.serviceId, params.profileId);
-      }
-      logger.debug(`[API] [ERROR] Failed to get connected service credential:`, serializeAxiosErrorForLog(error));
-      throw new Error(`Failed to get connected service credential: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return await this.connectedServiceCredentialApi.getConnectedServiceCredentialSealed(params);
   }
 
   async listConnectedServiceProfiles(params: {
@@ -919,54 +827,7 @@ export class ApiClient {
     serviceId: ConnectedServiceId;
     groupId: string;
   }): Promise<ConnectedServiceAuthGroupV1 | null> {
-    const serverUrl = resolveServerHttpBaseUrl();
-    const serviceId = encodeURIComponent(params.serviceId);
-    const groupId = encodeURIComponent(params.groupId);
-
-    try {
-      const response = await axios.get(
-        `${serverUrl}/v3/connect/${serviceId}/groups/${groupId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.credential.token}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000,
-        },
-      );
-      if (response.status !== 200) {
-        throw new Error(`Server returned status ${response.status}`);
-      }
-      const parsed = ConnectedServiceAuthGroupResponseV1Schema.safeParse(response.data);
-      if (!parsed.success) {
-        throw new Error('Invalid connected service auth group response');
-      }
-      return parsed.data.group;
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) {
-        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
-        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
-          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
-        }
-      }
-      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-      if (status === 404) return null;
-      logger.debug(`[API] [ERROR] Failed to get connected service auth group:`, serializeAxiosErrorForLog(error));
-      if (typeof status === 'number' && Number.isFinite(status)) {
-        throw createHttpStatusError(
-          status,
-          `Failed to get connected service auth group (${status})`,
-        );
-      }
-      // Preserve the original error as `cause` (and copy any transport `code`) so a
-      // transient endpoint outage (ECONNREFUSED / socket hang up) stays classifiable
-      // as network/retryable downstream instead of being terminalized as a protocol
-      // error. `classifyDaemonServerWorkError` walks `.cause` for the code.
-      throw createCausePreservingError(
-        `Failed to get connected service auth group: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error,
-      );
-    }
+    return await this.connectedServiceCredentialApi.getConnectedServiceAuthGroup(params);
   }
 
   async updateConnectedServiceAuthGroupActiveProfile(params: {
@@ -974,6 +835,7 @@ export class ApiClient {
     groupId: string;
     activeProfileId: string;
     expectedGeneration: number;
+    overrideRuntimeCooldown?: boolean;
   }): Promise<ConnectedServiceAuthGroupV1> {
     const expectedGeneration = assertConnectedServiceExpectedGeneration(
       params.expectedGeneration,
@@ -989,6 +851,7 @@ export class ApiClient {
         {
           profileId: params.activeProfileId,
           expectedGeneration,
+          ...(params.overrideRuntimeCooldown === true ? { overrideRuntimeCooldown: true } : {}),
         },
         {
           headers: {
@@ -1251,35 +1114,7 @@ export class ApiClient {
   }
 
   private async fetchAccountEncryptionModeFromServer(): Promise<'e2ee' | 'plain' | 'unknown'> {
-    const serverUrl = resolveServerHttpBaseUrl();
-    try {
-      const response = await axios.get(
-        `${serverUrl}/v1/account/encryption`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.credential.token}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000,
-        },
-      );
-      if (response.status === 404) return 'e2ee';
-      if (response.status !== 200) return 'unknown';
-      const parsed = AccountEncryptionModeResponseSchema.safeParse(response.data);
-      if (!parsed.success) return 'unknown';
-      return parsed.data.mode === 'plain' ? 'plain' : 'e2ee';
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) {
-        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
-        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
-          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
-        }
-      }
-      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-      if (status === 404) return 'e2ee';
-      logger.debug(`[API] [ERROR] Failed to get account encryption mode:`, serializeAxiosErrorForLog(error));
-      return 'unknown';
-    }
+    return await this.connectedServiceCredentialApi.getAccountEncryptionMode?.() ?? 'e2ee';
   }
 
   async getConnectedServiceCredentialPlain(params: {
@@ -1288,64 +1123,7 @@ export class ApiClient {
   }): Promise<{
     content: { t: 'plain'; v: ConnectedServiceCredentialRecordV1 };
   } | null> {
-    const serverUrl = resolveServerHttpBaseUrl();
-    const serviceId = encodeURIComponent(params.serviceId);
-    const profileId = encodeURIComponent(params.profileId);
-
-    try {
-      const response = await axios.get(
-        `${serverUrl}/v3/connect/${serviceId}/profiles/${profileId}/credential`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.credential.token}`,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000,
-        },
-      );
-      if (response.status !== 200) {
-        throw new Error(`Server returned status ${response.status}`);
-      }
-      const raw = response.data;
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-        throw new Error('Invalid connected service credential response');
-      }
-
-      const contentParsed = StoredJsonContentEnvelopeSchema.safeParse((raw as any).content);
-      if (!contentParsed.success || contentParsed.data.t !== 'plain') {
-        throw new Error('Invalid connected service credential response');
-      }
-
-      const recordParsed = ConnectedServiceCredentialRecordV1Schema.safeParse(contentParsed.data.v);
-      if (!recordParsed.success) {
-        throw new Error('Invalid connected service credential response');
-      }
-
-      return { content: { t: 'plain', v: recordParsed.data } };
-    } catch (error: unknown) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) {
-        const parsed = ConnectedServiceAuthGroupErrorResponseV1Schema.safeParse(error.response.data);
-        if (parsed.success && parsed.data.error === 'connect_group_generation_conflict' && parsed.data.generation !== undefined) {
-          throw new ConnectedServiceAuthGroupGenerationConflictError(parsed.data.generation);
-        }
-      }
-      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-      const code = (() => {
-        if (!axios.isAxiosError(error)) return undefined;
-        const data = error.response?.data;
-        if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
-        const rec = data as Record<string, unknown>;
-        return typeof rec.error === 'string' ? rec.error : undefined;
-      })();
-      if (status === 404) {
-        return null;
-      }
-      if (status === 409 && code === 'connect_credential_unsupported_format') {
-        return null;
-      }
-      logger.debug(`[API] [ERROR] Failed to get connected service credential (v3):`, serializeAxiosErrorForLog(error));
-      throw new Error(`Failed to get connected service credential: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
+    return await this.connectedServiceCredentialApi.getConnectedServiceCredentialPlain?.(params) ?? null;
   }
 
   async registerConnectedServiceCredentialPlain(params: {

@@ -183,6 +183,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       api: {} as ApiClient,
       activeServerDir,
       input: {
+        mode: 'apply',
         tracked,
         sessionId: 'sess_1',
         agentId: 'claude',
@@ -253,7 +254,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
     await expect(readFile(join(groupClaudeConfigDir, 'settings.json'), 'utf8')).resolves.toBe('{"theme":"ambient"}\n');
   });
 
-  it('targets the shared group Claude config dir for hot-apply eligible group switches', async () => {
+  it('targets the shared group Claude config dir for same-home restart eligible group switches', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-server-'));
     const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-home-'));
     const projectDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-project-'));
@@ -348,6 +349,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       api: {} as ApiClient,
       activeServerDir,
       input: {
+        mode: 'apply',
         tracked,
         sessionId: 'sess_hot',
         agentId: 'claude',
@@ -395,8 +397,8 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       activeProfileId: 'backup',
       targetMaterializedEnv: { CLAUDE_CONFIG_DIR: groupClaudeConfigDir },
       targetMaterializedRoot: groupClaudeConfigDir,
-      claudeRuntimeAuthHotApply: {
-        mode: 'group_runtime_config_rewrite',
+      claudeRuntimeAuthSharedGroupSurface: {
+        mode: 'shared_group_auth_surface',
         runtimeClaudeConfigDir: groupClaudeConfigDir,
         runtimeMaterializedRoot: groupClaudeConfigDir,
         sourceClaudeConfigDir: profileClaudeConfigDir,
@@ -406,6 +408,163 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
     expect(stableCredential.claudeAiOauth.accessToken).toBe('selected-access-placeholder');
     const groupCredential = JSON.parse(await readFile(join(groupClaudeConfigDir, '.credentials.json'), 'utf8'));
     expect(groupCredential.claudeAiOauth.accessToken).toBe('selected-access-placeholder');
+  });
+
+  it('preflights shared group auth surface metadata without materializing Claude credentials', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-server-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-home-'));
+    const projectDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-project-'));
+    const sourceClaudeConfigDir = await mkdtemp(join(tmpdir(), 'happier-claude-runtime-selection-source-'));
+    const profileClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
+      activeServerDir,
+      serviceId: 'claude-subscription',
+      fallbackProfileId: 'backup',
+      selection: {
+        kind: 'profile',
+        serviceId: 'claude-subscription',
+        profileId: 'backup',
+        record: buildConnectedServiceCredentialRecord({
+          now: 1_000,
+          serviceId: 'claude-subscription',
+          profileId: 'backup',
+          kind: 'oauth',
+          expiresAt: 2_000,
+          oauth: {
+            accessToken: 'profile-access-placeholder',
+            refreshToken: 'profile-refresh-placeholder',
+            idToken: null,
+            scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+            tokenType: 'Bearer',
+            providerAccountId: 'provider-account',
+            providerEmail: null,
+          },
+        }),
+      },
+    });
+    if (!profileClaudeConfigDir) throw new Error('expected stable profile Claude config dir');
+    const groupClaudeConfigDir = join(
+      activeServerDir,
+      'daemon',
+      'connected-services',
+      'homes',
+      'claude-subscription',
+      '__groups',
+      'work',
+      'claude',
+      'claude-config',
+    );
+    const record = buildConnectedServiceCredentialRecord({
+      now: 1_000,
+      serviceId: 'claude-subscription',
+      profileId: 'backup',
+      kind: 'oauth',
+      expiresAt: 2_000,
+      oauth: {
+        accessToken: 'selected-access-placeholder',
+        refreshToken: 'selected-refresh-placeholder',
+        idToken: null,
+        scope: CLAUDE_CODE_RECOMMENDED_OAUTH_SCOPE,
+        tokenType: 'Bearer',
+        providerAccountId: 'provider-account',
+        providerEmail: null,
+      },
+    });
+    const previousBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': { source: 'connected', selection: 'group', groupId: 'work', profileId: 'primary' },
+      },
+    };
+    const normalizedBindings: ConnectedServiceBindingsV1 = {
+      v: 1,
+      bindingsByServiceId: {
+        'claude-subscription': { source: 'connected', selection: 'group', groupId: 'work', profileId: 'backup' },
+      },
+    };
+    const tracked: TrackedSession = {
+      startedBy: 'daemon',
+      happySessionId: 'sess_hot_preflight',
+      pid: 321,
+      spawnOptions: {
+        directory: projectDir,
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        connectedServices: previousBindings,
+        environmentVariables: {
+          CLAUDE_CONFIG_DIR: groupClaudeConfigDir,
+          [HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY]: groupClaudeConfigDir,
+        },
+      },
+    };
+    const input = {
+      tracked,
+      sessionId: 'sess_hot_preflight',
+      agentId: 'claude',
+      serviceId: 'claude-subscription',
+      previous: {
+        source: 'connected',
+        selection: 'group',
+        serviceId: 'claude-subscription',
+        profileId: 'primary',
+        groupId: 'work',
+      },
+      next: {
+        source: 'connected',
+        selection: 'group',
+        serviceId: 'claude-subscription',
+        profileId: 'backup',
+        groupId: 'work',
+      },
+      previousBindings,
+      normalizedBindings,
+      groupMetadata: {
+        groupId: 'work',
+        activeProfileId: 'backup',
+        fallbackProfileId: 'fallback',
+        generation: 4,
+      },
+      mode: 'preflight',
+    } satisfies Parameters<typeof materializeClaudeConnectedServiceRuntimeAuthSelection>[0]['input']
+      & Readonly<{ mode: 'preflight' }>;
+
+    const result = await materializeClaudeConnectedServiceRuntimeAuthSelection({
+      credentials: {
+        token: 'token',
+        encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+      } satisfies Credentials,
+      api: {} as ApiClient,
+      activeServerDir,
+      input,
+      baseSelection: {
+        serviceId: 'claude-subscription',
+        binding: normalizedBindings.bindingsByServiceId['claude-subscription'],
+        profileId: 'backup',
+        groupId: 'work',
+        activeProfileId: 'backup',
+        fallbackProfileId: 'fallback',
+        generation: 4,
+        record,
+      },
+      processEnv: { HOME: homeDir, CLAUDE_CONFIG_DIR: sourceClaudeConfigDir },
+    });
+
+    expect(result).toMatchObject({
+      serviceId: 'claude-subscription',
+      profileId: 'backup',
+      groupId: 'work',
+      activeProfileId: 'backup',
+      targetMaterializedEnv: { CLAUDE_CONFIG_DIR: groupClaudeConfigDir },
+      targetMaterializedRoot: groupClaudeConfigDir,
+      claudeRuntimeAuthSharedGroupSurface: {
+        mode: 'shared_group_auth_surface',
+        runtimeClaudeConfigDir: groupClaudeConfigDir,
+        runtimeMaterializedRoot: groupClaudeConfigDir,
+        sourceClaudeConfigDir: profileClaudeConfigDir,
+      },
+    });
+    await expect(readFile(join(groupClaudeConfigDir, '.credentials.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(profileClaudeConfigDir, '.credentials.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('forwards tracked Claude continuity hints into runtime-auth rematerialization', async () => {
@@ -485,6 +644,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       api: {} as ApiClient,
       activeServerDir,
       input: {
+        mode: 'apply',
         tracked,
         sessionId: 'sess_2',
         agentId: 'claude',
@@ -639,6 +799,7 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
       api: {} as ApiClient,
       activeServerDir,
       input: {
+        mode: 'apply',
         tracked,
         sessionId: 'sess_persisted',
         agentId: 'claude',
@@ -803,7 +964,8 @@ describe('materializeClaudeConnectedServiceRuntimeAuthSelection', () => {
         api: {} as ApiClient,
         activeServerDir,
         input: {
-          tracked,
+        mode: 'apply',
+        tracked,
           sessionId: 'sess_1',
           agentId: 'claude',
           serviceId: 'claude-subscription',

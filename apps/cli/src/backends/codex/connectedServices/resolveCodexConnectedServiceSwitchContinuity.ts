@@ -9,10 +9,11 @@ import {
   isSameConnectedServiceAuthGroup,
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
-import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { canResumeFromMaterializedStateCore } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedStateCore';
 import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
 import { codexConnectedServiceStateSharingDescriptor } from './codexConnectedServiceStateSharingDescriptor';
 import { createCodexConnectedServiceRuntimeAuthAdapter } from './createCodexConnectedServiceRuntimeAuthAdapter';
+import { verifyResumeReachableCodex } from './verifyResumeReachableCodex';
 
 const CODEX_RESTART_REMATERIALIZE_REQUIRED_REASON = 'codex_restart_rematerialize_required';
 const CODEX_SHARED_STATE_REQUIRED_REASON = 'codex_shared_state_required';
@@ -72,9 +73,7 @@ export async function resolveCodexConnectedServiceSwitchContinuity(
       return providerSessionStateUnavailableForResume();
     }
 
-    const reachability = await canResumeFromMaterializedState({
-      agentId: 'codex',
-      serviceId: params.serviceId,
+    const reachability = await canResumeFromMaterializedStateCore({
       targetMaterializedRoot,
       targetMaterializedEnv,
       requestedStateMode: 'isolated',
@@ -83,6 +82,7 @@ export async function resolveCodexConnectedServiceSwitchContinuity(
       vendorResumeId,
       cwd,
       candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+      verifyResumeReachable: verifyResumeReachableCodex,
     });
     return reachability.ok
       ? { mode: 'restart_same_home' }

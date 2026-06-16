@@ -41,6 +41,20 @@ type ConnectedServiceAuthGroupSwitchApplyGenerationResult = Readonly<{
   /** Apply-proven context (e.g. resume continuity) surfaced for switch telemetry (INC-6). */
   diagnostics?: unknown;
 }>;
+type ConnectedServiceAuthGroupSwitchApplyGenerationInput = Readonly<{
+  sessionId?: string;
+  serviceId: string;
+  groupId: string;
+  activeProfileId: string | null;
+  generation: number;
+  reason?: string;
+  /**
+   * Pre-switch active group member. The persisted session group binding does not track the live
+   * member, so it is threaded here so the session transcript "from" is the real member rather
+   * than null (which the UI renders as the native / "CLI Auth" label).
+   */
+  fromProfileId?: string | null;
+}>;
 
 type LeaseOutcome =
   | Readonly<{ status: 'completed'; completion: LeaseCompletion }>
@@ -355,6 +369,10 @@ function readPredictiveSoftSwitchSessionApplyFailure(input: Readonly<{
   };
 }
 
+function isPredictiveSessionApplyReason(reason: string | undefined): boolean {
+  return reason === 'soft_threshold' || reason === 'same_provider_account_exhausted';
+}
+
 type ObservedGenerationApplyResult = Extract<
   ConnectedServiceAuthGroupSwitchResult,
   { status: 'observed_generation' | 'generation_apply_failed' }
@@ -420,20 +438,12 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
       expectedGeneration: number;
       reason: string;
     }>): Promise<ConnectedServiceAuthGroupSwitchState>;
-    applyGeneration(input: Readonly<{
-      sessionId?: string;
-      serviceId: string;
-      groupId: string;
-      activeProfileId: string | null;
-      generation: number;
-      reason?: string;
-      /**
-       * Pre-switch active group member. The persisted session group binding does not track the live
-       * member, so it is threaded here so the session transcript "from" is the real member rather
-       * than null (which the UI renders as the native / "CLI Auth" label).
-       */
-      fromProfileId?: string | null;
-    }>): Promise<ConnectedServiceAuthGroupSwitchApplyGenerationResult | void>;
+    preflightApplyGeneration?(
+      input: ConnectedServiceAuthGroupSwitchApplyGenerationInput,
+    ): Promise<ConnectedServiceAuthGroupSwitchApplyGenerationResult | void>;
+    applyGeneration(
+      input: ConnectedServiceAuthGroupSwitchApplyGenerationInput,
+    ): Promise<ConnectedServiceAuthGroupSwitchApplyGenerationResult | void>;
     recordObservedFailureState?(input: Readonly<{
       serviceId: string;
       groupId: string;
@@ -454,6 +464,26 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
     resolveGenerationConflict?: (error: unknown) => number | null;
     emitEvent?: (event: ConnectedServiceAuthGroupSwitchEvent) => void;
   }>) {}
+
+  private async preflightPredictiveSessionApply(
+    input: ConnectedServiceAuthGroupSwitchApplyGenerationInput,
+  ): Promise<ConnectedServiceAuthGenerationApplyFailure | null> {
+    if (!this.deps.preflightApplyGeneration) return null;
+    if (!isPredictiveSessionApplyReason(input.reason)) return null;
+    if (typeof input.sessionId !== 'string' || input.sessionId.trim().length === 0) return null;
+    try {
+      const applyResult = await this.deps.preflightApplyGeneration(input);
+      return readPredictiveSoftSwitchSessionApplyFailure({
+        reason: input.reason,
+        sessionId: input.sessionId,
+        applyResult,
+      });
+    } catch (error) {
+      const applyFailure = readConnectedServiceAuthGenerationApplyFailure(error);
+      if (!applyFailure) throw error;
+      return applyFailure;
+    }
+  }
 
   private async probeQuotaSnapshotsBeforePreTurnSelection(input: Readonly<{
     request: Readonly<{
@@ -580,6 +610,16 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
   private async applyObservedGeneration(completion: LeaseCompletion): Promise<ObservedGenerationApplyResult> {
     let applyResult: ConnectedServiceAuthGroupSwitchApplyGenerationResult | void;
     try {
+      const preflightFailure = await this.preflightPredictiveSessionApply(completion);
+      if (preflightFailure) {
+        return {
+          status: 'generation_apply_failed',
+          activeProfileId: completion.activeProfileId,
+          generation: completion.generation,
+          errorCode: preflightFailure.errorCode,
+          ...(preflightFailure.diagnostics === undefined ? {} : { diagnostics: preflightFailure.diagnostics }),
+        };
+      }
       applyResult = await this.deps.applyGeneration(completion);
       const predictiveFailure = readPredictiveSoftSwitchSessionApplyFailure({
         reason: completion.reason,
@@ -1185,6 +1225,24 @@ export class ConnectedServiceAuthGroupSwitchCoordinator {
       let committed: ConnectedServiceAuthGroupSwitchState;
       for (;;) {
         try {
+          const preflightFailure = await this.preflightPredictiveSessionApply({
+            ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+            serviceId: input.serviceId,
+            groupId: input.groupId,
+            activeProfileId: selectedProfileId,
+            generation: commitLoaded.generation + 1,
+            reason: input.reason,
+            fromProfileId: commitLoaded.activeProfileId,
+          });
+          if (preflightFailure) {
+            return {
+              status: 'generation_apply_failed',
+              activeProfileId: selectedProfileId,
+              generation: commitLoaded.generation + 1,
+              errorCode: preflightFailure.errorCode,
+              ...(preflightFailure.diagnostics === undefined ? {} : { diagnostics: preflightFailure.diagnostics }),
+            };
+          }
           committed = await this.deps.commitSwitch({
             serviceId: input.serviceId,
             groupId: input.groupId,

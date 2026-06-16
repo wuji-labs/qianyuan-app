@@ -1,4 +1,3 @@
-import { defaultScmBackendRegistry } from '../defaultRegistry';
 import type { ScmBackendRegistry } from '../registry';
 import { resolveScmSelection } from '../resolveScmSelection';
 import {
@@ -11,6 +10,13 @@ import {
 import { resolveScmSourceControllerWorkspaceCheckoutMaterializationResultTargetPath } from './workspaceCheckoutMaterialization';
 import type { ScmSourceControllerWorkspaceCheckoutCreationResult } from './workspaceCheckoutCreation';
 import type { ScmSourceControllerWorkspaceCheckoutMaterializationInput } from '../types';
+
+async function resolveWorkspaceCheckoutRegistry(
+    registry: ScmBackendRegistry | undefined,
+): Promise<ScmBackendRegistry> {
+    if (registry) return registry;
+    return (await import('../defaultRegistry')).defaultScmBackendRegistry;
+}
 
 export async function materializeWorkspaceCheckoutWithSourceController(input: Readonly<{
     sourcePath: string;
@@ -43,7 +49,7 @@ export async function realizeWorkspaceCheckoutWithSourceController(input: Readon
     const resolved = await resolveScmSelection({
         workingDirectory: input.sourcePath,
         cwd: input.sourcePath,
-        registry: input.registry ?? defaultScmBackendRegistry,
+        registry: await resolveWorkspaceCheckoutRegistry(input.registry),
     });
     if (!resolved) {
         return null;

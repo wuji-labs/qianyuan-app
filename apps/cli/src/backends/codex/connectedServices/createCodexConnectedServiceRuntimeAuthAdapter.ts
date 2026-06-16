@@ -8,6 +8,7 @@ import {
 import { classifyCodexConnectedServiceAuthFailure } from './classifyCodexConnectedServiceAuthFailure';
 import { mapCodexRateLimitSnapshotToQuotaSnapshot } from './mapCodexRateLimitSnapshot';
 import { readCodexRateLimitsSnapshot } from '../appServer/readCodexRateLimitsSnapshot';
+import { readCodexLiveAccountIdentity } from './codexLiveAccountIdentity';
 import { refreshCodexChatGptTokensForBridge } from './refreshCodexChatGptTokensForBridge';
 import { verifyCodexConnectedServiceActiveAccount } from './verifyCodexConnectedServiceActiveAccount';
 import type {
@@ -43,18 +44,6 @@ function readLoginStartClient(value: unknown): { request: (method: string, param
   return record && typeof record.request === 'function'
     ? { request: record.request as (method: string, params?: unknown) => Promise<unknown> }
     : null;
-}
-
-function readCodexLiveAccountIdentity(value: unknown): Readonly<{
-  activeAccountId: string | null;
-  accountLabel: string | null;
-}> {
-  const response = readRecord(value);
-  const account = readRecord(response?.account) ?? response;
-  return {
-    activeAccountId: readString(account?.id ?? account?.accountId ?? account?.account_id ?? account?.chatgptAccountId ?? account?.chatgpt_account_id),
-    accountLabel: readString(account?.email ?? account?.accountEmail ?? account?.account_email),
-  };
 }
 
 function readAsyncCallback(value: unknown): (() => Promise<void>) | null {

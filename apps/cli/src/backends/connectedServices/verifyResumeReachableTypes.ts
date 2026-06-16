@@ -1,3 +1,5 @@
+export const REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON = 'reachability_check_not_implemented' as const;
+
 export type VerifyResumeReachableInput = Readonly<{
   targetMaterializedRoot: string;
   targetMaterializedEnv: Readonly<Record<string, string>>;

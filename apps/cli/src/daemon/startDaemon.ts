@@ -103,7 +103,11 @@ import { selectPreferredTmuxSessionName, TmuxUtilities, isTmuxAvailable } from '
 import { resolveTerminalRequestFromSpawnOptions } from '@/terminal/runtime/terminalConfig';
 import { validateEnvVarRecordStrict } from '@/terminal/runtime/envVarSanitization';
 import { reportDaemonObservedSessionExit } from './sessionTermination';
-import { evaluatePredictiveSoftSwitchPolicy } from './connectedServices/accountGroups/switching/predictiveSoftSwitchPolicy';
+import {
+  evaluatePredictiveSoftSwitchLiveSessionRequirement,
+  evaluatePredictiveSoftSwitchPolicy,
+  evaluatePredictiveSoftSwitchTrackedLiveSessionPolicy,
+} from './connectedServices/accountGroups/switching/predictiveSoftSwitchPolicy';
 
 import { getPreferredHostName, initialMachineMetadata } from './machine/metadata';
 export { initialMachineMetadata } from './machine/metadata';
@@ -181,6 +185,7 @@ import { recordConnectedServiceRuntimeQuotaSnapshotForSession } from './connecte
 import { createDaemonConnectedServiceAuthGroupSwitchCoordinator } from './connectedServices/runtimeAuth/createDaemonConnectedServiceAuthGroupSwitchCoordinator';
 import { handleConnectedServiceRuntimeAuthFailureForSession } from './connectedServices/runtimeAuth/handleConnectedServiceRuntimeAuthFailureForSession';
 import { commitConnectedServiceAccountSwitchSessionEvent } from './connectedServices/runtimeAuth/commitConnectedServiceAccountSwitchSessionEvent';
+import { shouldCommitAutomaticGroupApplySessionEvent } from './connectedServices/runtimeAuth/automaticGroupApplySessionEvents';
 import { commitConnectedServiceRuntimeAuthRecoverySessionEvent } from './connectedServices/runtimeAuth/commitConnectedServiceRuntimeAuthRecoverySessionEvent';
 import { ConnectedServiceRuntimeAuthSwitchAttemptTracker } from './connectedServices/runtimeAuth/ConnectedServiceRuntimeAuthSwitchAttemptTracker';
 import {
@@ -222,6 +227,7 @@ import {
 import { logConnectedServiceDaemonRestartDiagnostic } from './connectedServices/sessionAuthSwitch/logConnectedServiceDaemonRestartDiagnostic';
 import { logConnectedServiceAuthSwitchResult } from './connectedServices/sessionAuthSwitch/logConnectedServiceAuthSwitchResult';
 import { resolveSharedStateRequiredSwitchContinuity } from './connectedServices/sessionAuthSwitch/resolveSharedStateRequiredSwitchContinuity';
+import { resolveUnsupportedSwitchContinuityErrorCode } from './connectedServices/sessionAuthSwitch/diagnostics/resolveUnsupportedSwitchContinuityErrorCode';
 import { createSessionConnectedServiceAuthHotApply } from './connectedServices/sessionAuthSwitch/sessionConnectedServiceAuthHotApply';
 import { createSessionConnectedServiceAccountAdoptionVerifier } from './connectedServices/accountTransitions/createSessionConnectedServiceAccountAdoptionVerifier';
 import { resolveInactiveConnectedServiceSessionForAuthSwitch } from './connectedServices/sessionAuthSwitch/resolveInactiveConnectedServiceSessionForAuthSwitch';
@@ -1022,9 +1028,7 @@ export async function resolveSessionConnectedServiceSwitchContinuity(input: Read
   }
   return {
     mode: 'unsupported' as const,
-    errorCode: continuity.reason === 'provider_session_state_unavailable_for_resume'
-      ? 'provider_session_state_unavailable_for_resume' as const
-      : 'unsupported_service' as const,
+    errorCode: resolveUnsupportedSwitchContinuityErrorCode(continuity.reason),
     warnings: continuity.reason ? [continuity.reason] : [],
     ...(continuity.diagnostics ? { diagnostics: continuity.diagnostics } : {}),
   };
@@ -1924,6 +1928,10 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           onTrackedSessionReported: (tracked) => {
             const sessionId = typeof tracked.happySessionId === 'string' ? tracked.happySessionId.trim() : '';
             if (!sessionId) return;
+            connectedServiceQuotasCoordinator?.updateSpawnTargetSessionId({
+              pid: tracked.pid,
+              sessionId,
+            });
             void (async () => {
               const exactProviderContextAvailable =
                 await resolveConnectedServiceContinuationProviderContextAvailability({ tracked });
@@ -3514,6 +3522,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
          */
         const buildConnectedServiceApplyAuthGeneration = (applyParams: Readonly<{
           failureAtMs: number;
+          commitAccountSwitchEvents: boolean;
+          dryRun?: boolean;
         }>) => async (generationInput: Readonly<{
           sessionId: string;
           serviceId: ConnectedServiceId;
@@ -3544,8 +3554,8 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           const serviceId = ConnectedServiceIdSchema.parse(generationInput.serviceId);
           // K5:fsm_switch reactive + proactive-quota auth-generation apply routes through the FSM
           // (hot-apply-in-place when eligible, else gated restart-resume with reachability + deferral).
-	          const result = await switchSessionConnectedServiceAuth({
-	            core: connectedServiceSessionAuthSwitchCore,
+		          const result = await switchSessionConnectedServiceAuth({
+		            core: connectedServiceSessionAuthSwitchCore,
 	            switchReason: generationInput.switchReason,
             // RD-SW-9: thread the group-switch trigger reason so a predictive soft-threshold
             // switch that cannot hot-apply fails inside the FSM BEFORE side effects, instead of
@@ -3579,6 +3589,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                 persistedSessionMetadata,
                 connectedServiceMaterializationIdentityV1,
                 vendorResumeId,
+                resolveCandidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile,
                 // RD-SW-2 (Rule A): the proof context must target the POST-switch materialized
                 // home, not the tracked session's pre-switch env.
                 runtimeAuthSelection,
@@ -3728,6 +3739,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               });
             },
             emitSessionEvent: (sessionId, event) => {
+              if (!shouldCommitAutomaticGroupApplySessionEvent(event, {
+                commitAccountSwitchEvents: applyParams.commitAccountSwitchEvents,
+              })) return;
               void commitConnectedServiceAccountSwitchSessionEvent({
                 credentials,
                 sessionId,
@@ -3741,8 +3755,9 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             // The persisted group binding does not track the live active member, so thread the
             // pre-switch member through to the transcript "from" (otherwise it renders as the
             // native / "CLI Auth" label even though the session was on a real group member).
-            emitFromProfileIdByServiceId: new Map([[serviceId, generationInput.fromProfileId ?? null]]),
-            request: {
+	            emitFromProfileIdByServiceId: new Map([[serviceId, generationInput.fromProfileId ?? null]]),
+	            dryRun: applyParams.dryRun === true,
+	            request: {
               sessionId: generationInput.sessionId,
               agentId,
               bindings: {
@@ -4195,6 +4210,12 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
             // (hot-apply-in-place when eligible, else gated restart-resume + mid-turn re-continue).
             applyConnectedServiceAuthGeneration: buildConnectedServiceApplyAuthGeneration({
               failureAtMs: runtimeFailureAtMs,
+              commitAccountSwitchEvents: true,
+            }),
+            preflightConnectedServiceAuthGeneration: buildConnectedServiceApplyAuthGeneration({
+              failureAtMs: runtimeFailureAtMs,
+              commitAccountSwitchEvents: false,
+              dryRun: true,
             }),
             emitEvent: (event) => {
               if (
@@ -4661,6 +4682,7 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               vendorResumeId,
               cwd: inactiveCwd,
               candidatePersistedSessionFile: inactiveCandidatePersistedSessionFile,
+              resolveCandidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile,
               // RD-SW-2 (Rule A): the proof context must target the POST-switch materialized
               // home, not the tracked session's pre-switch env.
               runtimeAuthSelection,
@@ -4900,6 +4922,50 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
           serviceId,
           profileId,
         }),
+        recordProviderOutcomeProof: async ({ sessionId, serviceId, profileId, groupId, proofKind }) => {
+          const intents = runtimeAuthRecoveryScheduler?.readForSession(sessionId) ?? [];
+          const matches = listMatchingRuntimeAuthRecoveryIntents(intents, {
+            serviceId,
+            groupId,
+            profileId,
+          });
+          await Promise.all(matches.map(async (intent) => {
+            await runtimeAuthRecoveryScheduler?.markProviderOutcomeProofByKey({
+              recoveryKey: buildRuntimeAuthRecoveryKey({
+                sessionId: intent.sessionId,
+                serviceId: intent.serviceId,
+                profileId: intent.profileId,
+                groupId: intent.groupId,
+              }),
+              proofKind,
+            }).catch((error) => {
+              logger.debug('[DAEMON RUN] Connected-service quota proof runtime-auth cleanup failed (non-fatal)', {
+                sessionId,
+                serviceId,
+                profileId,
+                groupId,
+                proofKind,
+                error: serializeAxiosErrorForLog(error),
+              });
+            });
+          }));
+          await inactiveUsageLimitRecoveryScheduler.markProviderOutcomeProofForSession({
+            sessionId,
+            serviceId,
+            profileId,
+            groupId,
+            proofKind,
+          }).catch((error) => {
+            logger.debug('[DAEMON RUN] Connected-service quota proof usage-limit cleanup failed (non-fatal)', {
+              sessionId,
+              serviceId,
+              profileId,
+              groupId,
+              proofKind,
+              error: serializeAxiosErrorForLog(error),
+            });
+          });
+        },
         runtimeQuotaSnapshots: connectedServiceRuntimeQuotaSnapshots,
         sessionId: input.sessionId,
         serviceId: input.serviceId,
@@ -5222,17 +5288,40 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
               groupSwitchCheckJitterMs,
               softSwitchPolicyGuard: async (input) => {
                 const tracked = getCurrentChildren().find((child) => child.happySessionId === input.sessionId) ?? null;
-                if (!tracked) return { status: 'allow' as const };
+                const trackedRuntimePolicy = evaluatePredictiveSoftSwitchTrackedLiveSessionPolicy({
+                  reason: input.reason,
+                  hasTrackedRuntime: tracked !== null,
+                });
+                if (trackedRuntimePolicy.status !== 'allow') return trackedRuntimePolicy;
+                if (!tracked) return trackedRuntimePolicy;
                 const agentId = resolveTrackedSessionCatalogAgentId(tracked);
                 const lifecycleDescriptor = await resolveConnectedServiceCredentialLifecycleDescriptor(agentId);
-                return evaluatePredictiveSoftSwitchPolicy({
+                const policy = evaluatePredictiveSoftSwitchPolicy({
                   context: 'live_session',
                   reason: input.reason,
                   predictiveSoftSwitchMode: lifecycleDescriptor.predictiveSoftSwitch.mode,
                   turnState: connectedServiceTurnDeferralQueue.getTurnLifecycleState(input.sessionId),
                 });
+                if (policy.status !== 'allow') return policy;
+                return evaluatePredictiveSoftSwitchLiveSessionRequirement({
+                  reason: input.reason,
+                  requirement: lifecycleDescriptor.predictiveSoftSwitch.liveSessionRequirement,
+                  activeServerDir: configuration.activeServerDir,
+                  agentId,
+                  serviceId: input.serviceId,
+                  groupId: input.groupId,
+                  activeProfileId: input.activeProfileId,
+                  env: tracked.spawnOptions?.environmentVariables ?? {},
+                });
               },
               softSwitchRecoveryGuard: connectedServiceRecoverySwitchGuard,
+              sameAccountFanoutStrategyResolver: async (input) => {
+                const tracked = getCurrentChildren().find((child) => child.happySessionId === input.sourceSessionId) ?? null;
+                if (!tracked) return 'none';
+                const agentId = resolveTrackedSessionCatalogAgentId(tracked);
+                const lifecycleDescriptor = await resolveConnectedServiceCredentialLifecycleDescriptor(agentId);
+                return lifecycleDescriptor.sameAccountFanoutStrategy;
+              },
               quotaWorkGate: () => {
                 if (!daemonServerWorkOnline) return { status: 'deferred' as const, reason: 'offline' };
                 const nowMs = Date.now();
@@ -5296,6 +5385,12 @@ export async function startDaemon(options: Readonly<{ takeover?: boolean }> = {}
                     // no interrupted turn exists.
                     applyConnectedServiceAuthGeneration: buildConnectedServiceApplyAuthGeneration({
                       failureAtMs: Date.now(),
+                      commitAccountSwitchEvents: false,
+                    }),
+                    preflightConnectedServiceAuthGeneration: buildConnectedServiceApplyAuthGeneration({
+                      failureAtMs: Date.now(),
+                      commitAccountSwitchEvents: false,
+                      dryRun: true,
                     }),
                     restartSession: async (restartInput) => {
                       const current = getCurrentChildren().find((child) => child.happySessionId === sessionId) ?? null;

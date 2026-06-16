@@ -60,6 +60,27 @@ function markerPathsForPid(pid: number): string[] {
   return markerReadDirs().map((dir) => join(dir, `pid-${pid}.json`));
 }
 
+const sessionMarkerMutationLocks = new Map<number, Promise<void>>();
+
+async function runWithSessionMarkerMutationLock<T>(pid: number, task: () => Promise<T>): Promise<T> {
+  const previous = sessionMarkerMutationLocks.get(pid) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.catch(() => undefined).then(() => current);
+  sessionMarkerMutationLocks.set(pid, next);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    release();
+    if (sessionMarkerMutationLocks.get(pid) === next) {
+      sessionMarkerMutationLocks.delete(pid);
+    }
+  }
+}
+
 async function ensureDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
 }
@@ -95,18 +116,27 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
   }
 }
 
-export async function writeSessionMarker(marker: Omit<DaemonSessionMarker, 'createdAt' | 'updatedAt' | 'happyHomeDir'> & { createdAt?: number; updatedAt?: number }): Promise<void> {
+export type WriteSessionMarkerOptions = Readonly<{
+  preserveConnectedServiceRestartIntent?: boolean;
+}>;
+
+async function writeSessionMarkerUnlocked(
+  marker: Omit<DaemonSessionMarker, 'createdAt' | 'updatedAt' | 'happyHomeDir'> & { createdAt?: number; updatedAt?: number },
+  options: WriteSessionMarkerOptions = {},
+): Promise<void> {
   const currentDir = currentDaemonSessionsDir();
   await ensureDir(currentDir);
   const now = Date.now();
   const filePath = join(currentDir, `pid-${marker.pid}.json`);
 
   let createdAtFromDisk: number | undefined;
+  let existingMarkerFromDisk: DaemonSessionMarker | null = null;
   for (const candidatePath of markerPathsForPid(marker.pid)) {
     try {
       const raw = await readFile(candidatePath, 'utf-8');
       const existing = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
       if (existing.success) {
+        existingMarkerFromDisk = existing.data;
         createdAtFromDisk = existing.data.createdAt;
         break;
       }
@@ -119,13 +149,29 @@ export async function writeSessionMarker(marker: Omit<DaemonSessionMarker, 'crea
     }
   }
 
+  const preservedConnectedServiceRestartIntent =
+    options.preserveConnectedServiceRestartIntent === true
+    && marker.connectedServiceRestartIntent === undefined
+    && existingMarkerFromDisk?.happySessionId === marker.happySessionId
+      ? existingMarkerFromDisk.connectedServiceRestartIntent
+      : undefined;
   const payload: DaemonSessionMarker = DaemonSessionMarkerSchema.parse({
     ...marker,
+    ...(preservedConnectedServiceRestartIntent
+      ? { connectedServiceRestartIntent: preservedConnectedServiceRestartIntent }
+      : {}),
     happyHomeDir: configuration.happyHomeDir,
     createdAt: marker.createdAt ?? createdAtFromDisk ?? now,
     updatedAt: now,
   });
   await writeJsonAtomic(filePath, payload);
+}
+
+export async function writeSessionMarker(
+  marker: Omit<DaemonSessionMarker, 'createdAt' | 'updatedAt' | 'happyHomeDir'> & { createdAt?: number; updatedAt?: number },
+  options: WriteSessionMarkerOptions = {},
+): Promise<void> {
+  await runWithSessionMarkerMutationLock(marker.pid, () => writeSessionMarkerUnlocked(marker, options));
 }
 
 /**
@@ -145,34 +191,36 @@ export async function refreshSessionMarkerRespawn(params: Readonly<{
   spawnOptions: SpawnSessionOptions;
   encryptionMaterial?: RespawnDescriptorEncryptionMaterial;
 }>): Promise<void> {
-  let existing: DaemonSessionMarker | null = null;
-  for (const candidatePath of markerPathsForPid(params.pid)) {
-    try {
-      const raw = await readFile(candidatePath, 'utf-8');
-      const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
-      if (parsed.success) {
-        existing = parsed.data;
-        break;
-      }
-    } catch (e) {
-      const err = e as NodeJS.ErrnoException;
-      if (err?.code !== 'ENOENT') {
-        logger.debug(`[sessionRegistry] Could not read session marker pid-${params.pid}.json for respawn refresh`, e);
+  await runWithSessionMarkerMutationLock(params.pid, async () => {
+    let existing: DaemonSessionMarker | null = null;
+    for (const candidatePath of markerPathsForPid(params.pid)) {
+      try {
+        const raw = await readFile(candidatePath, 'utf-8');
+        const parsed = DaemonSessionMarkerSchema.safeParse(JSON.parse(raw));
+        if (parsed.success) {
+          existing = parsed.data;
+          break;
+        }
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (err?.code !== 'ENOENT') {
+          logger.debug(`[sessionRegistry] Could not read session marker pid-${params.pid}.json for respawn refresh`, e);
+        }
       }
     }
-  }
-  if (!existing) return;
+    if (!existing) return;
 
-  const respawn = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
-    params.spawnOptions,
-    params.encryptionMaterial ? { encryptionMaterial: params.encryptionMaterial } : undefined,
-  );
-  if (!respawn) return;
+    const respawn = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
+      params.spawnOptions,
+      params.encryptionMaterial ? { encryptionMaterial: params.encryptionMaterial } : undefined,
+    );
+    if (!respawn) return;
 
-  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = existing;
-  await writeSessionMarker({
-    ...rest,
-    respawn,
+    const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = existing;
+    await writeSessionMarkerUnlocked({
+      ...rest,
+      respawn,
+    });
   });
 }
 
@@ -196,34 +244,38 @@ export async function markSessionMarkerConnectedServiceRestartIntent(params: Rea
   pid: number;
   requestedAtMs?: number;
 }>): Promise<boolean> {
-  const existing = await readSessionMarkerForPid(params.pid);
-  if (!existing) return false;
+  return await runWithSessionMarkerMutationLock(params.pid, async () => {
+    const existing = await readSessionMarkerForPid(params.pid);
+    if (!existing) return false;
 
-  const requestedAtMs = typeof params.requestedAtMs === 'number' && Number.isFinite(params.requestedAtMs)
-    ? Math.max(0, Math.trunc(params.requestedAtMs))
-    : Date.now();
-  const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = existing;
-  await writeSessionMarker({
-    ...rest,
-    connectedServiceRestartIntent: {
-      v: 1,
-      requestedAtMs,
-    },
+    const requestedAtMs = typeof params.requestedAtMs === 'number' && Number.isFinite(params.requestedAtMs)
+      ? Math.max(0, Math.trunc(params.requestedAtMs))
+      : Date.now();
+    const { happyHomeDir: _happyHomeDir, updatedAt: _updatedAt, ...rest } = existing;
+    await writeSessionMarkerUnlocked({
+      ...rest,
+      connectedServiceRestartIntent: {
+        v: 1,
+        requestedAtMs,
+      },
+    });
+    return true;
   });
-  return true;
 }
 
 export async function clearSessionMarkerConnectedServiceRestartIntent(pid: number): Promise<void> {
-  const existing = await readSessionMarkerForPid(pid);
-  if (!existing?.connectedServiceRestartIntent) return;
+  await runWithSessionMarkerMutationLock(pid, async () => {
+    const existing = await readSessionMarkerForPid(pid);
+    if (!existing?.connectedServiceRestartIntent) return;
 
-  const {
-    happyHomeDir: _happyHomeDir,
-    updatedAt: _updatedAt,
-    connectedServiceRestartIntent: _connectedServiceRestartIntent,
-    ...rest
-  } = existing;
-  await writeSessionMarker(rest);
+    const {
+      happyHomeDir: _happyHomeDir,
+      updatedAt: _updatedAt,
+      connectedServiceRestartIntent: _connectedServiceRestartIntent,
+      ...rest
+    } = existing;
+    await writeSessionMarkerUnlocked(rest);
+  });
 }
 
 export async function promoteSessionMarkerConnectedServiceRestartIntent(params: Readonly<{

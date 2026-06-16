@@ -1434,6 +1434,7 @@ describe('runCodex CodexACP resume behavior', () => {
           },
           isolate: false,
           hash: 'hash-compact',
+          maxUserMessageSeq: 63,
         };
       }
       return null;
@@ -1459,6 +1460,72 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(compactContext).toHaveBeenCalledWith('/compact');
     expect(sendPrompt).not.toHaveBeenCalled();
     expect(flushTurn).toHaveBeenCalled();
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(63);
+  });
+
+  it('confirms locally consumed /clear commands when provider delivery is deferred', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+
+    const reset = vi.fn(async () => undefined);
+    const sendPrompt = vi.fn(async () => undefined);
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => ({
+      getSessionId: () => 'thread_1',
+      supportsInFlightSteer: () => false,
+      isTurnInFlight: () => false,
+      beginTurn: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      reset,
+      startOrLoad: vi.fn(async () => {}),
+      setSessionMode: vi.fn(async () => {}),
+      setSessionModel: vi.fn(async () => {}),
+      setSessionConfigOption: vi.fn(async () => {}),
+      steerPrompt: vi.fn(async () => {}),
+      sendPrompt,
+      compactContext: vi.fn(async () => {}),
+      flushTurn: vi.fn(async () => {}),
+      rollbackConversation: vi.fn(async () => ({ ok: true, target: { type: 'latest_turn' }, threadId: 'thread_1' })),
+    }));
+
+    let waitCallCount = 0;
+    sessionInputConsumerWaitForNextInputImpl = async () => {
+      waitCallCount += 1;
+      if (waitCallCount === 1) {
+        return {
+          message: '/clear',
+          mode: {
+            permissionMode: 'default',
+            permissionModeUpdatedAt: 1,
+          },
+          isolate: false,
+          hash: 'hash-clear',
+          maxUserMessageSeq: 64,
+        };
+      }
+      return null;
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+      codexBackendMode: 'appServer',
+    } as any)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+
+    expect(reset).toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(64);
   });
 
   it('passes the requested directory to the Codex app-server runtime', async () => {
@@ -1926,6 +1993,115 @@ describe('runCodex CodexACP resume behavior', () => {
     if (!outcome.ok) {
       expect(outcome.error).toEqual(expect.objectContaining({ message: 'wait-called' }));
     }
+  });
+
+  it('requeues resolved in-flight steer prompts reported undeliverable before provider acceptance', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+
+    initializeBackendRunSessionSpy.mockImplementationOnce(async (opts: any) => {
+      const run = await initializeDefaultBackendRunSession(opts);
+      let metadata: any = {
+        codexSessionId: 'thread-app-server',
+        codexBackendMode: 'appServer',
+        replaySeedV1: {
+          v: 1,
+          seedText: 'STEER REPLAY SEED',
+          sourceSessionId: 'parent-session',
+          sourceCutoffSeqInclusive: 42,
+          createdAtMs: 123,
+        },
+      };
+      Object.assign(run.session, {
+        getMetadataSnapshot: vi.fn(() => metadata),
+        updateMetadata: vi.fn(async (updater: (current: any) => any) => {
+          metadata = updater(metadata);
+        }),
+      });
+      return run;
+    });
+
+    let acceptedPromptCallback: ((input: Readonly<{ userMessageSeq: number | null }>) => void) | null = null;
+    let undeliverableCallback:
+      ((prompts: ReadonlyArray<Readonly<{ text: string; userMessageSeq: number | null }>>) => void)
+      | null = null;
+    const steerPrompt = vi.fn(async (_prompt: string, options?: { userMessageSeq?: number | null }) => {
+      const userMessageSeq = options?.userMessageSeq ?? null;
+      if (steerPrompt.mock.calls.length === 1) {
+        undeliverableCallback?.([{ text: 'not-used-for-requeue-lookup', userMessageSeq }]);
+        return;
+      }
+      acceptedPromptCallback?.({ userMessageSeq });
+    });
+    const appServerRuntime = {
+      getSessionId: () => 'thread-app-server',
+      supportsInFlightSteer: () => true,
+      isTurnInFlight: () => true,
+      beginTurn: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      reset: vi.fn(async () => {}),
+      startOrLoad: vi.fn(async () => {}),
+      setSessionMode: vi.fn(async () => {}),
+      setSessionModel: vi.fn(async () => {}),
+      setSessionConfigOption: vi.fn(async () => {}),
+      steerPrompt,
+      sendPrompt: vi.fn(async () => {}),
+      setOnPromptAcceptedByProvider: vi.fn((callback) => {
+        acceptedPromptCallback = callback;
+      }),
+      setOnUndeliverablePrompts: vi.fn((callback) => {
+        undeliverableCallback = callback;
+      }),
+      flushTurn: vi.fn(async () => {}),
+      rollbackConversation: vi.fn(async () => ({ ok: true as const, target: { type: 'latest_turn' }, threadId: 'thread-app-server' })),
+    };
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => appServerRuntime);
+
+    let waitCallCount = 0;
+    let observedRequeuedBatch: string | null = null;
+    sessionInputConsumerWaitForNextInputImpl = async (opts) => {
+      waitCallCount += 1;
+      if (waitCallCount > 1) return null;
+      if (waitCallCount === 1) {
+        if (!lastOnUserMessageHandler) {
+          throw new Error('missing-onUserMessage-handler');
+        }
+        lastOnUserMessageHandler({
+          content: { text: 'steer after replay seed' },
+          meta: { source: 'steer-undeliverable-test' },
+          localId: 'local-steer-undeliverable',
+        }, { seq: 92 });
+      }
+      const queued = await opts.messageQueue.waitForMessagesAndGetAsString();
+      observedRequeuedBatch = queued?.message ?? null;
+      return queued ?? null;
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'terminal',
+      startingMode: 'remote',
+      codexBackendMode: 'appServer',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+    } as any)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+
+    expect(steerPrompt).toHaveBeenCalledTimes(2);
+    expect(steerPrompt).toHaveBeenNthCalledWith(1, 'STEER REPLAY SEED\n\nsteer after replay seed', expect.objectContaining({ userMessageSeq: 92 }));
+    expect(steerPrompt).toHaveBeenNthCalledWith(2, 'STEER REPLAY SEED\n\nsteer after replay seed', expect.objectContaining({ userMessageSeq: 92 }));
+    expect(observedRequeuedBatch).toBe('STEER REPLAY SEED\n\nsteer after replay seed');
+    expect(appServerRuntime.sendPrompt).not.toHaveBeenCalled();
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(92);
   });
 
   it('provides forced pending-queue reconciliation to the remote wait loop', async () => {
@@ -2527,6 +2703,109 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(sendPrompt).toHaveBeenNthCalledWith(2, expect.any(String), expect.objectContaining({ userMessageSeq: 88 }));
     expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
     expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(88);
+  });
+
+  it('requeues the resolved provider prompt when replay seed was consumed before provider acceptance', async () => {
+    resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
+      happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
+      mcpServers: {},
+    }));
+
+    initializeBackendRunSessionSpy.mockImplementationOnce(async (opts: any) => {
+      const run = await initializeDefaultBackendRunSession(opts);
+      let metadata: any = {
+        replaySeedV1: {
+          v: 1,
+          seedText: 'REPLAY SEED',
+          sourceSessionId: 'parent-session',
+          sourceCutoffSeqInclusive: 42,
+          createdAtMs: 123,
+        },
+      };
+      Object.assign(run.session, {
+        getMetadataSnapshot: vi.fn(() => metadata),
+        updateMetadata: vi.fn(async (updater: (current: any) => any) => {
+          metadata = updater(metadata);
+        }),
+      });
+      return run;
+    });
+
+    let acceptedCallback: ((input: Readonly<{ userMessageSeq: number | null }>) => void) | null = null;
+    let undeliverableCallback:
+      ((prompts: ReadonlyArray<Readonly<{ text: string; userMessageSeq: number | null }>>) => void)
+      | null = null;
+    const sendPrompt = vi.fn(async (_prompt: string, options?: { userMessageSeq?: number | null }) => {
+      const userMessageSeq = options?.userMessageSeq ?? null;
+      if (sendPrompt.mock.calls.length === 1) {
+        undeliverableCallback?.([{ text: 'not-used-for-requeue-lookup', userMessageSeq }]);
+        return;
+      }
+      acceptedCallback?.({ userMessageSeq });
+    });
+    createCodexAppServerRuntimeSpy.mockImplementationOnce(() => ({
+      getSessionId: () => 'thread-app-server',
+      supportsInFlightSteer: () => false,
+      isTurnInFlight: () => false,
+      beginTurn: vi.fn(),
+      cancel: vi.fn(async () => {}),
+      reset: vi.fn(async () => {}),
+      startOrLoad: vi.fn(async () => {}),
+      setSessionMode: vi.fn(async () => {}),
+      setSessionModel: vi.fn(async () => {}),
+      setSessionConfigOption: vi.fn(async () => {}),
+      steerPrompt: vi.fn(async () => {}),
+      sendPrompt,
+      setOnPromptAcceptedByProvider: vi.fn((callback) => {
+        acceptedCallback = callback;
+      }),
+      setOnUndeliverablePrompts: vi.fn((callback) => {
+        undeliverableCallback = callback;
+      }),
+      compactContext: vi.fn(async () => {}),
+      flushTurn: vi.fn(async () => {}),
+      rollbackConversation: vi.fn(async () => ({ ok: true as const, target: { type: 'latest_turn' }, threadId: 'thread-app-server' })),
+    }));
+
+    let waitCallCount = 0;
+    sessionInputConsumerWaitForNextInputImpl = async (opts) => {
+      waitCallCount += 1;
+      if (waitCallCount > 2) return null;
+      if (waitCallCount === 1) {
+        if (!lastOnUserMessageHandler) {
+          throw new Error('missing-onUserMessage-handler');
+        }
+        lastOnUserMessageHandler({
+          content: { text: 'continue after switch' },
+          meta: { source: 'replay-seed-undeliverable-test' },
+          localId: 'local-replay-seed-undeliverable',
+        }, { seq: 89 });
+      }
+      const queued = await opts.messageQueue.waitForMessagesAndGetAsString();
+      return queued ?? null;
+    };
+
+    const { runCodex } = await import('./runCodex');
+    const outcome = await runCodex({
+      credentials: { token: 'test' } as Credentials,
+      startedBy: 'daemon',
+      startingMode: 'remote',
+      codexBackendMode: 'appServer',
+      permissionMode: 'default',
+      permissionModeUpdatedAt: 1,
+    } as any)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+
+    expect(sendPrompt).toHaveBeenCalledTimes(2);
+    expect(sendPrompt).toHaveBeenNthCalledWith(1, 'REPLAY SEED\n\ncontinue after switch', expect.objectContaining({ userMessageSeq: 89 }));
+    expect(sendPrompt).toHaveBeenNthCalledWith(2, 'REPLAY SEED\n\ncontinue after switch', expect.objectContaining({ userMessageSeq: 89 }));
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledTimes(1);
+    expect(lastSessionClient?.confirmUserMessageDeliveredToProvider).toHaveBeenCalledWith(89);
   });
 
   it('surfaces daemon-owned connected-service recovery without duplicating the raw Codex process error', async () => {

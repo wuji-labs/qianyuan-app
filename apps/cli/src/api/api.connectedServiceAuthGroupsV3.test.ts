@@ -108,6 +108,31 @@ describe('ApiClient connected service auth groups v3', () => {
     );
   });
 
+  it('can request an automated active-profile commit that overrides stale runtime cooldown state', async () => {
+    mockPost.mockResolvedValue({ status: 200, data: authGroupResponse('backup', 2) });
+    const api = await ApiClient.create({
+      token: 'happy-token',
+      encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
+    } as any);
+
+    const group = await api.updateConnectedServiceAuthGroupActiveProfile({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      activeProfileId: 'backup',
+      expectedGeneration: 1,
+      overrideRuntimeCooldown: true,
+    });
+
+    expect(group.activeProfileId).toBe('backup');
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/v3/connect/openai-codex/groups/main/active-profile'),
+      { profileId: 'backup', expectedGeneration: 1, overrideRuntimeCooldown: true },
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer happy-token' }),
+      }),
+    );
+  });
+
   it('updates auth group runtime state through the runtime-state contract', async () => {
     mockPatch.mockResolvedValue({ status: 200, data: authGroupResponse('primary', 1) });
     const api = await ApiClient.create({

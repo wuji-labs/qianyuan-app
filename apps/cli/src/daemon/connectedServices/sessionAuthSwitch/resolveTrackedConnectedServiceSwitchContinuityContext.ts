@@ -6,9 +6,6 @@ import {
   type ConnectedServiceMaterializationIdentityV1,
 } from '@happier-dev/protocol';
 
-import {
-  resolveConnectedServiceCandidatePersistedSessionFile,
-} from '@/backends/catalog';
 import type { CatalogAgentId } from '@/backends/types';
 import type { TrackedSession } from '@/daemon/types';
 import {
@@ -27,6 +24,11 @@ type ResolvedTrackedResumeContext = Readonly<{
   vendorResumeId: string | null;
   candidatePersistedSessionFile: string | null;
 }>;
+
+type ResolveConnectedServiceCandidatePersistedSessionFile = (
+  agentId: CatalogAgentId,
+  metadata: unknown,
+) => string | null;
 
 export function resolveTrackedConnectedServiceMaterializationIdentity(input: Readonly<{
   tracked: ContinuityTrackedSession | null;
@@ -71,16 +73,18 @@ function resolveTrackedConnectedServiceResumeContext(input: Readonly<{
   persistedSessionMetadata?: unknown;
   vendorResumeId?: string | null;
   candidatePersistedSessionFile?: string | null;
+  resolveCandidatePersistedSessionFile?: ResolveConnectedServiceCandidatePersistedSessionFile;
 }>): ResolvedTrackedResumeContext {
   const trackedMetadata = input.tracked?.happySessionMetadataFromLocalWebhook ?? null;
   const persistedMetadata = input.persistedSessionMetadata ?? null;
+  const resolveCandidatePersistedSessionFile = input.resolveCandidatePersistedSessionFile;
   const trackedMetadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(input.agentId, trackedMetadata);
-  const trackedMetadataCandidatePersistedSessionFile = trackedMetadata
-    ? resolveConnectedServiceCandidatePersistedSessionFile(input.agentId, trackedMetadata)
+  const trackedMetadataCandidatePersistedSessionFile = trackedMetadata && resolveCandidatePersistedSessionFile
+    ? resolveCandidatePersistedSessionFile(input.agentId, trackedMetadata)
     : null;
   const persistedMetadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(input.agentId, persistedMetadata);
-  const persistedMetadataCandidatePersistedSessionFile = persistedMetadata
-    ? resolveConnectedServiceCandidatePersistedSessionFile(input.agentId, persistedMetadata)
+  const persistedMetadataCandidatePersistedSessionFile = persistedMetadata && resolveCandidatePersistedSessionFile
+    ? resolveCandidatePersistedSessionFile(input.agentId, persistedMetadata)
     : null;
   const trackedVendorResumeId = normalizeOptionalString(input.tracked?.vendorResumeId);
   const trackedSpawnResume = normalizeOptionalString(input.tracked?.spawnOptions?.resume);
@@ -139,6 +143,7 @@ export function resolveTrackedConnectedServiceSwitchContinuityContext(input: Rea
   vendorResumeId?: string | null;
   cwd?: string | null;
   candidatePersistedSessionFile?: string | null;
+  resolveCandidatePersistedSessionFile?: ResolveConnectedServiceCandidatePersistedSessionFile;
   /**
    * Freshly materialized runtime-auth selection (opaque), when the switch rematerialized the target
    * BEFORE continuity. Its materialized env/root take precedence over the tracked session's
@@ -160,6 +165,7 @@ export function resolveTrackedConnectedServiceSwitchContinuityContext(input: Rea
     persistedSessionMetadata: input.persistedSessionMetadata,
     vendorResumeId: input.vendorResumeId,
     candidatePersistedSessionFile: input.candidatePersistedSessionFile,
+    resolveCandidatePersistedSessionFile: input.resolveCandidatePersistedSessionFile,
   });
   const effectiveIdentity = resolveTrackedConnectedServiceMaterializationIdentity({
     tracked: input.tracked,

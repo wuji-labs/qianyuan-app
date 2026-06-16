@@ -6,9 +6,12 @@ import { isAllowedExactEnvKey } from '@/utils/env/isAllowedExactEnvKey';
 export type ZellijCommandResult = Readonly<{ exitCode: number; stdout: string; stderr: string }>;
 
 export class ZellijActionTimeoutError extends Error {
+  readonly action: string;
+
   constructor(action: string) {
     super(`zellij ${action} timed out`);
     this.name = 'ZellijActionTimeoutError';
+    this.action = action;
   }
 }
 

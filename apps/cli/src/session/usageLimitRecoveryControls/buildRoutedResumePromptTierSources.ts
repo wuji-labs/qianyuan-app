@@ -11,7 +11,7 @@ import {
   type ConnectedServiceId,
 } from '@happier-dev/protocol';
 
-import { ApiClient } from '@/api/api';
+import { createConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
 import { getSessionUsageLimitRecoveryControlAdapter } from '@/backends/catalog';
 import type { Credentials } from '@/persistence';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -87,7 +87,7 @@ export function buildRoutedResumePromptTierSources(
       const groupRef = readGroupRefFromIntent(params.metadata)
         ?? readGroupRefFromLatestIssue(params.rawSession);
       if (!groupRef) return null;
-      const api = await (params.createGroupPolicyApi ?? ApiClient.create)(credentials);
+      const api = await (params.createGroupPolicyApi ?? createConnectedServiceCredentialApi)(credentials);
       const group = await api.getConnectedServiceAuthGroup(groupRef);
       return group?.policy ?? null;
     },

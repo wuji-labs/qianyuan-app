@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { STANDARD_CONTINUATION_RESUME_PROMPT } from './continuationResumePrompt';
+
 type ContinuationModule = Readonly<{
   isContinuationRecoveryAwaitingProviderActivityStatus: (status: string) => boolean;
   createSessionContinuationRecoveryController: (deps: {
@@ -140,7 +142,7 @@ describe('session continuation recovery', () => {
     })).resolves.toEqual({ status: 'already_awaiting_provider_activity' });
 
     expect(sentPrompts).toHaveLength(1);
-    expect(sentPrompts[0]).toBe('The interrupted turn was recovered. Continue from where you left off.');
+    expect(sentPrompts[0]).toBe(STANDARD_CONTINUATION_RESUME_PROMPT);
   });
 
   it('sends the account-level custom resume prompt when the effective mode is custom', async () => {
@@ -188,7 +190,7 @@ describe('session continuation recovery', () => {
       },
     })).resolves.toEqual({ status: 'awaiting_provider_activity' });
 
-    expect(sentPrompts).toEqual(['The interrupted turn was recovered. Continue from where you left off.']);
+    expect(sentPrompts).toEqual([STANDARD_CONTINUATION_RESUME_PROMPT]);
   });
 
   it('falls back to the standard resume prompt when custom mode has no custom text source', async () => {
@@ -211,7 +213,7 @@ describe('session continuation recovery', () => {
       },
     })).resolves.toEqual({ status: 'awaiting_provider_activity' });
 
-    expect(sentPrompts).toEqual(['The interrupted turn was recovered. Continue from where you left off.']);
+    expect(sentPrompts).toEqual([STANDARD_CONTINUATION_RESUME_PROMPT]);
   });
 
   it('preserves idempotency through async metadata stores', async () => {

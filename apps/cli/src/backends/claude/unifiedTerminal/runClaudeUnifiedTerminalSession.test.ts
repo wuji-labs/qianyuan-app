@@ -3463,6 +3463,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
     const abortController = createAbortableSignal();
     const injected: string[] = [];
     const onTerminalInjectionFailure = vi.fn();
+    const returnUnconsumedMessage = vi.fn();
     const handle: TerminalHostHandle = {
       kind: 'zellij',
       sessionName: 'happier-claude-session-test',
@@ -3552,6 +3553,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
     const abortController = createAbortableSignal();
     const injected: string[] = [];
     const onTerminalInjectionFailure = vi.fn();
+    const returnUnconsumedMessage = vi.fn();
     const handle: TerminalHostHandle = {
       kind: 'zellij',
       sessionName: 'happier-claude-session-test',
@@ -3599,6 +3601,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
       createSessionName: () => 'happier-claude-session-test',
       providerAcceptanceTimeoutMs: 20,
       onTerminalInjectionFailure,
+      returnUnconsumedMessage,
     })
       .then(() => {
         settlement = { kind: 'resolved' };
@@ -3626,6 +3629,7 @@ describe('runClaudeUnifiedTerminalSession', () => {
         code: 'claude_unified_terminal_injection_failed',
         failureState: 'failed_ambiguous',
       }));
+      expect(returnUnconsumedMessage).not.toHaveBeenCalled();
     } finally {
       abortController.abort();
       await sessionPromise;

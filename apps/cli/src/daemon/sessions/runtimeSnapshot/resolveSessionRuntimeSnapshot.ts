@@ -2,11 +2,15 @@ import type { PermissionMode } from '@/api/types';
 import { isPermissionMode } from '@/api/types';
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
 import {
+  AGENT_IDS,
   LEGACY_ACP_SESSION_MODE_OVERRIDE_KEY,
+  inferAgentIdFromSessionMetadata,
   resolveMetadataStringOverrideStateV1FromAliases,
   resolveMetadataStringOverrideV1,
   resolvePermissionIntentFromSessionMetadata,
+  resolveVendorResumeIdFromSessionMetadata,
   SESSION_MODE_OVERRIDE_KEY,
+  type AgentId,
 } from '@happier-dev/agents';
 import {
   ConnectedServiceBindingsV1Schema,
@@ -72,6 +76,13 @@ function normalizeFiniteTimestamp(value: unknown): number | null {
 
 function readSessionId(options: SpawnSessionOptions): string | null {
   return normalizeNonEmptyString(options.existingSessionId) ?? normalizeNonEmptyString(options.sessionId);
+}
+
+function readAgentIdFromOptions(options: SpawnSessionOptions | null | undefined): AgentId | null {
+  const rawAgentId = options?.backendTarget?.kind === 'builtInAgent' ? options.backendTarget.agentId : null;
+  return typeof rawAgentId === 'string' && (AGENT_IDS as readonly string[]).includes(rawAgentId)
+    ? rawAgentId as AgentId
+    : null;
 }
 
 function parseConnectedServices(value: unknown): ConnectedServiceBindingsV1 | null {
@@ -230,11 +241,18 @@ function readModelFromMetadata(
 }
 
 function chooseVendorResumeId(params: ResolveSessionRuntimeSnapshotParams): SessionRuntimeSnapshot['vendorResumeId'] {
+  const metadata = params.persistedMetadata ?? null;
+  const agentId =
+    readAgentIdFromOptions(params.incomingOptions)
+    ?? readAgentIdFromOptions(params.trackedSpawnOptions)
+    ?? inferAgentIdFromSessionMetadata(metadata);
+  const metadataVendorResumeId = resolveVendorResumeIdFromSessionMetadata(agentId, metadata);
   const value =
     normalizeNonEmptyString(params.incomingOptions.resume)
     ?? normalizeNonEmptyString(params.trackedSpawnOptions?.resume)
     ?? normalizeNonEmptyString(params.trackedVendorResumeId)
-    ?? normalizeNonEmptyString(params.persistedVendorResumeId);
+    ?? normalizeNonEmptyString(params.persistedVendorResumeId)
+    ?? normalizeNonEmptyString(metadataVendorResumeId);
   return value ? { value, updatedAt: null } : null;
 }
 

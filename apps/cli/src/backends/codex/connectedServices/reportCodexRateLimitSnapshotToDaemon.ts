@@ -84,6 +84,10 @@ export async function reportCodexRateLimitSnapshotToDaemon(input: Readonly<{
   session?: ConnectedServiceRuntimeAuthMetadataSession | null;
   sessionId: string;
   rawSnapshot: unknown;
+  // Live provider-account proof supplied by Codex app-server `account/read`.
+  // Do not substitute auth-store identity for connected-service sessions.
+  activeAccountId?: string | null;
+  accountLabel?: string | null;
   nowMs?: number;
   notify?: NotifyQuotaSnapshot;
 }>): Promise<void> {
@@ -92,8 +96,8 @@ export async function reportCodexRateLimitSnapshotToDaemon(input: Readonly<{
   const identity = selectedProfileId
     ? {
         profileId: selectedProfileId,
-        activeAccountId: null,
-        accountLabel: null,
+        activeAccountId: input.activeAccountId ?? null,
+        accountLabel: input.accountLabel ?? null,
       }
     : nativeIdentity;
 

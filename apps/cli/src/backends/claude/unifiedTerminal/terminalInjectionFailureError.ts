@@ -44,3 +44,14 @@ export function isClaudeUnifiedTerminalTerminalInjectionFailureError(
   return isClaudeUnifiedTerminalInjectionFailureError(error)
     && (error as { failureState?: unknown }).failureState !== 'failed_ambiguous';
 }
+
+export function isClaudeUnifiedTerminalRecoverableProviderAcceptanceUnknownFailure(
+  error: unknown,
+): error is ClaudeUnifiedTerminalInjectionFailureError {
+  return isClaudeUnifiedTerminalInjectionFailureError(error)
+    && (error as { failureState?: unknown }).failureState === 'failed_terminal'
+    && (error as { reason?: unknown }).reason === 'timeout'
+    && (error as { phase?: unknown }).phase === 'after_enter_unknown'
+    && (error as { duplicateRisk?: unknown }).duplicateRisk !== 'none'
+    && (error as { recoverable?: unknown }).recoverable === true;
+}

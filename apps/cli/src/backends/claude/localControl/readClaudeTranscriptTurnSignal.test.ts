@@ -51,6 +51,28 @@ describe('readClaudeTranscriptTurnSignal', () => {
     ).toEqual({ type: 'completion_candidate', providerTurnId: null, source: 'claude_transcript_compact_boundary' });
   });
 
+  it('treats auto compact boundaries as continuation instead of completion', () => {
+    expect(
+      readClaudeTranscriptTurnSignal({
+        type: 'system',
+        uuid: 'auto-compact-boundary-1',
+        subtype: 'compact_boundary',
+        compactMetadata: { trigger: 'auto' },
+        session_id: 'claude-session-after-auto-compact',
+      } as any),
+    ).toEqual({ type: 'continuation_detected', providerTurnId: null, source: 'claude_transcript_auto_compact_boundary' });
+
+    expect(
+      readClaudeTranscriptTurnSignal({
+        type: 'system',
+        uuid: 'auto-compact-boundary-2',
+        subtype: 'compact_boundary',
+        compact_metadata: { trigger: 'auto' },
+        session_id: 'claude-session-after-auto-compact',
+      } as any),
+    ).toEqual({ type: 'continuation_detected', providerTurnId: null, source: 'claude_transcript_auto_compact_boundary' });
+  });
+
   it('detects synthetic assistant API-error rate-limit records as failed terminal events', () => {
     expect(
       readClaudeTranscriptTurnSignal({

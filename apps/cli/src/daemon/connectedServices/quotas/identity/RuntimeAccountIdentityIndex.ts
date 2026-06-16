@@ -45,18 +45,23 @@ export class RuntimeAccountIdentityIndex {
     if (!providerAccountId) return { status: 'suppressed', reason: 'missing_provider_account_id' };
     const observedAtMs = normalizeObservedAtMs(input.observedAtMs);
     if (observedAtMs === null) return { status: 'suppressed', reason: 'invalid_observed_at' };
+    const groupId = trimOrNull(input.groupId);
+    const groupGeneration = normalizeGeneration(input.groupGeneration);
+    if (groupId && groupGeneration === null) {
+      return { status: 'suppressed', reason: 'missing_group_generation' };
+    }
 
     this.bySessionId.set(sessionId, {
       sessionId,
       serviceId: input.serviceId,
-      groupId: trimOrNull(input.groupId),
+      groupId,
       profileId,
       providerAccountId,
       accountLabel: trimOrNull(input.accountLabel),
       observedAtMs,
       source: input.source,
       proofStrength: 'exact',
-      groupGeneration: normalizeGeneration(input.groupGeneration),
+      groupGeneration,
     });
     return { status: 'recorded' };
   }

@@ -84,6 +84,7 @@ export type ClaudeUnifiedInputArbiter<Mode = unknown> = Readonly<{
   enqueueUiMessage(batch: ClaudeUnifiedPromptBatch<Mode>): Promise<void>;
   observeLifecycle(observation: TerminalLifecycleObservation): void;
   observeUserTypingState(state: Readonly<{ userTyping: boolean; observedAtMs?: number | undefined }>): void;
+  observePromptCustodyByTerminal(batch: ClaudeUnifiedPromptBatch<Mode>): Promise<boolean>;
   confirmPromptAcceptedByProvider(): Promise<boolean>;
   confirmPromptAcceptedByProviderIf(matcher: (batch: ClaudeUnifiedPromptBatch<Mode>) => boolean): Promise<boolean>;
   drainWhenSafe(): Promise<void>;
@@ -93,6 +94,9 @@ export type ClaudeUnifiedInputArbiter<Mode = unknown> = Readonly<{
 
 export type ClaudeUnifiedInputArbiterSnapshot = Readonly<{
   queuedCount: number;
+  pendingInjectionCount: number;
+  terminalCustodyCount: number;
+  providerAcceptancePendingCount: number;
   disposed: boolean;
   turnState: TerminalTurnState;
   permissionBlocked: boolean;

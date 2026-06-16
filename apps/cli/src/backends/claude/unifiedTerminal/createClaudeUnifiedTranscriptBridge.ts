@@ -108,6 +108,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
   claudeConfigDir?: string | null | undefined;
   onMessage?: ((message: RawJSONLines) => void) | undefined;
   onTranscriptMessage?: ((message: RawJSONLines) => void) | undefined;
+  onRawTranscriptValue?: ((value: unknown) => void) | undefined;
   onSessionFound?: ClaudeUnifiedTranscriptBridgeSessionFound | undefined;
   onTranscriptMissing?: ((info: { sessionId: string; filePath: string }) => void) | undefined;
   transcriptMissingWarningMs?: number | undefined;
@@ -231,6 +232,7 @@ export function createClaudeUnifiedTranscriptBridge(opts: Readonly<{
             opts.onTranscriptMessage?.(message);
           }
         },
+        onRawJsonlValue: opts.onRawTranscriptValue,
         onTranscriptMissing: opts.onTranscriptMissing,
         transcriptMissingWarningMs: opts.transcriptMissingWarningMs,
         initialProcessedMessageKeys: committedClaudeJsonlMessageKeys,

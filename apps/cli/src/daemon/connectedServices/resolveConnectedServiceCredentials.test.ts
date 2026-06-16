@@ -4,7 +4,7 @@ import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol';
 
 import { buildConnectedServiceCredentialRecord } from '@happier-dev/protocol';
 import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
-import type { ApiClient } from '@/api/api';
+import type { ConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
 import type { Credentials } from '@/persistence';
 
 describe('resolveConnectedServiceCredentials', () => {
@@ -47,7 +47,7 @@ describe('resolveConnectedServiceCredentials', () => {
 
     const opened = await resolveConnectedServiceCredentials({
       credentials,
-      api: api as unknown as ApiClient,
+      api: api as ConnectedServiceCredentialApi,
       bindings: [{ serviceId: 'openai-codex', profileId: 'work' }],
     });
 
@@ -86,7 +86,7 @@ describe('resolveConnectedServiceCredentials', () => {
 
     await expect(resolveConnectedServiceCredentials({
       credentials,
-      api: api as unknown as ApiClient,
+      api: api as ConnectedServiceCredentialApi,
       bindings: [{ serviceId: 'openai-codex', profileId: 'work' }],
     })).resolves.toEqual(new Map([['openai-codex', record]]));
 
@@ -128,7 +128,7 @@ describe('resolveConnectedServiceCredentials', () => {
 
     await expect(resolveConnectedServiceCredentials({
       credentials,
-      api: api as unknown as ApiClient,
+      api: api as ConnectedServiceCredentialApi,
       bindings: [{ serviceId: 'openai-codex', profileId: 'work' }],
     })).resolves.toEqual(new Map([['openai-codex', record]]));
 
@@ -182,7 +182,7 @@ describe('resolveConnectedServiceCredentials', () => {
 
     await expect(resolveConnectedServiceCredentials({
       credentials,
-      api: api as unknown as ApiClient,
+      api: api as ConnectedServiceCredentialApi,
       bindings: [{ serviceId: 'openai-codex', profileId: 'work' }],
     })).resolves.toEqual(new Map([['openai-codex', record]]));
 

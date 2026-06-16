@@ -72,6 +72,12 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
   initialPermissionMode?: EnhancedMode['permissionMode'] | undefined;
   queuedBannerCheckDelayMs?: number | undefined;
   /**
+   * Fired when the post-injection screen probe sees Claude's native "queued messages" banner.
+   * This is terminal-custody evidence, not provider acceptance: it suppresses duplicate retries
+   * while the arbiter still waits for hook/JSONL confirmation before consuming the queue head.
+   */
+  onPromptCustodyByTerminal?: ((batch: ClaudeUnifiedPromptBatch<Mode>) => void | Promise<void>) | undefined;
+  /**
    * Lane P (O-design Seam A): de-duplicated tee of the SESSION-level steer availability so the
    * launcher can publish it to agentState. Payload-specific refusals (permission-mode change) are
    * deliberately NOT teed — the UI computes those locally and synchronously.
@@ -344,9 +350,9 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
       if (disposed) return;
       const captureInputState = opts.hostAdapter.captureInputState;
       if (!captureInputState) return;
-      // Diagnostic-only verification (D19): shortly after a steer write, the TUI should show the
-      // "Press up to edit queued messages" banner. Visibility is reported as telemetry evidence; it
-      // never gates the prompt (the arbiter owns acceptance via turn-end provider evidence).
+      // Shortly after a steer write, the TUI should show the "Press up to edit queued messages"
+      // banner. That is terminal-custody evidence: it is strong enough to stop duplicate retries
+      // and let the arbiter inject later prompts, but not enough to mark provider acceptance.
       const timer = setTimeout(() => {
         queuedBannerTimers.delete(timer);
         void (async () => {
@@ -357,9 +363,13 @@ export function createClaudeUnifiedInFlightSteerEvaluator<Mode extends EnhancedM
               decision: 'queued_banner_check',
               originKind: batch.origin.kind,
               queuedBannerVisible: screen.queuedMessageBannerVisible,
+              composerDraftPresent: screen.userDraftPresent,
             });
+            if (screen.queuedMessageBannerVisible && !screen.userDraftPresent) {
+              await opts.onPromptCustodyByTerminal?.(batch);
+            }
           } catch {
-            // Screen evidence unavailable; the banner check is best-effort diagnostics.
+            // Screen evidence unavailable; keep the existing provider-confirmation path.
           }
         })();
       }, queuedBannerCheckDelayMs);

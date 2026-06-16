@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createLocalTurnLifecycleController, type LocalTurnLifecycleSnapshot } from '@/agent/localControl/turnLifecycle';
+import { STANDARD_CONTINUATION_RESUME_PROMPT } from '@/daemon/connectedServices/continuation/continuationResumePrompt';
 import type { RawJSONLines } from '../types';
 import { createClaudeLocalLifecycleTracker } from './claudeLocalLifecycleTracker';
 
@@ -56,7 +57,7 @@ describe('createClaudeLocalLifecycleTracker', () => {
       isMeta: true,
       message: {
         role: 'user',
-        content: 'The interrupted turn was recovered. Continue from where you left off.',
+        content: STANDARD_CONTINUATION_RESUME_PROMPT,
       },
     } satisfies RawJSONLines);
     tracker.observeTranscript({
@@ -221,6 +222,51 @@ describe('createClaudeLocalLifecycleTracker', () => {
       lastTerminalReason: 'completed',
     });
     expect(observedSnapshots.some((snapshot) => snapshot.terminal && snapshot.lastTerminalReason === 'completed')).toBe(true);
+    lifecycle.dispose();
+  });
+
+  it('keeps an active Claude turn running across provider auto compact boundaries', () => {
+    const lifecycle = createLocalTurnLifecycleController({ completionQuiescenceMs: 0 });
+    const tracker = createClaudeLocalLifecycleTracker({ lifecycle });
+
+    tracker.observeHook({ session_id: 'sid', hook_event_name: 'UserPromptSubmit' });
+    tracker.observeTranscript({
+      type: 'system',
+      uuid: 'auto-compact-boundary',
+      subtype: 'compact_boundary',
+      compactMetadata: { trigger: 'auto' },
+      session_id: 'sid-after-compact',
+    } as any);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: true,
+      terminal: false,
+      waitingForQuiescence: false,
+    });
+
+    tracker.observeTranscript({
+      type: 'user',
+      uuid: 'tool-result-after-auto-compact',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }],
+      },
+    } as any);
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: true,
+      terminal: false,
+    });
+
+    tracker.observeTranscript({
+      type: 'assistant',
+      uuid: 'summary-complete',
+      message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Done after compact.' }] },
+    } as any);
+
+    expect(lifecycle.snapshot()).toMatchObject({
+      active: false,
+      terminal: true,
+      lastTerminalReason: 'completed',
+    });
     lifecycle.dispose();
   });
 

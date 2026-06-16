@@ -7,10 +7,10 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { logger } from "@/lib";
-import { SDKAssistantMessage, SDKMessage, SDKUserMessage } from "../sdk";
-import { PermissionResult } from "../sdk/types";
-import { Session } from "../session";
-import { EnhancedMode, PermissionMode } from "../loop";
+import type { SDKAssistantMessage, SDKMessage, SDKUserMessage } from "../sdk";
+import type { PermissionResult } from "../sdk/types";
+import type { Session } from "../session";
+import type { EnhancedMode, PermissionMode } from "../loop";
 import { getToolDescriptor } from "./getToolDescriptor";
 import { delay } from "@/utils/time";
 import { recordToolTraceEvent } from '@/agent/tools/trace/toolTrace';

@@ -1427,6 +1427,45 @@ export class RuntimeAuthRecoveryScheduler {
     return waiting;
   }
 
+  async markAwaitingProviderOutcomeProofForResultByKey(input: Readonly<{
+    recoveryKey: string;
+    result: unknown;
+  }>): Promise<RuntimeAuthRecoveryIntent | null> {
+    if (!isLocallyCompleteWithoutProof(input.result)) return null;
+    const intent = this.readByKey(input.recoveryKey);
+    if (!intent) return null;
+    if (isTerminalRuntimeAuthRecoveryStatus(intent.status)) return intent;
+    const pendingTarget = readPendingProofTarget(input.result);
+    const nextRetryAtMs = this.providerOutcomePendingWaitMs === null
+      ? intent.nextRetryAtMs
+      : this.deps.nowMs() + this.providerOutcomePendingWaitMs;
+    const waiting: RuntimeAuthRecoveryIntent = {
+      ...intent,
+      status: 'resumed_awaiting_proof',
+      nextRetryAtMs,
+      lastError: RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR,
+      pendingTargetProfileId: pendingTarget?.activeProfileId ?? intent.pendingTargetProfileId ?? null,
+      pendingTargetGeneration: pendingTarget?.generation ?? intent.pendingTargetGeneration ?? null,
+    };
+    await this.scheduler.upsertByKey({
+      sessionId: waiting.sessionId,
+      recoveryKey: input.recoveryKey,
+      intent: waiting,
+    });
+    this.record({
+      event: 'runtime_auth_recovery_delayed',
+      sessionId: waiting.sessionId,
+      serviceId: waiting.serviceId,
+      groupId: waiting.groupId,
+      profileId: waiting.profileId,
+      failurePhase: waiting.failurePhase,
+      reason: RUNTIME_AUTH_RECOVERY_UNPROVEN_PROVIDER_OUTCOME_ERROR,
+      nextRetryAtMs: waiting.nextRetryAtMs,
+      classification: waiting.lastErrorClassification,
+    });
+    return waiting;
+  }
+
   private async clearSucceededByKey(recoveryKey: string): Promise<RuntimeAuthRecoveryIntent | null> {
     const intent = this.readByKey(recoveryKey);
     if (!intent || intent.status === 'cancelled' || intent.status === 'exhausted') return intent;

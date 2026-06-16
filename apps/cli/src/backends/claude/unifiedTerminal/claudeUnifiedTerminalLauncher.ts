@@ -27,6 +27,7 @@ import {
 } from './surfaceClaudeUnifiedTerminalRuntimeIssue';
 import {
   isClaudeUnifiedTerminalAmbiguousInjectionFailureError,
+  isClaudeUnifiedTerminalRecoverableProviderAcceptanceUnknownFailure,
 } from './terminalInjectionFailureError';
 import { surfacePrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/surfacePrimarySessionRuntimeIssue';
 import { isTerminalHostStartupError } from '@/integrations/terminalHost/errors';
@@ -88,10 +89,22 @@ function startForegroundAttach(params: Readonly<{
   }
 }
 
-function sendUnifiedTerminalHostDeadMessage(session: Session): void {
+function sendUnifiedTerminalHostDeadMessage(
+  session: Session,
+  params: Readonly<{ promptDeliveryWasPending: boolean }>,
+): void {
   session.client.sendSessionEvent({
     type: 'message',
-    message: 'Claude unified terminal host is not alive. The terminal process exited before Happier could send your prompt.',
+    message: params.promptDeliveryWasPending
+      ? 'Claude unified terminal host is not alive. The terminal process exited before Happier could send your prompt.'
+      : 'Claude unified terminal host is not alive. The terminal process exited.',
+  });
+}
+
+function sendUnifiedTerminalDeliveryUnknownMessage(session: Session): void {
+  session.client.sendSessionEvent({
+    type: 'message',
+    message: 'Claude could not confirm whether your queued message reached the terminal. Happier stopped automatic retry to avoid sending the same prompt twice; send a new message or restart the session when you are ready.',
   });
 }
 
@@ -213,12 +226,12 @@ export async function claudeUnifiedTerminalLauncher(
     source: string;
     detail?: string | undefined;
   }>): Promise<void> => {
+    if (event.reason === 'aborted') {
+      await binding.recordPromptTurnCancelled();
+      session.abortCurrentTaskTurn();
+      return;
+    }
     try {
-      if (event.reason === 'aborted') {
-        await binding.recordPromptTurnCancelled();
-        session.abortCurrentTaskTurn();
-        return;
-      }
       if (event.reason === 'failed' && event.source === 'claude_transcript_api_error') {
         await surfacePrimarySessionRuntimeIssue({
           provider: 'claude',
@@ -572,7 +585,9 @@ export async function claudeUnifiedTerminalLauncher(
             logger.debug('[unified]: failed to surface Claude unified terminal host death (non-fatal)', surfaceError);
             return null;
           });
-          sendUnifiedTerminalHostDeadMessage(session);
+          sendUnifiedTerminalHostDeadMessage(session, {
+            promptDeliveryWasPending: Boolean(initialPromptPending || parkedMessage || inFlightStartupMessage),
+          });
           await flushUnifiedStartupFailureSurface(session, 'host_dead');
           binding.notePromptTurnTerminal();
           if (!consumeParkRelaunchBudget()) return { type: 'exit', code: 1 };
@@ -598,6 +613,15 @@ export async function claudeUnifiedTerminalLauncher(
               ? 'invalid_prompt_text'
               : 'managed_settings_option',
           );
+          return { type: 'exit', code: 1 };
+        }
+        if (isClaudeUnifiedTerminalRecoverableProviderAcceptanceUnknownFailure(error)) {
+          session.onThinkingChange(false);
+          await binding.recordPromptTurnCancelled().catch((cancelError) => {
+            logger.debug('[unified]: failed to cancel Claude unified delivery-unknown turn (non-fatal)', cancelError);
+          });
+          sendUnifiedTerminalDeliveryUnknownMessage(session);
+          await flushUnifiedStartupFailureSurface(session, 'provider_acceptance_unknown');
           return { type: 'exit', code: 1 };
         }
         if (isClaudeUnifiedTerminalRuntimeIssueError(error)) {

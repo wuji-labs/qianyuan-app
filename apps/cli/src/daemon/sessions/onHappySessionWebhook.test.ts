@@ -13,6 +13,7 @@ import { createOnHappySessionWebhook } from './onHappySessionWebhook';
 
 type SessionMarkerWriteFn = NonNullable<Parameters<typeof createOnHappySessionWebhook>[0]['writeSessionMarkerFn']>;
 type SessionMarkerWriteArgs = Parameters<SessionMarkerWriteFn>[0];
+type SessionMarkerWriteOptions = Parameters<SessionMarkerWriteFn>[1];
 
 function createMetadata(pid: number, startedBy: 'daemon' | 'terminal', rootPath = '/tmp'): Metadata {
   return {
@@ -285,6 +286,41 @@ describe('createOnHappySessionWebhook', () => {
     });
 
     expect(pidToTrackedSession.get(444)?.vendorResumeId).toBe('vendor-session-444');
+  });
+
+  it('preserves durable connected-service restart intent when refreshing a daemon marker from webhook metadata', async () => {
+    const tracked: TrackedSession = {
+      pid: 445,
+      startedBy: 'daemon',
+    };
+    const pidToTrackedSession = new Map<number, TrackedSession>([[445, tracked]]);
+    const pidToAwaiter = new Map<number, (session: TrackedSession) => void>();
+
+    let markerOptions: SessionMarkerWriteOptions | undefined;
+    let resolveMarker!: () => void;
+    const markerWritten = new Promise<void>((resolve) => {
+      resolveMarker = resolve;
+    });
+
+    const onWebhook = createOnHappySessionWebhook({
+      pidToTrackedSession,
+      pidToAwaiter,
+      getParentPidFn: () => null,
+      findHappyProcessByPidFn: async () => null,
+      writeSessionMarkerFn: async (_args, options) => {
+        markerOptions = options;
+        resolveMarker();
+      },
+    });
+
+    onWebhook('session-daemon-445', {
+      ...createMetadata(445, 'daemon'),
+      flavor: 'codex',
+      codexSessionId: 'vendor-session-445',
+    });
+    await markerWritten;
+
+    expect(markerOptions).toEqual({ preserveConnectedServiceRestartIntent: true });
   });
 
   it('does not resolve daemon awaiter on PID placeholder and resolves on canonical id', () => {

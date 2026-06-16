@@ -1870,6 +1870,126 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
     expect(applied).toEqual(['session-1:backup:2']);
   });
 
+  it('preflights same-account exhausted fanout before committing the group generation', async () => {
+    const commitSwitch = vi.fn(async ({ toProfileId }) => state(toProfileId, 2));
+    const applyGeneration = vi.fn(async () => ({ mode: 'restart_resume' as const }));
+    const preflightApplyGeneration = vi.fn(async () => ({ mode: 'restart_resume' as const }));
+    const current: ConnectedServiceAuthGroupSwitchState = {
+      ...state('primary', 1),
+      policy: { ...DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, strategy: 'least_limited', autoSwitch: true },
+      memberStatesByProfileId: new Map([
+        ['primary', {
+          quotaSnapshot: {
+            capturedAtMs: 1_000,
+            effectiveRemainingPercent: 0,
+          },
+        }],
+        ['backup', {
+          quotaSnapshot: {
+            capturedAtMs: 1_000,
+            effectiveRemainingPercent: 80,
+          },
+        }],
+      ]),
+    };
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => current,
+      commitSwitch,
+      applyGeneration,
+      preflightApplyGeneration,
+    });
+
+    await expect(coordinator.switchBeforeTurn({
+      sessionId: 'session-1',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'same_provider_account_exhausted',
+      observedProfileId: 'primary',
+    })).resolves.toEqual({
+      status: 'generation_apply_failed',
+      activeProfileId: 'backup',
+      generation: 2,
+      errorCode: 'hot_apply_restart_required',
+      diagnostics: {
+        attemptedMode: 'restart_resume',
+        policyReason: 'predictive_soft_switch_hot_apply_required',
+      },
+    });
+
+    expect(preflightApplyGeneration).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-1',
+      activeProfileId: 'backup',
+      generation: 2,
+      reason: 'same_provider_account_exhausted',
+    }));
+    expect(commitSwitch).not.toHaveBeenCalled();
+    expect(applyGeneration).not.toHaveBeenCalled();
+  });
+
+  it('preflights lease-loser observed predictive generations before applying them to the session', async () => {
+    const commitSwitch = vi.fn(async ({ toProfileId }) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return state(toProfileId, 2);
+    });
+    const applyGeneration = vi.fn(async ({ sessionId }) => (
+      sessionId === 'owner-session'
+        ? { mode: 'hot_apply' as const }
+        : { mode: 'restart_resume' as const }
+    ));
+    const preflightApplyGeneration = vi.fn(async ({ sessionId }) => (
+      sessionId === 'owner-session'
+        ? { mode: 'hot_apply' as const }
+        : { mode: 'restart_resume' as const }
+    ));
+    const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+      leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+      nowMs: () => 1_000,
+      quotaFreshnessMs: 60_000,
+      loadState: async () => state('primary', 1),
+      commitSwitch,
+      applyGeneration,
+      preflightApplyGeneration,
+    });
+
+    const owner = coordinator.switchAfterClassifiedFailure({
+      sessionId: 'owner-session',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'same_provider_account_exhausted',
+    });
+    const loser = coordinator.switchAfterClassifiedFailure({
+      sessionId: 'loser-session',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'same_provider_account_exhausted',
+    });
+
+    await expect(owner).resolves.toMatchObject({
+      status: 'switched',
+      activeProfileId: 'backup',
+      generation: 2,
+      mode: 'hot_apply',
+    });
+    await expect(loser).resolves.toEqual({
+      status: 'generation_apply_failed',
+      activeProfileId: 'backup',
+      generation: 2,
+      errorCode: 'hot_apply_restart_required',
+      diagnostics: {
+        attemptedMode: 'restart_resume',
+        policyReason: 'predictive_soft_switch_hot_apply_required',
+      },
+    });
+
+    expect(commitSwitch).toHaveBeenCalledTimes(1);
+    expect(applyGeneration).toHaveBeenCalledTimes(1);
+    expect(applyGeneration).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'owner-session' }));
+    expect(preflightApplyGeneration).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'loser-session' }));
+  });
+
   it('fails closed when an unproven already-advanced pre-turn group profile would require restart-resume application', async () => {
     const current: ConnectedServiceAuthGroupSwitchState = {
       ...state('backup', 2),

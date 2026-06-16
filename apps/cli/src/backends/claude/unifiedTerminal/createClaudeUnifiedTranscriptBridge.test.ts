@@ -27,6 +27,10 @@ async function appendJsonl(path: string, message: RawJSONLines): Promise<void> {
   await appendFile(path, `${JSON.stringify(message)}\n`);
 }
 
+async function appendRawJsonl(path: string, message: unknown): Promise<void> {
+  await appendFile(path, `${JSON.stringify(message)}\n`);
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -77,6 +81,48 @@ describe('createClaudeUnifiedTranscriptBridge', () => {
         type: 'assistant',
         uuid: 'assistant_1',
       }));
+    } finally {
+      await bridge.dispose();
+    }
+  });
+
+  it('observes internal queued-command transcript rows without emitting them as visible messages', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-claude-unified-transcript-raw-'));
+    tempDirs.push(dir);
+    const transcriptPath = join(dir, 'sess_raw.jsonl');
+    await writeFile(transcriptPath, '');
+
+    const onRawTranscriptValue = vi.fn();
+    const onMessage = vi.fn();
+    const onTranscriptMessage = vi.fn();
+    const bridge = createClaudeUnifiedTranscriptBridge({
+      sessionId: 'sess_raw',
+      transcriptPath,
+      workingDirectory: dir,
+      onRawTranscriptValue,
+      onMessage,
+      onTranscriptMessage,
+      transcriptMissingWarningMs: 0,
+    });
+
+    try {
+      await bridge.start({ abortSignal: new AbortController().signal });
+      await appendRawJsonl(transcriptPath, {
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: new Date().toISOString(),
+        sessionId: 'sess_raw',
+        content: 'Please continue from the current point.',
+      });
+
+      await waitUntil(() => onRawTranscriptValue.mock.calls.length === 1);
+      expect(onRawTranscriptValue).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        content: 'Please continue from the current point.',
+      }));
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onTranscriptMessage).not.toHaveBeenCalled();
     } finally {
       await bridge.dispose();
     }

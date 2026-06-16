@@ -12,8 +12,11 @@ import { parseConnectedServiceBindingSelections } from '../parseConnectedService
 import { resolveTrackedConnectedServiceBindingsRaw } from '../trackedSessionConnectedServiceBindings';
 import type { ConnectedServiceQuotasCoordinator } from './ConnectedServiceQuotasCoordinator';
 import type { RuntimeAccountIdentityRecordInput } from './identity/runtimeAccountIdentityTypes';
+import type { QuotaProbeFreshProofResult } from './proof/quotaProbeFreshProof';
+import type { ProviderOutcomeProofKind } from '../recovery/providerOutcomeProof';
 
 type QuotaCoordinatorLike = Pick<ConnectedServiceQuotasCoordinator, 'recordInBandQuotaSnapshot'> & Readonly<{
+  computeQuotaSnapshotMaterialFingerprint?: (snapshot: ConnectedServiceQuotaSnapshotV1) => string;
   recordRuntimeAccountIdentityFromSnapshot?: (input: RuntimeAccountIdentityRecordInput) => unknown;
   recordAccountExhaustionAndFanout?: (input: Readonly<{
     sourceSessionId: string;
@@ -24,6 +27,16 @@ type QuotaCoordinatorLike = Pick<ConnectedServiceQuotasCoordinator, 'recordInBan
     resetAtMs: number | null;
     reason: 'usage_limit';
   }>) => Promise<unknown>;
+  resolveQuotaProbeFreshProof?: (input: Readonly<{
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    groupId: string | null;
+    expectedGroupGeneration: number | null;
+    currentGroupGeneration: number | null;
+    expectedMaterialFingerprint: string | null;
+    snapshotMaterialFingerprint: string | null;
+    snapshot: ConnectedServiceQuotaSnapshotV1;
+  }>) => QuotaProbeFreshProofResult;
 }>;
 
 function normalizeSessionId(value: unknown): string {
@@ -54,6 +67,13 @@ export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input
   getChildren: () => ReadonlyArray<TrackedSession>;
   quotaCoordinator: QuotaCoordinatorLike | null;
   publishQuotaRef?: (ref: Readonly<{ sessionId: string; serviceId: ConnectedServiceId; profileId: string }>) => Promise<void>;
+  recordProviderOutcomeProof?: (proof: Readonly<{
+    sessionId: string;
+    serviceId: ConnectedServiceId;
+    profileId: string;
+    groupId: string | null;
+    proofKind: Extract<ProviderOutcomeProofKind, 'quota_probe_fresh'>;
+  }>) => Promise<void> | void;
   runtimeQuotaSnapshots: ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore;
   sessionId: string;
   serviceId: ConnectedServiceId;
@@ -112,7 +132,55 @@ export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input
     }
   }
 
-  if (input.quotaCoordinator?.recordRuntimeAccountIdentityFromSnapshot && input.snapshot.activeAccountId) {
+  const activeGroupSelectionMatchesSnapshotProfile =
+    activeGroupSelection?.kind === 'group'
+    && activeGroupSelection.activeProfileId === input.snapshot.profileId;
+  const directProfileSelectionMatchesSnapshotProfile =
+    selection?.kind === 'profile'
+    && selection.profileId === input.snapshot.profileId;
+  const canUseSnapshotForSameAccountIdentity = selection === null
+    || directProfileSelectionMatchesSnapshotProfile
+    || activeGroupSelectionMatchesSnapshotProfile;
+
+  if (
+    selection
+    && canUseSnapshotForSameAccountIdentity
+    && input.quotaCoordinator?.resolveQuotaProbeFreshProof
+    && input.recordProviderOutcomeProof
+  ) {
+    const snapshotMaterialFingerprint =
+      input.quotaCoordinator.computeQuotaSnapshotMaterialFingerprint?.(input.snapshot) ?? null;
+    const groupGeneration = activeGroupSelection?.kind === 'group' ? activeGroupSelection.generation : null;
+    try {
+      const proof = input.quotaCoordinator.resolveQuotaProbeFreshProof({
+        serviceId: input.serviceId,
+        profileId: input.snapshot.profileId,
+        groupId: selection.kind === 'group' ? selection.groupId : null,
+        expectedGroupGeneration: groupGeneration,
+        currentGroupGeneration: groupGeneration,
+        expectedMaterialFingerprint: null,
+        snapshotMaterialFingerprint,
+        snapshot: input.snapshot,
+      });
+      if (proof.status === 'proof') {
+        await input.recordProviderOutcomeProof({
+          sessionId: input.sessionId,
+          serviceId: input.serviceId,
+          profileId: input.snapshot.profileId,
+          groupId: selection.kind === 'group' ? selection.groupId : null,
+          proofKind: proof.proofKind,
+        });
+      }
+    } catch {
+      // Fresh quota proof is best-effort; the durable recovery intent remains armed on proof failures.
+    }
+  }
+
+  if (
+    canUseSnapshotForSameAccountIdentity
+    && input.quotaCoordinator?.recordRuntimeAccountIdentityFromSnapshot
+    && input.snapshot.activeAccountId
+  ) {
     input.quotaCoordinator.recordRuntimeAccountIdentityFromSnapshot({
       sessionId: input.sessionId,
       serviceId: input.serviceId,
@@ -129,6 +197,7 @@ export async function recordConnectedServiceRuntimeQuotaSnapshotForSession(input
 
   if (
     selection?.kind === 'group'
+    && activeGroupSelectionMatchesSnapshotProfile
     && input.snapshot.activeAccountId
     && input.quotaCoordinator?.recordAccountExhaustionAndFanout
   ) {

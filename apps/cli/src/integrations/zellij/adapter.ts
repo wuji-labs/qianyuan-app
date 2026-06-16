@@ -323,6 +323,31 @@ function remainingTimeoutMs(deadline: number | undefined): number | undefined {
   return Math.max(0, deadline - Date.now());
 }
 
+function createZellijStartupTimeoutError(params: Readonly<{
+  action: string;
+  sessionName: string;
+  actionTimeoutMs: number;
+  message: string;
+  lastError?: unknown;
+}>): TerminalHostStartupError {
+  const lastError = params.lastError instanceof Error
+    ? params.lastError.message
+    : params.lastError === undefined
+      ? undefined
+      : String(params.lastError);
+  return new TerminalHostStartupError({
+    hostKind: 'zellij',
+    reason: 'startup_action_timeout',
+    message: params.message,
+    diagnostics: {
+      action: params.action,
+      sessionName: params.sessionName,
+      timeoutMs: params.actionTimeoutMs,
+      ...(lastError ? { lastError } : {}),
+    },
+  });
+}
+
 function isZellijMissingSessionOutput(output: string, sessionName: string): boolean {
   const normalizedOutput = output.toLowerCase();
   const normalizedSessionName = sessionName.toLowerCase();
@@ -356,7 +381,13 @@ async function waitForListedZellijSession(params: Readonly<{
     const remainingMs = remainingTimeoutMs(deadline);
     if (remainingMs !== undefined && remainingMs <= 0) {
       const message = lastError instanceof Error ? lastError.message : String(lastError ?? `zellij session "${params.sessionName}" was not listed`);
-      throw new Error(`zellij session was not listed before addressability probing: ${message}`);
+      throw createZellijStartupTimeoutError({
+        action: 'session_listing',
+        sessionName: params.sessionName,
+        actionTimeoutMs: params.actionTimeoutMs,
+        message: `zellij session was not listed before addressability probing: ${message}`,
+        lastError,
+      });
     }
 
     const timeoutMs = remainingMs === undefined
@@ -431,6 +462,25 @@ async function disposeZellijSession(params: Readonly<{
   throw new Error(`zellij kill-session failed: ${result.stderr || result.stdout}`);
 }
 
+function normalizeZellijStartupError(params: Readonly<{
+  error: unknown;
+  sessionName: string;
+  actionTimeoutMs: number;
+}>): unknown {
+  if (isTerminalHostStartupError(params.error)) return params.error;
+  if (!isZellijActionTimeoutError(params.error)) return params.error;
+  return new TerminalHostStartupError({
+    hostKind: 'zellij',
+    reason: 'startup_action_timeout',
+    message: `zellij startup action timed out: ${params.error.message}`,
+    diagnostics: {
+      action: params.error.action,
+      sessionName: params.sessionName,
+      timeoutMs: params.actionTimeoutMs,
+    },
+  });
+}
+
 async function cleanupZellijSessionAndRethrowStartupError(params: Readonly<{
   actions: ZellijActions;
   zellijBinary: string;
@@ -439,6 +489,11 @@ async function cleanupZellijSessionAndRethrowStartupError(params: Readonly<{
   actionTimeoutMs: number;
   error: unknown;
 }>): Promise<never> {
+  const startupError = normalizeZellijStartupError({
+    error: params.error,
+    sessionName: params.sessionName,
+    actionTimeoutMs: params.actionTimeoutMs,
+  });
   try {
     await killZellijSessionOrThrow({
       actions: params.actions,
@@ -448,22 +503,22 @@ async function cleanupZellijSessionAndRethrowStartupError(params: Readonly<{
       actionTimeoutMs: params.actionTimeoutMs,
     });
   } catch (cleanupError) {
-    const startupMessage = params.error instanceof Error ? params.error.message : String(params.error);
+    const startupMessage = startupError instanceof Error ? startupError.message : String(startupError);
     const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-    if (isTerminalHostStartupError(params.error)) {
+    if (isTerminalHostStartupError(startupError)) {
       throw new TerminalHostStartupError({
-        hostKind: params.error.hostKind,
-        reason: params.error.reason,
+        hostKind: startupError.hostKind,
+        reason: startupError.reason,
         message: `zellij startup failed: ${startupMessage}; cleanup failed: ${cleanupMessage}`,
         diagnostics: {
-          ...params.error.diagnostics,
+          ...startupError.diagnostics,
           cleanupError: cleanupMessage,
         },
       });
     }
     throw new Error(`zellij startup failed: ${startupMessage}; cleanup failed: ${cleanupMessage}`);
   }
-  throw params.error;
+  throw startupError;
 }
 
 async function closePaneIfStillPresent(params: Readonly<{
@@ -576,10 +631,24 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
   const deadline = createDeadline(params.actionTimeoutMs);
   const closedPaneIds = new Set<string>();
   let panesAfterLaunch = params.initialPanes;
+
+  function throwBootstrapCleanupDidNotConverge(): never {
+    throw new TerminalHostStartupError({
+      hostKind: 'zellij',
+      reason: 'bootstrap_cleanup_did_not_converge',
+      message: 'zellij bootstrap pane cleanup did not converge',
+      diagnostics: {
+        paneId: params.paneId,
+        closedPaneIds: [...closedPaneIds],
+        actionTimeoutMs: params.actionTimeoutMs,
+      },
+    });
+  }
+
   while (true) {
     const remainingMs = remainingTimeoutMs(deadline);
     if (remainingMs !== undefined && remainingMs <= 0) {
-      throw new Error('zellij bootstrap pane cleanup did not converge');
+      throwBootstrapCleanupDidNotConverge();
     }
     const closedThisPass = await closeBootstrapTerminalPanes({
       actions: params.actions,
@@ -595,7 +664,7 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
     for (const paneId of closedThisPass) closedPaneIds.add(paneId);
     const listTimeoutMs = remainingTimeoutMs(deadline);
     if (listTimeoutMs !== undefined && listTimeoutMs <= 0) {
-      throw new Error('zellij bootstrap pane cleanup did not converge');
+      throwBootstrapCleanupDidNotConverge();
     }
     panesAfterLaunch = await params.actions.listPanes({
       zellijBinary: params.zellijBinary,
@@ -612,7 +681,7 @@ async function closeBootstrapTerminalPanesUntilStable(params: Readonly<{
     if (remainingBootstrapPaneIds.size === 0) return { panes: panesAfterLaunch, closedPaneIds };
     const waitMs = remainingTimeoutMs(deadline);
     if (waitMs !== undefined && waitMs <= 0) {
-      throw new Error('zellij bootstrap pane cleanup did not converge');
+      throwBootstrapCleanupDidNotConverge();
     }
     await wait(Math.min(DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS, waitMs ?? DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS));
   }
@@ -644,7 +713,12 @@ async function waitForLaunchedTerminalPane(params: Readonly<{
 
     const remainingMs = remainingTimeoutMs(deadline);
     if (remainingMs === undefined || remainingMs <= 0) {
-      throw new Error('zellij launch produced no terminal target pane');
+      throw createZellijStartupTimeoutError({
+        action: 'pane_discovery',
+        sessionName: params.sessionName,
+        actionTimeoutMs: params.actionTimeoutMs,
+        message: 'zellij launch produced no terminal target pane before startup deadline',
+      });
     }
     await wait(Math.min(DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS, remainingMs));
   }
@@ -676,7 +750,13 @@ async function waitForAddressableZellijSession(params: Readonly<{
     const remainingMs = remainingTimeoutMs(deadline);
     if (remainingMs === undefined || remainingMs <= 0) {
       const message = lastError instanceof Error ? lastError.message : String(lastError ?? 'unknown error');
-      throw new Error(`zellij session did not become addressable: ${message}`);
+      throw createZellijStartupTimeoutError({
+        action: 'session_addressability',
+        sessionName: params.sessionName,
+        actionTimeoutMs: params.actionTimeoutMs,
+        message: `zellij session did not become addressable before startup deadline: ${message}`,
+        lastError,
+      });
     }
     await wait(Math.min(DEFAULT_LAUNCH_PANE_DISCOVERY_POLL_MS, remainingMs));
   }

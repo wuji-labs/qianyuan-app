@@ -1,6 +1,8 @@
 import type { TerminalHostKind } from './_types';
 
 export type TerminalHostStartupFailureReason =
+  | 'startup_action_timeout'
+  | 'bootstrap_cleanup_did_not_converge'
   | 'pane_disappeared_after_bootstrap_cleanup';
 
 export type TerminalHostStartupErrorParams = Readonly<{

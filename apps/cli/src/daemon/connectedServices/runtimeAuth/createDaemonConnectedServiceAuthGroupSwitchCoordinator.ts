@@ -28,6 +28,7 @@ type AuthGroupApi = Readonly<{
     groupId: string;
     activeProfileId: string;
     expectedGeneration: number;
+    overrideRuntimeCooldown?: boolean;
   }>): Promise<ConnectedServiceAuthGroupV1>;
   updateConnectedServiceAuthGroupRuntimeState?(input: Readonly<{
     serviceId: ConnectedServiceId;
@@ -90,6 +91,21 @@ function assertPredictiveSoftSwitchSessionApplyAllowed(input: Readonly<{
       ...(input.applyMode ? { attemptedMode: input.applyMode } : {}),
     },
   });
+}
+
+function mapConnectedServiceAuthGenerationActionToApplyMode(
+  action: string | undefined,
+): 'hot_apply' | 'restart_resume' | 'spawn_next_turn' | null {
+  switch (action) {
+    case 'hot_applied':
+      return 'hot_apply';
+    case 'metadata_updated':
+      return 'spawn_next_turn';
+    case 'restart_requested':
+      return 'restart_resume';
+    default:
+      return null;
+  }
 }
 
 function buildObservedFailureMemberState(input: Readonly<{
@@ -258,6 +274,16 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     switchReason: ConnectedServiceSessionAuthSwitchReason;
     fromProfileId?: string | null;
   }>) => Promise<Readonly<{ ok: boolean; action?: string; errorCode?: string; diagnostics?: unknown }>>;
+  preflightConnectedServiceAuthGeneration?: (input: Readonly<{
+    sessionId: string;
+    serviceId: ConnectedServiceId;
+    groupId: string;
+    activeProfileId: string | null;
+    generation: number;
+    reason: string;
+    switchReason: ConnectedServiceSessionAuthSwitchReason;
+    fromProfileId?: string | null;
+  }>) => Promise<Readonly<{ ok: boolean; action?: string; errorCode?: string; diagnostics?: unknown }>>;
   switchReasonForApplyGeneration?: ConnectedServiceSessionAuthSwitchReason;
   hydratePersistedQuotaSnapshotsForGroup?: (input: Readonly<{
     serviceId: ConnectedServiceId;
@@ -330,6 +356,7 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
         groupId: input.groupId,
         activeProfileId: input.toProfileId,
         expectedGeneration: input.expectedGeneration,
+        overrideRuntimeCooldown: true,
       });
       await params.onCommittedSwitch?.({
         serviceId,
@@ -361,6 +388,37 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
       },
     } : {}),
     resolveGenerationConflict: resolveApiAuthGroupGenerationConflict,
+    ...(params.preflightConnectedServiceAuthGeneration ? {
+      preflightApplyGeneration: async (input) => {
+        if (!input.sessionId) return undefined;
+        const applied = await params.preflightConnectedServiceAuthGeneration?.({
+          sessionId: input.sessionId,
+          serviceId: input.serviceId as ConnectedServiceId,
+          groupId: input.groupId,
+          activeProfileId: input.activeProfileId,
+          generation: input.generation,
+          reason: input.reason ?? 'unknown',
+          switchReason: params.switchReasonForApplyGeneration ?? 'automatic_runtime_failure',
+          fromProfileId: input.fromProfileId ?? null,
+        });
+        if (applied?.ok) {
+          const mode = mapConnectedServiceAuthGenerationActionToApplyMode(applied.action);
+          assertPredictiveSoftSwitchSessionApplyAllowed({
+            reason: input.reason ?? 'unknown',
+            sessionId: input.sessionId,
+            applyMode: mode,
+          });
+          return {
+            ...(mode === null ? {} : { mode }),
+            ...(applied.diagnostics === undefined ? {} : { diagnostics: applied.diagnostics }),
+          };
+        }
+        throw createConnectedServiceAuthGenerationApplyFailureError({
+          errorCode: applied?.errorCode ?? 'unknown',
+          ...(applied?.diagnostics === undefined ? {} : { diagnostics: applied.diagnostics }),
+        });
+      },
+    } : {}),
     applyGeneration: async (input) => {
       if (input.sessionId && params.applyConnectedServiceAuthGeneration) {
         const applied = await params.applyConnectedServiceAuthGeneration({
@@ -377,18 +435,7 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
           // Map only REAL transitions to an apply mode. An `unchanged` apply performed no restart
           // and no provider application — reporting it as `restart_resume`/`applied` fabricates a
           // transition that never happened (RD-SW-5), so it yields no mode at all.
-          const mode = (() => {
-            switch (applied.action) {
-              case 'hot_applied':
-                return 'hot_apply' as const;
-              case 'metadata_updated':
-                return 'spawn_next_turn' as const;
-              case 'restart_requested':
-                return 'restart_resume' as const;
-              default:
-                return null;
-            }
-          })();
+          const mode = mapConnectedServiceAuthGenerationActionToApplyMode(applied.action);
           assertPredictiveSoftSwitchSessionApplyAllowed({
             reason: input.reason ?? 'unknown',
             sessionId: input.sessionId,

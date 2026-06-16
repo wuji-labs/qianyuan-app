@@ -194,6 +194,61 @@ describe('reattachTrackedSessionsFromMarkers', () => {
     expect(removeSessionMarker).not.toHaveBeenCalledWith(24681);
   });
 
+  it('keeps a dead connected-service restart marker durable when resume is only in marker metadata', async () => {
+    vi.mocked(listSessionMarkers).mockResolvedValue([
+      {
+        pid: 24682,
+        happySessionId: 'session-dead-metadata-restart',
+        happyHomeDir: '/tmp/happy',
+        createdAt: 1,
+        updatedAt: 2,
+        startedBy: 'daemon',
+        cwd: '/tmp/project',
+        metadata: {
+          flavor: 'codex',
+          codexSessionId: 'codex-thread-from-marker-metadata',
+        },
+        respawn: {
+          version: 1,
+          directory: '/tmp/project',
+          backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+        },
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 2_500,
+        },
+      } satisfies TestConnectedServiceRestartIntentMarker,
+    ]);
+    vi.mocked(findAllHappyProcesses).mockResolvedValue([]);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
+
+    const pidToTrackedSession = new Map<number, TrackedSession>();
+    const result = await reattachTrackedSessionsFromMarkers({ pidToTrackedSession });
+
+    expect(pidToTrackedSession.size).toBe(0);
+    expect(result).toEqual({
+      orphanedDeadDaemonSessions: [],
+      connectedServiceRestartIntents: [
+        {
+          kind: 'dead',
+          sessionId: 'session-dead-metadata-restart',
+          pid: 24682,
+          requestedAtMs: 2_500,
+          spawnOptions: {
+            directory: '/tmp/project',
+            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+            resume: 'codex-thread-from-marker-metadata',
+            approvedNewDirectoryCreation: true,
+          },
+          vendorResumeId: 'codex-thread-from-marker-metadata',
+        },
+      ],
+    });
+    expect(removeSessionMarker).not.toHaveBeenCalledWith(24682);
+  });
+
   it('recovers a markerless daemon-spawned session from the live process command and heals its marker', async () => {
     vi.mocked(listSessionMarkers).mockResolvedValue([]);
     vi.mocked(findAllHappyProcesses).mockResolvedValue([

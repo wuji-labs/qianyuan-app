@@ -52,6 +52,7 @@ export type ClaudeUnifiedTelemetryEvent =
           reason?: TelemetryReason | undefined;
           originKind: 'ui_pending' | 'ui_immediate' | 'rpc';
           queuedBannerVisible?: boolean | undefined;
+          composerDraftPresent?: boolean | undefined;
           /** Length of the composer draft blocking a steer (`user_draft` evidence, lane X). */
           draftLength?: number | undefined;
           /** True when the blocking draft exactly matches a text the runtime itself wrote. */

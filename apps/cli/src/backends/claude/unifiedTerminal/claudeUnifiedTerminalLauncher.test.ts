@@ -1405,6 +1405,45 @@ describe('claudeUnifiedTerminalLauncher', () => {
     });
   });
 
+  it('cancels aborted terminal prompt turns without also marking them failed', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (opts: {
+      onTerminalPromptInjected?: (acceptedPrompt: {
+        message: string;
+        mode: { permissionMode: 'default'; claudeUnifiedTerminalEnabled: true };
+        acceptedAs: 'new_turn';
+        turnStateAtInjection: 'idle';
+      }) => void | Promise<void>;
+      onPromptTurnTerminal?: (event: {
+        reason: 'aborted';
+        source: string;
+      }) => void | Promise<void>;
+    }) => {
+      await opts.onTerminalPromptInjected?.({
+        message: 'stop the current work',
+        mode: { permissionMode: 'default', claudeUnifiedTerminalEnabled: true },
+        acceptedAs: 'new_turn',
+        turnStateAtInjection: 'idle',
+      });
+      await opts.onPromptTurnTerminal?.({
+        reason: 'aborted',
+        source: 'claude_hook_stop',
+      });
+    });
+
+    await claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'auto',
+      },
+    });
+
+    expect(session.client.sessionTurnLifecycle?.cancelTurn).toHaveBeenCalledWith({ provider: 'claude' });
+    expect(session.client.sessionTurnLifecycle?.failTurn).not.toHaveBeenCalled();
+    expect(session.abortCurrentTaskTurn).toHaveBeenCalled();
+  });
+
   it('surfaces terminal host death through the primary turn runtime issue path and exits gracefully instead of escaping as a fatal command error', async () => {
     setProcessTty(false);
     const session = createSession();
@@ -1432,6 +1471,10 @@ describe('claudeUnifiedTerminalLauncher', () => {
     expect(session.client.sendSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'message',
       message: expect.stringContaining('Claude unified terminal host is not alive'),
+    }));
+    expect(session.client.sendSessionEvent).not.toHaveBeenCalledWith(expect.objectContaining({
+      type: 'message',
+      message: expect.stringContaining('before Happier could send your prompt'),
     }));
     expect(session.client.flush).toHaveBeenCalled();
     expect(readFirstInvocationOrder(vi.mocked(session.client.flush), 'flush')).toBeGreaterThan(
@@ -1607,6 +1650,55 @@ describe('claudeUnifiedTerminalLauncher', () => {
       }),
       allocateWhenIdle: true,
     });
+  });
+
+  it('does not park and relaunch the same prompt after recoverable provider-acceptance timeout exhaustion', async () => {
+    setProcessTty(false);
+    const session = createSession();
+    const injectionError = Object.assign(new Error('Claude unified terminal prompt injection failed'), {
+      code: 'claude_unified_terminal_injection_failed',
+      failureState: 'failed_terminal',
+      reason: 'timeout',
+      phase: 'after_enter_unknown',
+      duplicateRisk: 'likely',
+      recoverable: true,
+    });
+    vi.mocked(session.queue.waitForMessagesAndGetAsString).mockResolvedValue({
+      message: 'same unconfirmed prompt',
+      mode: { permissionMode: 'default' },
+      hash: 'h1',
+      maxUserMessageSeq: 41,
+    } as never);
+    mocks.runClaudeUnifiedTerminalSession.mockImplementationOnce(async (runOpts: {
+      onTerminalPromptInjected?: (accepted: {
+        message: string;
+        mode: unknown;
+        acceptedAs: 'new_turn';
+        turnStateAtInjection: 'idle';
+      }) => Promise<void> | void;
+    }) => {
+      await runOpts.onTerminalPromptInjected?.({
+        message: 'same unconfirmed prompt',
+        mode: { permissionMode: 'default' },
+        acceptedAs: 'new_turn',
+        turnStateAtInjection: 'idle',
+      });
+      throw injectionError;
+    });
+
+    await expect(claudeUnifiedTerminalLauncher(session, {
+      initialMode: {
+        permissionMode: 'default',
+        claudeUnifiedTerminalHost: 'zellij',
+      },
+    })).resolves.toEqual({ type: 'exit', code: 1 });
+
+    expect(mocks.runClaudeUnifiedTerminalSession).toHaveBeenCalledTimes(1);
+    expect(session.queue.waitForMessagesAndGetAsString).not.toHaveBeenCalled();
+    expect(session.client.sessionTurnLifecycle?.beginTurn).toHaveBeenCalledWith({ provider: 'claude' });
+    expect(session.client.sessionTurnLifecycle?.cancelTurn).toHaveBeenCalledWith({ provider: 'claude' });
+    expect(session.client.sessionTurnLifecycle?.failTurn).not.toHaveBeenCalled();
+    expect(session.client.flush).toHaveBeenCalled();
   });
 
   it('requeues a parked message when relaunch fails during terminal-host startup before runner handback', async () => {

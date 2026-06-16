@@ -8,7 +8,7 @@ import {
   type SessionUsageLimitRecoveryV1,
 } from '@happier-dev/protocol';
 
-import { ApiClient } from '@/api/api';
+import { createConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
 import { resolveConnectedServiceCredentials } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import type { Credentials } from '@/persistence';
 import type {
@@ -188,7 +188,7 @@ async function resolveGeminiCredential(params: Readonly<{
   serviceId: 'gemini';
   profileId: string;
 }>): Promise<ConnectedServiceCredentialRecordV1 | null> {
-  const api = await ApiClient.create(params.credentials);
+  const api = createConnectedServiceCredentialApi(params.credentials);
   const records = await resolveConnectedServiceCredentials({
     credentials: params.credentials,
     api,

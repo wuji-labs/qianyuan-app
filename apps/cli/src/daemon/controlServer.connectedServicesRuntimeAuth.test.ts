@@ -293,6 +293,73 @@ describe('createDaemonControlApp connected-service runtime auth handling', () =>
     }
   });
 
+  it('marks report-path credential refresh without provider proof as awaiting provider outcome', async () => {
+    const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({
+      nowMs: () => 1_000,
+      baseBackoffMs: 100,
+      maxBackoffMs: 1_000,
+      jitterMs: () => 0,
+      providerOutcomePendingWaitMs: 5_000,
+      recover: async () => ({ status: 'credential_refreshed', restartRequested: true }),
+    });
+    const recoveryKey = buildRuntimeAuthRecoveryKey({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'primary',
+      groupId: 'main',
+    });
+    const handleConnectedServiceRuntimeAuthFailure = vi.fn(async () => ({
+      status: 'credential_refreshed' as const,
+      restartRequested: true,
+    }));
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine',
+      stopSession: async () => false,
+      spawnSession: async () => ({
+        type: 'error',
+        errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED,
+        errorMessage: 'unused',
+      }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'token',
+      handleConnectedServiceRuntimeAuthFailure,
+      runtimeAuthRecoveryScheduler,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/connected-service-runtime-auth/failure',
+        headers: { 'x-happier-daemon-token': 'token' },
+        payload: {
+          sessionId: 'sess_1',
+          switchesThisTurn: 0,
+          classification: {
+            kind: 'usage_limit',
+            serviceId: 'openai-codex',
+            profileId: 'primary',
+            groupId: 'main',
+            resetsAtMs: null,
+            planType: null,
+            rateLimits: null,
+            source: 'structured_provider_error',
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(runtimeAuthRecoveryScheduler.readByKey(recoveryKey)).toMatchObject({
+        status: 'resumed_awaiting_proof',
+        lastError: 'recovery_unproven_awaiting_provider_outcome',
+        nextRetryAtMs: 6_000,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it('does not terminalize a group-exhausted no_eligible_member result when a reset wait is armed', async () => {
     const diagnostics: RuntimeAuthRecoveryDiagnostic[] = [];
     const runtimeAuthRecoveryScheduler = new RuntimeAuthRecoveryScheduler({

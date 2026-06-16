@@ -2,7 +2,7 @@ import type { SessionClientPort } from "@/api/session/sessionClientPort"
 import { MessageQueue2 } from "@/agent/runtime/modeMessageQueue"
 import { logger } from "@/ui/logger"
 import { Session } from "./session"
-import { claudeLocalLauncher, LauncherResult } from "./claudeLocalLauncher"
+import { claudeLocalLauncher } from "./claudeLocalLauncher"
 import { claudeRemoteLauncher } from "./claudeRemoteLauncher"
 import { claudeUnifiedTerminalLauncher } from './unifiedTerminal/claudeUnifiedTerminalLauncher';
 import type { JsRuntime } from "./runClaude"

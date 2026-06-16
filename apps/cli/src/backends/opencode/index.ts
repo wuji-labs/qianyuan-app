@@ -17,6 +17,7 @@ const openCodeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCre
   spawnPreflightOauthRefresh: { mode: 'expiry_window' },
   refreshedCredentialApplication: { mode: 'restart_required' },
   predictiveSoftSwitch: { mode: 'unsupported' },
+  sameAccountFanoutStrategy: 'none',
 };
 
 export const agent = {

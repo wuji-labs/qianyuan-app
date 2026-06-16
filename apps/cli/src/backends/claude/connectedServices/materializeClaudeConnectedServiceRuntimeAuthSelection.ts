@@ -13,9 +13,10 @@ import type { Credentials } from '@/persistence';
 import { materializeClaudeConnectedServiceSelection } from './materializeClaudeConnectedServiceSelection';
 import { resolveClaudeConnectedServiceStableConfigDir } from './resolveClaudeConnectedServiceStableAuthDir';
 import {
-  CLAUDE_RUNTIME_AUTH_HOT_APPLY_METADATA_KEY,
-  buildClaudeRuntimeAuthHotApplyMetadata,
-} from './claudeRuntimeAuthHotApplyMetadata';
+  CLAUDE_RUNTIME_AUTH_SHARED_GROUP_SURFACE_METADATA_KEY,
+  buildClaudeRuntimeAuthSharedGroupSurfaceMetadata,
+} from './claudeRuntimeAuthSharedGroupSurfaceMetadata';
+import { resolveClaudeConnectedServiceCandidatePersistedSessionFile } from './resolveClaudeConnectedServiceCandidatePersistedSessionFile';
 
 function readCredentialRecord(value: unknown): ConnectedServiceCredentialRecordV1 | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -97,6 +98,55 @@ function buildSelection(params: Readonly<{
   };
 }
 
+function buildPreflightRuntimeAuthSelection(params: Readonly<{
+  activeServerDir: string;
+  serviceId: ConnectedServiceId;
+  baseSelection: Parameters<ConnectedServiceRuntimeAuthSelectionMaterializer>[0]['baseSelection'];
+  record: ConnectedServiceCredentialRecordV1;
+  selection: ConnectedServiceResolvedSelection | null;
+  trackedEnv?: NodeJS.ProcessEnv;
+}>): unknown {
+  if (params.serviceId !== 'claude-subscription' || params.selection?.kind !== 'group') {
+    return params.baseSelection;
+  }
+
+  const runtimeClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
+    activeServerDir: params.activeServerDir,
+    serviceId: 'claude-subscription',
+    fallbackProfileId: params.selection.fallbackProfileId,
+    selection: params.selection,
+  });
+  if (!runtimeClaudeConfigDir || !samePath(params.trackedEnv?.CLAUDE_CONFIG_DIR, runtimeClaudeConfigDir)) {
+    return params.baseSelection;
+  }
+
+  const sourceClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
+    activeServerDir: params.activeServerDir,
+    serviceId: 'claude-subscription',
+    fallbackProfileId: params.selection.activeProfileId,
+    selection: {
+      kind: 'profile',
+      serviceId: 'claude-subscription',
+      profileId: params.selection.activeProfileId,
+      record: params.record,
+    },
+  });
+  const sharedGroupSurfaceMetadata = buildClaudeRuntimeAuthSharedGroupSurfaceMetadata({
+    runtimeClaudeConfigDir,
+    runtimeMaterializedRoot: runtimeClaudeConfigDir,
+    sourceClaudeConfigDir,
+  });
+  if (!sharedGroupSurfaceMetadata) return params.baseSelection;
+  return {
+    ...params.baseSelection,
+    targetMaterializedEnv: {
+      CLAUDE_CONFIG_DIR: sharedGroupSurfaceMetadata.runtimeClaudeConfigDir,
+    },
+    targetMaterializedRoot: sharedGroupSurfaceMetadata.runtimeMaterializedRoot,
+    [CLAUDE_RUNTIME_AUTH_SHARED_GROUP_SURFACE_METADATA_KEY]: sharedGroupSurfaceMetadata,
+  };
+}
+
 export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedServiceRuntimeAuthSelectionMaterializer = async (
   params,
 ) => {
@@ -111,10 +161,32 @@ export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedSer
 
   const record = readCredentialRecord(params.baseSelection.record);
   if (!record) return params.baseSelection;
+  const selection = buildSelection({
+    serviceId: params.input.serviceId,
+    record,
+    binding: params.baseSelection.binding,
+    profileId: params.baseSelection.profileId,
+    ...(typeof params.baseSelection.groupId === 'string' ? { groupId: params.baseSelection.groupId } : {}),
+    ...(typeof params.baseSelection.activeProfileId === 'string' ? { activeProfileId: params.baseSelection.activeProfileId } : {}),
+    ...(typeof params.baseSelection.fallbackProfileId === 'string' ? { fallbackProfileId: params.baseSelection.fallbackProfileId } : {}),
+    ...(typeof params.baseSelection.generation === 'number' ? { generation: params.baseSelection.generation } : {}),
+  });
+  if (params.input.mode === 'preflight') {
+    return buildPreflightRuntimeAuthSelection({
+      activeServerDir,
+      serviceId: params.input.serviceId,
+      baseSelection: params.baseSelection,
+      record,
+      selection,
+      trackedEnv: params.input.tracked.spawnOptions?.environmentVariables,
+    });
+  }
   const trackedContinuityContext = resolveTrackedConnectedServiceSwitchContinuityContext({
     agentId: params.input.agentId,
     baseDir: activeServerDir,
     tracked: params.input.tracked,
+    resolveCandidatePersistedSessionFile: (_agentId, metadata) =>
+      resolveClaudeConnectedServiceCandidatePersistedSessionFile({ metadata }),
   });
   // RD-CLD-1/RD-MAT-4: tracked state alone (hook-reported webhook metadata / spawn resume) can be
   // empty on early-turn failures or thin re-attach markers. Fall back to the server-persisted
@@ -131,17 +203,9 @@ export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedSer
           sessionId: params.input.sessionId,
           agentId: params.input.agentId,
         }),
+        resolveCandidatePersistedSessionFile: (_agentId, metadata) =>
+          resolveClaudeConnectedServiceCandidatePersistedSessionFile({ metadata }),
       });
-  const selection = buildSelection({
-    serviceId: params.input.serviceId,
-    record,
-    binding: params.baseSelection.binding,
-    profileId: params.baseSelection.profileId,
-    ...(typeof params.baseSelection.groupId === 'string' ? { groupId: params.baseSelection.groupId } : {}),
-    ...(typeof params.baseSelection.activeProfileId === 'string' ? { activeProfileId: params.baseSelection.activeProfileId } : {}),
-    ...(typeof params.baseSelection.fallbackProfileId === 'string' ? { fallbackProfileId: params.baseSelection.fallbackProfileId } : {}),
-    ...(typeof params.baseSelection.generation === 'number' ? { generation: params.baseSelection.generation } : {}),
-  });
   const materialized = await materializeClaudeConnectedServiceSelection({
     activeServerDir,
     serviceId: params.input.serviceId,
@@ -171,24 +235,24 @@ export const materializeClaudeConnectedServiceRuntimeAuthSelection: ConnectedSer
         },
       })
     : null;
-  const hotApplyMetadata = params.input.serviceId === 'claude-subscription'
+  const sharedGroupSurfaceMetadata = params.input.serviceId === 'claude-subscription'
     && selection?.kind === 'group'
     && samePath(trackedEnv?.CLAUDE_CONFIG_DIR, materializedClaudeConfigDir)
-    ? buildClaudeRuntimeAuthHotApplyMetadata({
+    ? buildClaudeRuntimeAuthSharedGroupSurfaceMetadata({
         runtimeClaudeConfigDir: materializedClaudeConfigDir,
         runtimeMaterializedRoot: materialized.targetMaterializedRoot,
         sourceClaudeConfigDir,
       })
     : null;
-  if (hotApplyMetadata) {
+  if (sharedGroupSurfaceMetadata) {
     return {
       ...params.baseSelection,
       targetMaterializedEnv: {
-        CLAUDE_CONFIG_DIR: hotApplyMetadata.runtimeClaudeConfigDir,
+        CLAUDE_CONFIG_DIR: sharedGroupSurfaceMetadata.runtimeClaudeConfigDir,
       },
-      targetMaterializedRoot: hotApplyMetadata.runtimeMaterializedRoot,
+      targetMaterializedRoot: sharedGroupSurfaceMetadata.runtimeMaterializedRoot,
       materializationDiagnostics: materialized.diagnostics,
-      [CLAUDE_RUNTIME_AUTH_HOT_APPLY_METADATA_KEY]: hotApplyMetadata,
+      [CLAUDE_RUNTIME_AUTH_SHARED_GROUP_SURFACE_METADATA_KEY]: sharedGroupSurfaceMetadata,
     };
   }
 

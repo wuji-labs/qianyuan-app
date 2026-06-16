@@ -507,13 +507,29 @@ describe('createZellijTerminalHostAdapter', () => {
       launchStrategy: { type: 'foregroundAttached'; launchClient(): Promise<void> };
     });
 
-    await expect(adapter.createOrAttachHost({
-      sessionName: 'session-a',
-      workingDirectory: '/workspace/project',
-      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
-      spawnEnv: {},
-      isolatedEnv: true,
-    })).rejects.toThrow(/zellij launch produced no terminal target pane/);
+    let thrown: unknown;
+    try {
+      await adapter.createOrAttachHost({
+        sessionName: 'session-a',
+        workingDirectory: '/workspace/project',
+        spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+        spawnEnv: {},
+        isolatedEnv: true,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isTerminalHostStartupError(thrown)).toBe(true);
+    expect(thrown).toMatchObject({
+      reason: 'startup_action_timeout',
+      diagnostics: {
+        action: 'pane_discovery',
+        sessionName: 'session-a',
+        timeoutMs: 5,
+      },
+    });
+    expect(String((thrown as { message?: unknown }).message)).toMatch(/no terminal target pane/i);
     expect(launcherDisposed).toBe(true);
   });
 
@@ -522,51 +538,43 @@ describe('createZellijTerminalHostAdapter', () => {
     let listCount = 0;
     const actions = {
       attachCreateBackground: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
-      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_1\n', stderr: '' }),
-      writeBytesChunked: async () => {
-        throw new Error('should not write during host creation');
-      },
-      sendEnter: async () => {
-        throw new Error('should not submit during host creation');
-      },
-      sendEscape: async () => {
-        throw new Error('should not interrupt during host creation');
-      },
+      runCommand: async () => ({ exitCode: 0, stdout: 'terminal_42\n', stderr: '' }),
+      writeBytesChunked: async () => undefined,
+      sendEnter: async () => undefined,
+      sendEscape: async () => undefined,
       listPanes: async () => {
         listCount += 1;
+        calls.push(`list:${listCount}`);
         if (listCount === 1) return [];
         if (listCount === 2) {
           return [
-            { id: 0, is_plugin: false, terminal_command: null },
-            { id: 1, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
+            { id: 1, is_plugin: false, terminal_command: null },
+            { id: 42, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' },
           ];
         }
-        return [{ id: 0, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' }];
+        return [{ id: 1, is_plugin: false, terminal_command: '/managed/node claude_local_launcher.cjs' }];
       },
       dumpScreen: async () => '',
-      closePane: async (params: { paneId: string }) => {
+      closePane: async (params) => {
         calls.push(`close:${params.paneId}`);
       },
       killSession: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
-    } as ZellijActions & {
-      closePane(params: { paneId: string }): Promise<void>;
-    };
+    } as ZellijActions;
     const adapter = createZellijTerminalHostAdapter({
       zellijBinary: '/tools/zellij',
       happyHomeDir: '/home/happier',
       actions,
     });
 
-    const handle = await adapter.createOrAttachHost({
+    await expect(adapter.createOrAttachHost({
       sessionName: 'session-a',
       workingDirectory: '/workspace/project',
       spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
       spawnEnv: {},
       isolatedEnv: true,
-    });
+    })).resolves.toMatchObject({ paneId: 'terminal_1' });
 
-    expect(calls).toEqual(['close:terminal_0']);
-    expect(handle.paneId).toBe('terminal_0');
+    expect(calls).toEqual(['list:1', 'list:2', 'close:terminal_1', 'list:3']);
   });
 
   it('injects into a created handle when zellij reports only executable command metadata', async () => {
@@ -1190,13 +1198,28 @@ describe('createZellijTerminalHostAdapter', () => {
       actionTimeoutMs: 123,
     });
 
-    await expect(adapter.createOrAttachHost({
-      sessionName: 'session-a',
-      workingDirectory: '/workspace/project',
-      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
-      spawnEnv: {},
-      isolatedEnv: true,
-    })).rejects.toThrow(/attach timed out/);
+    let thrown: unknown;
+    try {
+      await adapter.createOrAttachHost({
+        sessionName: 'session-a',
+        workingDirectory: '/workspace/project',
+        spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+        spawnEnv: {},
+        isolatedEnv: true,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isTerminalHostStartupError(thrown)).toBe(true);
+    expect(thrown).toMatchObject({
+      reason: 'startup_action_timeout',
+      diagnostics: {
+        action: 'attach',
+        sessionName: 'session-a',
+        timeoutMs: 123,
+      },
+    });
 
     expect(calls).toEqual(['attach', 'kill:session-a:123']);
   });
@@ -1286,13 +1309,28 @@ describe('createZellijTerminalHostAdapter', () => {
       actionTimeoutMs: 123,
     });
 
-    await expect(adapter.createOrAttachHost({
-      sessionName: 'session-a',
-      workingDirectory: '/workspace/project',
-      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
-      spawnEnv: {},
-      isolatedEnv: true,
-    })).rejects.toThrow(/run timed out/);
+    let thrown: unknown;
+    try {
+      await adapter.createOrAttachHost({
+        sessionName: 'session-a',
+        workingDirectory: '/workspace/project',
+        spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+        spawnEnv: {},
+        isolatedEnv: true,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isTerminalHostStartupError(thrown)).toBe(true);
+    expect(thrown).toMatchObject({
+      reason: 'startup_action_timeout',
+      diagnostics: {
+        action: 'run',
+        sessionName: 'session-a',
+        timeoutMs: 123,
+      },
+    });
 
     expect(calls).toEqual(['attach', 'list', 'run', 'kill:session-a:123']);
   });
@@ -1351,9 +1389,8 @@ describe('createZellijTerminalHostAdapter', () => {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toBe(
-      'zellij session did not become addressable: zellij list-panes failed: No session named "session-a" found.',
-    );
+    expect((thrown as Error).message).toContain('zellij session did not become addressable');
+    expect((thrown as Error).message).toContain('No session named "session-a" found');
 
     expect(calls[0]).toBe('attach');
     expect(calls).toContain('list');
@@ -1767,7 +1804,7 @@ describe('createZellijTerminalHostAdapter', () => {
     expect(calls.at(-1)).toBe('kill:session-a');
   });
 
-  it('fails closed when bootstrap shell cleanup cannot prove the pane disappeared', async () => {
+  it('throws a typed startup error when bootstrap shell cleanup cannot converge', async () => {
     const calls: string[] = [];
     let listCount = 0;
     const actions: ZellijActions = {
@@ -1815,14 +1852,24 @@ describe('createZellijTerminalHostAdapter', () => {
       actionTimeoutMs: 1,
     });
 
-    await expect(adapter.createOrAttachHost({
-      sessionName: 'session-a',
-      workingDirectory: '/workspace/project',
-      spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
-      spawnEnv: {},
-      isolatedEnv: true,
-    })).rejects.toThrow(/bootstrap pane cleanup/i);
+    let error: unknown;
+    try {
+      await adapter.createOrAttachHost({
+        sessionName: 'session-a',
+        workingDirectory: '/workspace/project',
+        spawnArgv: ['/managed/node', 'claude_local_launcher.cjs'],
+        spawnEnv: {},
+        isolatedEnv: true,
+      });
+    } catch (caught) {
+      error = caught;
+    }
 
+    expect(isTerminalHostStartupError(error)).toBe(true);
+    expect(error).toMatchObject({
+      hostKind: 'zellij',
+      reason: 'bootstrap_cleanup_did_not_converge',
+    });
     expect(calls).toContain('close:terminal_1');
     expect(calls.at(-1)).toBe('kill:session-a');
   });

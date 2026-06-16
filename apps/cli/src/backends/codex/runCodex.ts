@@ -50,7 +50,7 @@ import {
     resolveAppendSystemPromptModeOverride,
     resolveAppendSystemPromptQueueKeyValue,
 } from '@/agent/runtime/permission/appendSystemPromptField';
-import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
+import { parseSpecialCommand, type SpecialCommandResult } from '@/cli/parsers/specialCommands';
 import { pushMessageToQueueWithSpecialCommands } from '@/agent/runtime/queueSpecialCommands';
 import { normalizePermissionModeToIntent, resolvePermissionModeUpdatedAtFromMessage } from '@/agent/runtime/permission/permissionModeCanonical';
 import { publishCodexSessionIdMetadata } from './utils/codexSessionIdMetadata';
@@ -240,6 +240,7 @@ export async function runCodex(opts: {
         model?: string;
         promptMetadata?: unknown;
         suppressUserEcho?: boolean;
+        providerPromptAlreadyResolved?: boolean;
     }
 
     type CodexRemoteRuntime = Readonly<{
@@ -686,6 +687,7 @@ export async function runCodex(opts: {
     const runtimePermissionModeRef = { current: currentPermissionMode ?? 'default', updatedAt: currentPermissionModeUpdatedAt };
     const runtimeModelOverrideRef = { current: currentModelId, updatedAt: currentModelUpdatedAt };
     let runtimeOverridesSync: Awaited<ReturnType<typeof initializeRuntimeOverridesSynchronizer>> | null = null;
+    let didReplaySeedBootstrap = false;
     const persistStartupOverridesCache = (): void => {
         try {
             writeStartupOverridesCacheForBackend({
@@ -757,22 +759,47 @@ export async function runCodex(opts: {
         })) {
             // This message will not go through the main prompt loop queue; display it immediately.
             messageBuffer.addMessage(text, 'user');
-            void runtime.steerPrompt(text, {
-                metadata: message.meta,
-                localId: message.localId ?? null,
-                userMessageSeq,
-            }).catch((error) => {
-                pushMessageToQueueWithSpecialCommands({
-                    queue: messageQueue,
-                    message: text,
-                    text,
-                    mode: {
-                        ...enhancedMode,
-                        suppressUserEcho: true,
-                    },
-                    userMessageSeq,
-                });
-            });
+            void (async () => {
+                let providerPromptText = text;
+                const resolvedMode: EnhancedMode = {
+                    ...enhancedMode,
+                    suppressUserEcho: true,
+                    providerPromptAlreadyResolved: true,
+                };
+                try {
+                    const replaySeedResolution = await resolveCodexQueuedPromptWithReplaySeed({
+                        sessionClient: session,
+                        text,
+                        localId: message.localId ?? null,
+                        replaySeedAllowed: special.type === null,
+                        didBootstrap: didReplaySeedBootstrap,
+                    });
+                    didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
+                    providerPromptText = replaySeedResolution.text;
+                    if (typeof userMessageSeq === 'number') {
+                        undeliverableProviderPromptsBySeq.set(userMessageSeq, {
+                            message: providerPromptText,
+                            mode: resolvedMode,
+                        });
+                    }
+                    await runtime.steerPrompt(providerPromptText, {
+                        metadata: message.meta,
+                        localId: message.localId ?? null,
+                        userMessageSeq,
+                    });
+                } catch {
+                    if (typeof userMessageSeq === 'number') {
+                        undeliverableProviderPromptsBySeq.delete(userMessageSeq);
+                    }
+                    pushMessageToQueueWithSpecialCommands({
+                        queue: messageQueue,
+                        message: providerPromptText,
+                        text: providerPromptText,
+                        mode: resolvedMode,
+                        userMessageSeq,
+                    });
+                }
+            })();
             return;
         }
 
@@ -787,7 +814,6 @@ export async function runCodex(opts: {
 
     let thinking = false;
     let currentTaskId: string | null = null;
-    let didReplaySeedBootstrap = false;
     for (const message of [localModeFallbackMessage, codexAcpFallbackToMcpMessage]) {
         if (!message) continue;
         session.sendSessionEvent({ type: 'message', message });
@@ -1331,12 +1357,14 @@ export async function runCodex(opts: {
                 if (!runtime) return;
                 publishInFlightSteerCapability({ session, runtime });
             },
-            onRateLimitSnapshot: async (rawSnapshot) => {
+            onRateLimitSnapshot: async (rawSnapshot, context) => {
                 await reportCodexRateLimitSnapshotToDaemon({
                     env: codexAppServerProcessEnv,
                     session,
                     sessionId: session.sessionId,
                     rawSnapshot,
+                    activeAccountId: context?.activeAccountId ?? null,
+                    accountLabel: context?.accountLabel ?? null,
                 });
             },
             onUsageLimitGroupRecovery: async ({ classification }) => {
@@ -1836,7 +1864,9 @@ export async function runCodex(opts: {
                     permissionModeUpdatedAt: message.mode.permissionModeUpdatedAt,
                 });
 
-                const specialCommand = parseSpecialCommand(message.message);
+                const specialCommand: SpecialCommandResult = message.mode.providerPromptAlreadyResolved
+                    ? { type: null }
+                    : parseSpecialCommand(message.message);
                 if (specialCommand.type === 'clear') {
                     logger.debug('[Codex] Handling /clear command - resetting session');
                 if (client) {
@@ -1859,6 +1889,7 @@ export async function runCodex(opts: {
                     shouldExit,
                     sendReady,
                 });
+                session.confirmUserMessageDeliveredToProvider?.(message.maxUserMessageSeq ?? null);
                 continue;
             }
 
@@ -1879,7 +1910,7 @@ export async function runCodex(opts: {
                         sessionClient: session,
                         text: message.message,
                         localId,
-                        replaySeedAllowed: specialCommand.type === null,
+                        replaySeedAllowed: specialCommand.type === null && !message.mode.providerPromptAlreadyResolved,
                         didBootstrap: didReplaySeedBootstrap,
                     });
                     didReplaySeedBootstrap = replaySeedResolution.didBootstrap;
@@ -1899,6 +1930,16 @@ export async function runCodex(opts: {
                             logger.debug('[CodexAppServer] steerPrompt begin for queued message while turn is in flight');
                         }
                         const providerPromptText = await resolveProviderPromptText();
+                        if (typeof message.maxUserMessageSeq === 'number') {
+                            undeliverableProviderPromptsBySeq.set(message.maxUserMessageSeq, {
+                                message: providerPromptText,
+                                mode: {
+                                    ...message.mode,
+                                    suppressUserEcho: true,
+                                    providerPromptAlreadyResolved: true,
+                                },
+                            });
+                        }
 	                        try {
 	                            await codexRuntime.steerPrompt(providerPromptText, {
 	                                metadata: message.mode.promptMetadata,
@@ -1910,6 +1951,9 @@ export async function runCodex(opts: {
 	                            }
 	                            continue;
 	                        } catch (error) {
+                            if (typeof message.maxUserMessageSeq === 'number') {
+                                undeliverableProviderPromptsBySeq.delete(message.maxUserMessageSeq);
+                            }
 	                            if (!isCodexAppServerNoActiveTurnToSteerError(error)) {
 	                                throw error;
 	                            }
@@ -2068,6 +2112,7 @@ export async function runCodex(opts: {
                         if (shouldLogAcpDebug) {
                             logger.debug('[CodexACP] compactContext complete');
                         }
+                        session.confirmUserMessageDeliveredToProvider?.(message.maxUserMessageSeq ?? null);
                         continue;
                     }
 
@@ -2099,19 +2144,24 @@ export async function runCodex(opts: {
                         )
                         : undefined;
                     const providerPromptText = await resolveProviderPromptText();
+                    const promptForProvider = buildCodexAcpPromptForFreshSession({
+                        prompt: providerPromptText,
+                        startedFreshSession: startedFreshSessionForTurn,
+                        systemPromptText,
+                    });
                     if (typeof message.maxUserMessageSeq === 'number') {
                         undeliverableProviderPromptsBySeq.set(message.maxUserMessageSeq, {
-                            message: message.message,
-                            mode: message.mode,
+                            message: promptForProvider,
+                            mode: {
+                                ...message.mode,
+                                suppressUserEcho: true,
+                                providerPromptAlreadyResolved: true,
+                            },
                         });
                     }
                     try {
                         await codexRuntime.sendPrompt(
-                            buildCodexAcpPromptForFreshSession({
-                                prompt: providerPromptText,
-                                startedFreshSession: startedFreshSessionForTurn,
-                                systemPromptText,
-                            }),
+                            promptForProvider,
                             {
                                 metadata: message.mode.promptMetadata,
                                 localId,

@@ -228,6 +228,101 @@ describe('reportCodexRateLimitSnapshotToDaemon', () => {
     });
   });
 
+  it('reports connected-service activeAccountId when the runtime supplies live account/read proof', async () => {
+    const notify = createNotifyQuotaSnapshotMock();
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'primary',
+          generation: 2,
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: { primary: { used_percent: 100 } },
+      activeAccountId: 'acct_live_from_account_read',
+      accountLabel: 'live-account@example.test',
+      nowMs: 1_000,
+      notify,
+    });
+
+    expect(notify).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot: expect.objectContaining({
+        profileId: 'backup',
+        activeAccountId: 'acct_live_from_account_read',
+        accountLabel: 'live-account@example.test',
+      }),
+    });
+  });
+
+  it('normalizes merged sparse app-server snapshots without erasing identity or reset windows', async () => {
+    const notify = createNotifyQuotaSnapshotMock();
+
+    await reportCodexRateLimitSnapshotToDaemon({
+      env: {
+        [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+          kind: 'group',
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: 'backup',
+          fallbackProfileId: 'primary',
+          generation: 2,
+        }]),
+      },
+      sessionId: 'sess_1',
+      rawSnapshot: {
+        rateLimits: {
+          account: {
+            id: 'acct_live_codex',
+            email: 'codex-user@example.test',
+          },
+          primary: {
+            usedPercent: 88,
+            windowDurationMins: 300,
+            resetsAt: 1_779_098_400,
+          },
+          secondary: {
+            usedPercent: 40,
+            windowDurationMins: 10080,
+            resetsAt: 1_779_698_400,
+          },
+          planType: 'pro',
+        },
+      },
+      nowMs: 1_000,
+      notify,
+    });
+
+    const snapshot = notify.mock.calls[0]?.[0]?.snapshot;
+    expect(snapshot).toMatchObject({
+      serviceId: 'openai-codex',
+      profileId: 'backup',
+      activeAccountId: 'acct_live_codex',
+      accountLabel: 'codex-user@example.test',
+      planLabel: 'pro',
+      meters: [
+        {
+          meterId: 'primary',
+          utilizationPct: 88,
+          resetAtMs: 1_779_098_400_000,
+          resetsAt: 1_779_098_400_000,
+        },
+        {
+          meterId: 'secondary',
+          utilizationPct: 40,
+          resetAtMs: 1_779_698_400_000,
+          resetsAt: 1_779_698_400_000,
+        },
+      ],
+    });
+  });
+
   it('reports native app-server snapshots with stable Codex account identity when no connected auth is selected', async () => {
     const root = join(tmpdir(), `happier-codex-native-quota-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const codexHome = join(root, 'codex-home');

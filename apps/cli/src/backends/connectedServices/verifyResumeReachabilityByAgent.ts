@@ -4,8 +4,8 @@ import type {
   VerifyResumeReachableInput,
   VerifyResumeReachableResult,
 } from '@/backends/connectedServices/verifyResumeReachableTypes';
-
-export const REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON = 'reachability_check_not_implemented' as const;
+import { REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON } from '@/backends/connectedServices/verifyResumeReachableTypes';
+export { REACHABILITY_CHECK_NOT_IMPLEMENTED_REASON } from '@/backends/connectedServices/verifyResumeReachableTypes';
 
 /**
  * Provider-agnostic resume-reachability dispatch.

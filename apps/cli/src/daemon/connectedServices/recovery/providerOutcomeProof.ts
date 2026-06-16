@@ -44,8 +44,9 @@
  *   not exhausted for the same service/fingerprint.
  *   The quotas coordinator / provider quota fetchers own this evidence. It is
  *   produced only from normalized, fresh quota snapshots after service/profile,
- *   group-generation, and material-fingerprint checks. It is not account
- *   adoption proof and must not be upgraded into exact runtime-account identity.
+ *   group-generation, and, when independently available, material-fingerprint
+ *   checks. It is not account adoption proof and must not be upgraded into exact
+ *   runtime-account identity.
  * - `fresh_candidate_selected`: the adopted connected-service profile/account is
  *   genuinely DIFFERENT from the exhausted/failed one (and not known-exhausted
  *   for the same fingerprint). This is useful evidence, but it is still

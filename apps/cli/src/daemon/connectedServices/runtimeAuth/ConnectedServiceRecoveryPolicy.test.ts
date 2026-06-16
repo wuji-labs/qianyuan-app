@@ -65,6 +65,33 @@ describe('ConnectedServiceRecoveryPolicy', () => {
     });
   });
 
+  it('delegates account-scoped capacity failures to group switching', () => {
+    expect(decideConnectedServiceRecovery({
+      actor: 'automatic',
+      issue: {
+        kind: 'capacity',
+        ...baseIssue,
+        quotaScope: 'account',
+        limitCategory: 'capacity',
+      },
+      selection: {
+        kind: 'group',
+        serviceId: 'openai-codex',
+        groupId: 'main',
+        activeProfileId: 'primary',
+      },
+    })).toEqual({
+      action: 'switch_account',
+      mode: 'delegate_to_group_switch',
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      fromProfileId: 'primary',
+      toProfileId: null,
+      reason: 'capacity',
+      actor: 'automatic',
+    });
+  });
+
   it('returns reconnect-required for manual selection of a cached unhealthy profile', () => {
     expect(decideConnectedServiceRecovery({
       actor: 'manual',

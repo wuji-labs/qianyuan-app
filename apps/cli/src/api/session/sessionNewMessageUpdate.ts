@@ -52,10 +52,10 @@ export function handleSessionNewMessageUpdate(params: {
      */
     onUserMessageDeliveredToAgentQueue?: (seq: number) => void;
     /**
-     * Fired when an agent-queue echo PROVES a locally handed prompt (daemon initial prompt, RPC
-     * send, pending materialization) was committed server-side. Separate custody chain from the
-     * queue-handoff hook: these rows never carried a seq into the queue, so their watermark
-     * policy is persist-at-echo (legacy semantics).
+     * Fired when a local echo proves a user row is no longer owed to the runner without handing
+     * it through the queue in this update. Examples: an already queued prompt echo, an already
+     * pending prompt, or a provider-native terminal transcript row that originated in the provider
+     * TUI and was only mirrored into Happier.
      */
     onUserMessageDeliveryProvenByLocalEcho?: (seq: number) => void;
     onObservedMessage?: (message: {
@@ -222,7 +222,9 @@ export function handleSessionNewMessageUpdate(params: {
             // An agent-queue echo of a prompt we already handed to the loop locally (daemon initial
             // prompt, RPC send, pending materialization) proves delivery and carries its seq.
             const isDeliveredLocalPromptEcho =
-                isEffectivelyAgentQueueEchoSuppressedLocalId || isAlreadyPendingAgentQueueMessage;
+                isEffectivelyAgentQueueEchoSuppressedLocalId
+                || isAlreadyPendingAgentQueueMessage
+                || isSelfEchoSuppressedCliWrite;
             if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
                 params.onUserMessageDeliveryProvenByLocalEcho?.(msgSeq);
             }
@@ -264,12 +266,18 @@ export function handleSessionNewMessageUpdate(params: {
                     agentQueueLocalId && params.hasAgentQueueEchoSuppressedLocalId(agentQueueLocalId),
                 );
                 const parsedSource = parsedCandidate.data.meta?.source;
+                const isSelfEchoSuppressedCliWrite = Boolean(
+                    agentQueueLocalId
+                    && params.hasSelfEchoSuppressedLocalId(agentQueueLocalId)
+                    && parsedSource === 'cli',
+                );
                 const isDeterministicDaemonInitialPrompt =
                     parsedSource === 'daemon-initial-prompt'
                     && isDeterministicDaemonInitialPromptLocalId(agentQueueLocalId, params.sessionId);
                 const shouldDeliverToAgentQueue =
                     !isAlreadyPendingAgentQueueMessage
                     && !isAgentQueueEchoSuppressedForDelivery
+                    && !isSelfEchoSuppressedCliWrite
                     && (params.shouldDeliverUserMessageToAgentQueue?.(parsedCandidate.data, params.update) ?? true);
                 if (shouldDeliverToAgentQueue) {
                     const deliverableSeq = typeof msgSeq === 'number' && Number.isFinite(msgSeq) ? msgSeq : null;
@@ -286,7 +294,9 @@ export function handleSessionNewMessageUpdate(params: {
                     }
                 } else {
                     const isDeliveredLocalPromptEcho =
-                        isAgentQueueEchoSuppressedForDelivery || isAlreadyPendingAgentQueueMessage;
+                        isAgentQueueEchoSuppressedForDelivery
+                        || isAlreadyPendingAgentQueueMessage
+                        || isSelfEchoSuppressedCliWrite;
                     if (isDeliveredLocalPromptEcho && typeof msgSeq === 'number' && Number.isFinite(msgSeq)) {
                         params.onUserMessageDeliveryProvenByLocalEcho?.(msgSeq);
                     }
@@ -295,6 +305,7 @@ export function handleSessionNewMessageUpdate(params: {
                         agentQueueLocalId,
                         isAlreadyPendingAgentQueueMessage,
                         isAgentQueueEchoSuppressedForDelivery,
+                        isSelfEchoSuppressedCliWrite,
                         source: parsedCandidate.data.meta?.source ?? null,
                         sentFrom: parsedCandidate.data.meta?.sentFrom ?? null,
                     });

@@ -6,9 +6,8 @@ import {
   resolvePromptStackSystemAppendBlocksV1,
 } from '@happier-dev/protocol';
 
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { decodeBase64, decryptWithDataKey } from '@/api/encryption';
-import { resolveLoopbackHttpUrl } from '@/api/client/loopbackUrl';
-import { configuration } from '@/configuration';
 import type { Credentials } from '@/persistence';
 import { deriveKey } from '@/utils/deriveKey';
 
@@ -19,10 +18,6 @@ export type PromptArtifactRecord = Readonly<{
 }>;
 
 type FetchPromptArtifactRecord = (artifactId: string) => Promise<PromptArtifactRecord | null>;
-
-function resolveServerHttpBaseUrl(): string {
-  return resolveLoopbackHttpUrl(configuration.apiServerUrl).replace(/\/+$/, '');
-}
 
 async function openPromptArtifactDataEncryptionKey(params: Readonly<{
   credentials: Credentials;

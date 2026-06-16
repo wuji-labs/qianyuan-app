@@ -1,10 +1,10 @@
-import { EnhancedMode } from "./loop";
-import { query, type QueryOptions, type SDKMessage, type SDKSystemMessage, AbortError, SDKUserMessage } from '@/backends/claude/sdk'
+import type { EnhancedMode } from "./loop";
+import { query, type QueryOptions, type SDKMessage, type SDKSystemMessage, AbortError, type SDKUserMessage } from '@/backends/claude/sdk'
 import { resolveClaudeSdkPermissionModeFromEnhancedMode } from "./utils/permissionMode";
 import { parseSpecialCommand } from "@/cli/parsers/specialCommands";
 import { logger } from "@/lib";
 import { PushableAsyncIterable } from "@/utils/PushableAsyncIterable";
-import { PermissionResult } from "./sdk/types";
+import type { PermissionResult } from "./sdk/types";
 import type { JsRuntime } from "./runClaude";
 import { getClaudeRemoteSystemPrompt } from "./utils/remoteSystemPrompt";
 import { parseClaudeSdkFlagOverridesFromArgs } from "./remote/sdkFlagOverrides";

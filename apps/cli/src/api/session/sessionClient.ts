@@ -1253,8 +1253,10 @@ export class ApiSessionClient extends EventEmitter {
                         catchUpAfterSeqIsExplicit: opts.catchUpAfterSeqIsExplicit,
                     }),
                 onUserMessageDeliveredToAgentQueue: (seq) => this.recordDeliveredUserMessageSeq(seq),
-                // Echo-proven local handoffs never carried a seq into the queue, so they keep
-                // persist-at-echo semantics even when queue handoffs defer to provider acceptance.
+                // Echo-proven rows never carried a seq through this queue handoff. That includes
+                // provider-native transcript rows that already reached provider custody before
+                // Happier mirrored them, so they keep persist-at-echo semantics even when queue
+                // handoffs defer to provider acceptance.
                 onUserMessageDeliveryProvenByLocalEcho: (seq) => this.persistDeliveredUserMessageWatermark(seq),
                 onObservedMessage: (message) => {
                     this.observeTurnAssistantTextFromSessionContent(message.body, {

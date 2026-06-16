@@ -219,13 +219,15 @@ describe('AGENTS', () => {
       spawnPreflightOauthRefresh: { mode: 'expiry_window' },
       refreshedCredentialApplication: { mode: 'restart_required' },
       predictiveSoftSwitch: { mode: 'unsupported' },
+      sameAccountFanoutStrategy: 'none',
     });
     await expect(resolveDescriptor('kilo')).resolves.toEqual({
       providerId: 'kilo',
       serviceIds: [],
       spawnPreflightOauthRefresh: { mode: 'expiry_window' },
       refreshedCredentialApplication: { mode: 'no_restart_required' },
-      predictiveSoftSwitch: { mode: 'unsupported' },
+      predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
+      sameAccountFanoutStrategy: 'none',
     });
   });
 
@@ -474,6 +476,7 @@ describe('AGENTS', () => {
           },
         }),
         invalidateTransports: async () => {},
+        persistAuthStore: async () => {},
       },
     })).resolves.toEqual({ mode: 'hot_apply' });
     await expect(resolveConnectedServiceSwitchContinuity('codex', {

@@ -12,7 +12,7 @@ import {
   type ConnectedServiceId,
 } from '@happier-dev/protocol';
 
-import type { ApiClient } from '@/api/api';
+import type { ConnectedServiceCredentialApi } from '@/api/connectedServices/connectedServiceCredentialApi';
 import type { Credentials } from '@/persistence';
 import { resolveConnectedServiceAccountMode } from './resolveConnectedServiceAccountMode';
 
@@ -28,7 +28,7 @@ function parseConnectedServiceCredentialRecord(params: Readonly<{
 }
 
 async function readPlainConnectedServiceCredential(params: Readonly<{
-  api: ApiClient;
+  api: ConnectedServiceCredentialApi;
   binding: { serviceId: ConnectedServiceId; profileId: string };
 }>): Promise<ConnectedServiceCredentialRecordV1 | null> {
   if (typeof params.api.getConnectedServiceCredentialPlain !== 'function') return null;
@@ -44,7 +44,7 @@ async function readPlainConnectedServiceCredential(params: Readonly<{
 }
 
 async function readPlainConnectedServiceCredentialBestEffort(params: Readonly<{
-  api: ApiClient;
+  api: ConnectedServiceCredentialApi;
   binding: { serviceId: ConnectedServiceId; profileId: string };
 }>): Promise<ConnectedServiceCredentialRecordV1 | null> {
   try {
@@ -55,7 +55,7 @@ async function readPlainConnectedServiceCredentialBestEffort(params: Readonly<{
 }
 
 async function readSealedConnectedServiceCredential(params: Readonly<{
-  api: ApiClient;
+  api: ConnectedServiceCredentialApi;
   credentials: Credentials;
   binding: { serviceId: ConnectedServiceId; profileId: string };
 }>): Promise<ConnectedServiceCredentialRecordV1 | null> {
@@ -84,7 +84,7 @@ async function readSealedConnectedServiceCredential(params: Readonly<{
 
 export async function resolveConnectedServiceCredentials(params: Readonly<{
   credentials: Credentials;
-  api: ApiClient;
+  api: ConnectedServiceCredentialApi;
   bindings: ReadonlyArray<{ serviceId: ConnectedServiceId; profileId: string }>;
 }>): Promise<Map<ConnectedServiceId, ConnectedServiceCredentialRecordV1>> {
   const out = new Map<ConnectedServiceId, ConnectedServiceCredentialRecordV1>();

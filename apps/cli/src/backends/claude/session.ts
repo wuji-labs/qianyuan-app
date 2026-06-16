@@ -1,5 +1,5 @@
 import { MessageQueue2 } from "@/agent/runtime/modeMessageQueue";
-import { EnhancedMode } from "./loop";
+import type { EnhancedMode } from "./loop";
 import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SessionHookData } from "./utils/startHookServer";

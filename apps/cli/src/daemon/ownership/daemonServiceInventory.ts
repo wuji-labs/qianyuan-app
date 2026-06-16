@@ -8,7 +8,7 @@ import {
   readInstalledDaemonServiceEnvValue,
   type InstalledDaemonServiceEntry,
 } from '@/daemon/service/discoverInstalledDaemonServiceEntries';
-import { resolveDaemonServicePaths, type DaemonServiceCliRuntime, type DaemonServiceListEntry } from '@/daemon/service/cli';
+import { resolveDaemonServicePaths, type DaemonServiceCliRuntime, type DaemonServiceListEntry } from '@/daemon/service/paths';
 import type { DaemonServiceMode } from '@/daemon/service/plan';
 import { type DaemonStartupSource, isDaemonStartupSourceServiceManaged } from '@/daemon/ownership/daemonOwnershipMetadata';
 

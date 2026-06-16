@@ -65,6 +65,7 @@ describe('materializeOpenCodeConnectedServiceRuntimeAuthSelection', () => {
       },
       api: {} as any,
       input: {
+        mode: 'apply',
         tracked: {
           startedBy: 'daemon',
           happySessionId: 'sess_1',

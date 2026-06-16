@@ -4,6 +4,7 @@ import type { TrackedSession } from '@/daemon/types';
 import { ConnectedServiceBindingsV1Schema } from '@happier-dev/protocol';
 import { join } from 'node:path';
 import { CATALOG_AGENT_IDS, type CatalogAgentId } from '@/backends/types';
+import { resolveConnectedServiceCandidatePersistedSessionFile } from '@/backends/catalog';
 import { configuration } from '@/configuration';
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from '../sessionAuthSwitch/resolveTrackedConnectedServiceSwitchContinuityContext';
 import { canResumeFromMaterializedState } from '../stateSharing/canResumeFromMaterializedState';
@@ -61,6 +62,7 @@ async function hasExactReachableResumeContext(input: Readonly<{
     agentId: input.agentId,
     baseDir: join(configuration.happyHomeDir, 'daemon', 'connected-services', 'materialized'),
     tracked,
+    resolveCandidatePersistedSessionFile: resolveConnectedServiceCandidatePersistedSessionFile,
   });
   if (!continuityContext.vendorResumeId) return false;
   if (!continuityContext.connectedServiceMaterializationIdentityV1) return false;

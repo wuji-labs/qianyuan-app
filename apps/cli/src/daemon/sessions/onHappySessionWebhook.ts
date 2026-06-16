@@ -354,16 +354,19 @@ export function createOnHappySessionWebhook(params: Readonly<{
           )
           : null;
 
-      await writeSessionMarkerFn({
-        pid,
-        happySessionId: sessionId,
-        startedBy: normalizedMetadata.startedBy ?? 'terminal',
-        cwd: normalizedPath,
-        processCommandHash,
-        processCommand,
-        metadata: normalizedMetadata,
-        ...(respawn ? { respawn } : {}),
-      });
+      await writeSessionMarkerFn(
+        {
+          pid,
+          happySessionId: sessionId,
+          startedBy: normalizedMetadata.startedBy ?? 'terminal',
+          cwd: normalizedPath,
+          processCommandHash,
+          processCommand,
+          metadata: normalizedMetadata,
+          ...(respawn ? { respawn } : {}),
+        },
+        { preserveConnectedServiceRestartIntent: true },
+      );
     })().catch((e) => {
       logger.debug('[DAEMON RUN] Failed to write session marker', e);
     });

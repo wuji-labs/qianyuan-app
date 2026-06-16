@@ -103,4 +103,26 @@ describe('RuntimeAccountIdentityIndex', () => {
     index.invalidateSession('codex-session');
     expect(index.readSessionIdentity('codex-session')).toBeNull();
   });
+
+  it('refuses group-bound exact identity without group generation proof', () => {
+    const index = new RuntimeAccountIdentityIndex({
+      nowMs: () => 1_000,
+      ttlMs: 60_000,
+    });
+
+    expect(index.record({
+      sessionId: 'codex-session',
+      serviceId: 'openai-codex',
+      groupId: 'codex-team',
+      profileId: 'primary',
+      providerAccountId: 'acct-codex',
+      accountLabel: null,
+      observedAtMs: 1_000,
+      source: 'runtime_quota_snapshot',
+      proofStrength: 'exact',
+      groupGeneration: null,
+    })).toEqual({ status: 'suppressed', reason: 'missing_group_generation' });
+
+    expect(index.readSessionIdentity('codex-session')).toBeNull();
+  });
 });

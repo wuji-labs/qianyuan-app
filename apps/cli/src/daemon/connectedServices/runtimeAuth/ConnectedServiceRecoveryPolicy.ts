@@ -151,6 +151,7 @@ function isCredentialFailure(kind: ConnectedServiceRecoveryPolicyIssue['kind']):
 function isSwitchableGroupIssue(kind: ConnectedServiceRecoveryPolicyIssue['kind']): boolean {
   return kind === 'usage_limit'
     || kind === 'rate_limit'
+    || kind === 'capacity'
     || kind === 'auth_expired'
     || kind === 'account_changed'
     || kind === 'refresh_failed'
@@ -158,6 +159,12 @@ function isSwitchableGroupIssue(kind: ConnectedServiceRecoveryPolicyIssue['kind'
     || kind === 'account_disabled'
     || kind === 'soft_limit'
     || kind === 'unknown';
+}
+
+function isAccountScopedCapacityIssue(issue: ConnectedServiceRecoveryPolicyIssue): boolean {
+  return issue.kind === 'capacity'
+    && 'quotaScope' in issue
+    && issue.quotaScope === 'account';
 }
 
 function hasProviderSharedStateRecoveryAction(issue: ConnectedServiceRecoveryPolicyIssue): boolean {
@@ -181,10 +188,11 @@ export function decideConnectedServiceRecovery(
   const profileId = issueProfileId(issue, input.selection);
   const groupId = issueGroupId(issue, input.selection);
 
-  // Provider capacity ("Overloaded"/529) is server-side and account-independent: switching
-  // accounts or restarting the session never helps. Retry the SAME session with backoff,
-  // exactly like temporary throttles (incident 2026-06-12, lane TRANSIENT).
-  if (issue.kind === 'temporary_throttle' || issue.kind === 'capacity') {
+  // Provider capacity ("Overloaded"/529) without account scope is server-side and
+  // account-independent: switching accounts or restarting the session never helps. Retry the
+  // SAME session with backoff, exactly like temporary throttles (incident 2026-06-12, lane
+  // TRANSIENT). Account-scoped capacity is a member-local limiter and remains switchable.
+  if (issue.kind === 'temporary_throttle' || (issue.kind === 'capacity' && !isAccountScopedCapacityIssue(issue))) {
     return {
       action: 'temporary_retry',
       serviceId: issue.serviceId,

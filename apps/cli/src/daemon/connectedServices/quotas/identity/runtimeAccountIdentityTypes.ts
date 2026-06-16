@@ -41,5 +41,6 @@ export type RuntimeAccountIdentityRecordResult =
         | 'missing_session_id'
         | 'missing_profile_id'
         | 'missing_provider_account_id'
+        | 'missing_group_generation'
         | 'invalid_observed_at';
     }>;

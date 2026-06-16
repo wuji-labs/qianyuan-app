@@ -77,6 +77,7 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
       groupId: 'main',
       activeProfileId: 'backup',
       expectedGeneration: 1,
+      overrideRuntimeCooldown: true,
     });
     expect(restartSession).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
@@ -593,6 +594,92 @@ describe('createDaemonConnectedServiceAuthGroupSwitchCoordinator', () => {
 
     expect(api.updateConnectedServiceAuthGroupActiveProfile).toHaveBeenCalledWith(expect.objectContaining({
       activeProfileId: 'tertiary',
+    }));
+  });
+
+  it('commits automated switches with runtime-cooldown override after fresher quota proves the target usable', async () => {
+    const initial = group('primary', 1);
+    const groupWithStaleBackupLimiter: ConnectedServiceAuthGroupV1 = {
+      ...initial,
+      members: [
+        initial.members[0]!,
+        {
+          ...initial.members[1]!,
+          state: {
+            v: 1,
+            quotaExhaustedUntilMs: 20_000,
+            lastFailureKind: 'usage_limit',
+            lastObservedAtMs: 900,
+          },
+        },
+      ],
+    };
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    runtimeQuotaSnapshots.recordSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'backup',
+      snapshot: {
+        v: 1,
+        serviceId: 'openai-codex',
+        profileId: 'backup',
+        fetchedAt: 1_000,
+        staleAfterMs: 60_000,
+        planLabel: null,
+        accountLabel: null,
+        meters: [{
+          meterId: 'weekly',
+          label: 'Weekly',
+          used: null,
+          limit: null,
+          unit: 'unknown',
+          utilizationPct: 30,
+          remainingPct: 70,
+          resetsAt: null,
+          status: 'ok',
+          details: {},
+        }],
+      },
+    });
+    const api = {
+      getConnectedServiceAuthGroup: vi.fn(async () => groupWithStaleBackupLimiter),
+      updateConnectedServiceAuthGroupRuntimeState: vi.fn(async () => groupWithStaleBackupLimiter),
+      updateConnectedServiceAuthGroupActiveProfile: vi.fn(async ({
+        activeProfileId,
+        overrideRuntimeCooldown,
+      }: {
+        activeProfileId: string;
+        overrideRuntimeCooldown?: boolean;
+      }) => {
+        if (overrideRuntimeCooldown !== true) {
+          throw new Error('expected automated runtime-cooldown override');
+        }
+        return {
+          ...groupWithStaleBackupLimiter,
+          activeProfileId,
+          generation: 2,
+        };
+      }),
+    };
+    const coordinator = createDaemonConnectedServiceAuthGroupSwitchCoordinator({
+      api,
+      runtimeQuotaSnapshots,
+      quotaFreshnessMs: 60_000,
+      nowMs: () => 1_000,
+      restartSession: async () => {},
+    });
+
+    await expect(coordinator.switchAfterClassifiedFailure({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      reason: 'usage_limit',
+      observedProfileId: 'primary',
+    })).resolves.toMatchObject({ status: 'switched', activeProfileId: 'backup' });
+
+    expect(api.updateConnectedServiceAuthGroupActiveProfile).toHaveBeenCalledWith(expect.objectContaining({
+      activeProfileId: 'backup',
+      expectedGeneration: 1,
+      overrideRuntimeCooldown: true,
     }));
   });
 

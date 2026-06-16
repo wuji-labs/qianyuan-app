@@ -1,6 +1,8 @@
 import type { ConnectedServiceId } from '@happier-dev/protocol';
 import type { AgentId as CatalogAgentId } from '@happier-dev/agents';
 
+import type { ConnectedServiceSameAccountFanoutStrategy } from '../quotas/identity/providerFanoutStrategy';
+
 export type ConnectedServiceRefreshReason =
   | 'scheduled'
   | 'spawn_preflight'
@@ -20,6 +22,15 @@ export type ConnectedServiceRefreshFailureCategory =
   | 'missing_refresh_token'
   | 'unknown';
 
+export type ConnectedServicePredictiveSoftSwitchLiveSessionRequirement =
+  | Readonly<{ kind: 'none' }>
+  | Readonly<{
+      kind: 'shared_group_auth_surface';
+      serviceIds: ReadonlyArray<ConnectedServiceId>;
+      authEnvKey: string;
+      authEnvSubpath?: ReadonlyArray<string>;
+    }>;
+
 /**
  * Every field here must have a production consumer; capability declarations without an enforcing
  * consumer are banned (they rot into false claims — see the removed `refreshTokenRuntimeHandling`,
@@ -30,6 +41,7 @@ export type ConnectedServiceRefreshFailureCategory =
  * - `spawnPreflightOauthRefresh` — `resolveConnectedServiceAuthForSpawn`.
  * - `refreshedCredentialApplication` — `createConnectedServicesAuthUpdatedRestartHandler`.
  * - `predictiveSoftSwitch` — `predictiveSoftSwitchPolicy` (spawn + daemon scheduling).
+ * - `sameAccountFanoutStrategy` — `ConnectedServiceQuotasCoordinator` exact same-account fanout.
  */
 export type ConnectedServiceCredentialLifecycleDescriptor = Readonly<{
   providerId: CatalogAgentId;
@@ -42,7 +54,9 @@ export type ConnectedServiceCredentialLifecycleDescriptor = Readonly<{
   }>;
   predictiveSoftSwitch: Readonly<{
     mode: 'supported' | 'unsupported';
+    liveSessionRequirement?: ConnectedServicePredictiveSoftSwitchLiveSessionRequirement;
   }>;
+  sameAccountFanoutStrategy: ConnectedServiceSameAccountFanoutStrategy;
 }>;
 
 export function buildDefaultConnectedServiceCredentialLifecycleDescriptor(
@@ -53,6 +67,7 @@ export function buildDefaultConnectedServiceCredentialLifecycleDescriptor(
     serviceIds: [],
     spawnPreflightOauthRefresh: { mode: 'expiry_window' },
     refreshedCredentialApplication: { mode: 'no_restart_required' },
-    predictiveSoftSwitch: { mode: 'unsupported' },
+    predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
+    sameAccountFanoutStrategy: 'none',
   };
 }

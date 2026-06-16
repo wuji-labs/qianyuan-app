@@ -24,6 +24,7 @@ const codexConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCreden
   spawnPreflightOauthRefresh: { mode: 'expiry_window' },
   refreshedCredentialApplication: { mode: 'restart_required' },
   predictiveSoftSwitch: { mode: 'supported' },
+  sameAccountFanoutStrategy: 'provider_account_id',
 };
 
 export const agent = {

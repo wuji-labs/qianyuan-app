@@ -4,6 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveTrackedConnectedServiceSwitchContinuityContext } from './resolveTrackedConnectedServiceSwitchContinuityContext';
 
+function resolveTestCandidatePersistedSessionFile(_agentId: string, metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const value = (metadata as Record<string, unknown>).piSessionFile;
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
 describe('resolveTrackedConnectedServiceSwitchContinuityContext', () => {
   it('derives materialized root/env and persisted session-file candidate from tracked resume options', () => {
     const baseDir = '/tmp/happier-connected-services';
@@ -35,6 +41,7 @@ describe('resolveTrackedConnectedServiceSwitchContinuityContext', () => {
       vendorResumeId: null,
       cwd: null,
       candidatePersistedSessionFile: null,
+      resolveCandidatePersistedSessionFile: resolveTestCandidatePersistedSessionFile,
     })).toEqual({
       connectedServiceMaterializationIdentityV1: {
         v: 1,
@@ -97,6 +104,7 @@ describe('resolveTrackedConnectedServiceSwitchContinuityContext', () => {
       vendorResumeId: null,
       cwd: null,
       candidatePersistedSessionFile: null,
+      resolveCandidatePersistedSessionFile: resolveTestCandidatePersistedSessionFile,
     })).toEqual({
       connectedServiceMaterializationIdentityV1: {
         v: 1,
@@ -168,6 +176,7 @@ describe('resolveTrackedConnectedServiceSwitchContinuityContext', () => {
       vendorResumeId: null,
       cwd: null,
       candidatePersistedSessionFile: null,
+      resolveCandidatePersistedSessionFile: resolveTestCandidatePersistedSessionFile,
     })).toEqual({
       connectedServiceMaterializationIdentityV1: {
         v: 1,
@@ -263,6 +272,7 @@ describe('resolveTrackedConnectedServiceSwitchContinuityContext', () => {
       vendorResumeId: null,
       cwd: null,
       candidatePersistedSessionFile: null,
+      resolveCandidatePersistedSessionFile: resolveTestCandidatePersistedSessionFile,
     })).toMatchObject({
       connectedServiceMaterializationIdentityV1: {
         v: 1,

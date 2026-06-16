@@ -36,6 +36,17 @@ function readMessageRecord(value: unknown): Record<string, unknown> | null {
   return asRecord(asRecord(value)?.message);
 }
 
+function readNestedString(value: unknown, key: string): string {
+  const raw = asRecord(value)?.[key];
+  return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+}
+
+function readCompactBoundaryTrigger(message: RawJSONLines): string {
+  const record = asRecord(message);
+  return readNestedString(record?.compactMetadata, 'trigger')
+    || readNestedString(record?.compact_metadata, 'trigger');
+}
+
 function hasToolResultContent(value: unknown): boolean {
   if (!Array.isArray(value)) return false;
   return value.some((item) => item && typeof item === 'object' && (item as Record<string, unknown>).type === 'tool_result');
@@ -73,6 +84,13 @@ export function readClaudeTranscriptTurnSignal(message: RawJSONLines): LocalTurn
       ? String((message as Record<string, unknown>).subtype)
       : '';
     if (subtype === 'compact_boundary') {
+      if (readCompactBoundaryTrigger(message) === 'auto') {
+        return {
+          type: 'continuation_detected',
+          providerTurnId: null,
+          source: 'claude_transcript_auto_compact_boundary',
+        };
+      }
       return {
         type: 'completion_candidate',
         providerTurnId: null,

@@ -559,6 +559,331 @@ describe('recordConnectedServiceRuntimeQuotaSnapshotForSession', () => {
     });
   });
 
+  it('does not record same-account identity or fanout for a group snapshot without active generation proof', async () => {
+    const quotaCoordinator = {
+      recordInBandQuotaSnapshot: vi.fn(async () => ({ status: 'persisted' as const })),
+      recordRuntimeAccountIdentityFromSnapshot: vi.fn(),
+      recordAccountExhaustionAndFanout: vi.fn(async () => ({
+        status: 'recorded' as const,
+        fanoutCandidates: 1,
+        fanoutRequests: 1,
+      })),
+    };
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const snapshot = {
+      v: 1 as const,
+      serviceId: 'openai-codex' as const,
+      profileId: 'primary',
+      fetchedAt: 1_000,
+      staleAfterMs: 300_000,
+      providerId: 'codex',
+      activeAccountId: 'acct_live_codex',
+      planLabel: 'pro',
+      accountLabel: 'live@example.test',
+      meters: [
+        {
+          meterId: 'primary',
+          label: 'Primary',
+          used: null,
+          limit: null,
+          unit: 'unknown' as const,
+          utilizationPct: 100,
+          remainingPct: 0,
+          resetsAt: 10_000,
+          status: 'ok' as const,
+          limitCategory: 'usage_limit' as const,
+          details: {},
+        },
+      ],
+    };
+
+    await expect(recordConnectedServiceRuntimeQuotaSnapshotForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'primary',
+                groupId: 'main',
+              },
+            },
+          },
+        },
+      }],
+      quotaCoordinator,
+      runtimeQuotaSnapshots,
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot,
+    })).resolves.toEqual({ status: 'recorded', groupRuntimeStateRecorded: true, quotaStateRecorded: true });
+
+    expect(runtimeQuotaSnapshots.getSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'primary',
+    })).toBe(snapshot);
+    expect(quotaCoordinator.recordRuntimeAccountIdentityFromSnapshot).not.toHaveBeenCalled();
+    expect(quotaCoordinator.recordAccountExhaustionAndFanout).not.toHaveBeenCalled();
+  });
+
+  it('does not record same-account identity or fanout when live group env names a different active profile', async () => {
+    const quotaCoordinator = {
+      recordInBandQuotaSnapshot: vi.fn(async () => ({ status: 'persisted' as const })),
+      recordRuntimeAccountIdentityFromSnapshot: vi.fn(),
+      recordAccountExhaustionAndFanout: vi.fn(async () => ({
+        status: 'recorded' as const,
+        fanoutCandidates: 1,
+        fanoutRequests: 1,
+      })),
+    };
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+    const snapshot = {
+      v: 1 as const,
+      serviceId: 'openai-codex' as const,
+      profileId: 'fresh-member',
+      fetchedAt: 1_000,
+      staleAfterMs: 300_000,
+      providerId: 'codex',
+      activeAccountId: 'acct_live_codex',
+      planLabel: 'pro',
+      accountLabel: 'live@example.test',
+      meters: [
+        {
+          meterId: 'primary',
+          label: 'Primary',
+          used: null,
+          limit: null,
+          unit: 'unknown' as const,
+          utilizationPct: 100,
+          remainingPct: 0,
+          resetsAt: 10_000,
+          status: 'ok' as const,
+          limitCategory: 'usage_limit' as const,
+          details: {},
+        },
+      ],
+    };
+
+    await expect(recordConnectedServiceRuntimeQuotaSnapshotForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'fresh-member',
+                groupId: 'main',
+              },
+            },
+          },
+          environmentVariables: {
+            [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+              kind: 'group',
+              serviceId: 'openai-codex',
+              groupId: 'main',
+              activeProfileId: 'stale-member',
+              fallbackProfileId: 'fresh-member',
+              generation: 7,
+            }]),
+          },
+        },
+      }],
+      quotaCoordinator,
+      runtimeQuotaSnapshots,
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot,
+    })).resolves.toEqual({ status: 'recorded', groupRuntimeStateRecorded: true, quotaStateRecorded: true });
+
+    expect(runtimeQuotaSnapshots.getSnapshot({
+      serviceId: 'openai-codex',
+      groupId: 'main',
+      profileId: 'fresh-member',
+    })).toBe(snapshot);
+    expect(quotaCoordinator.recordRuntimeAccountIdentityFromSnapshot).not.toHaveBeenCalled();
+    expect(quotaCoordinator.recordAccountExhaustionAndFanout).not.toHaveBeenCalled();
+  });
+
+  it('does not emit quota proof or account identity when a direct profile snapshot names a different profile', async () => {
+    const snapshot = {
+      v: 1 as const,
+      serviceId: 'openai-codex' as const,
+      profileId: 'unexpected-profile',
+      fetchedAt: 1_000,
+      staleAfterMs: 300_000,
+      providerId: 'codex',
+      activeAccountId: 'acct_live_codex',
+      planLabel: 'pro',
+      accountLabel: 'live@example.test',
+      meters: [
+        {
+          meterId: 'primary',
+          label: 'Primary',
+          used: 10,
+          limit: 100,
+          unit: 'requests' as const,
+          utilizationPct: 10,
+          remainingPct: 90,
+          resetsAt: 10_000,
+          status: 'ok' as const,
+          limitCategory: 'usage_limit' as const,
+          details: {},
+        },
+      ],
+    };
+    const quotaCoordinator = {
+      recordInBandQuotaSnapshot: vi.fn(async () => ({ status: 'persisted' as const })),
+      recordRuntimeAccountIdentityFromSnapshot: vi.fn(),
+      computeQuotaSnapshotMaterialFingerprint: vi.fn(() => 'quota-fingerprint'),
+      resolveQuotaProbeFreshProof: vi.fn(() => ({
+        status: 'proof' as const,
+        proofKind: 'quota_probe_fresh' as const,
+      })),
+    };
+    const recordProviderOutcomeProof = vi.fn(async () => {});
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+
+    await expect(recordConnectedServiceRuntimeQuotaSnapshotForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'profile',
+                profileId: 'selected-profile',
+              },
+            },
+          },
+        },
+      }],
+      quotaCoordinator,
+      recordProviderOutcomeProof,
+      runtimeQuotaSnapshots,
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot,
+    })).resolves.toEqual({ status: 'recorded', groupRuntimeStateRecorded: false, quotaStateRecorded: true });
+
+    expect(quotaCoordinator.resolveQuotaProbeFreshProof).not.toHaveBeenCalled();
+    expect(recordProviderOutcomeProof).not.toHaveBeenCalled();
+    expect(quotaCoordinator.recordRuntimeAccountIdentityFromSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('emits central quota_probe_fresh proof for a fresh matching group runtime snapshot without account proof', async () => {
+    const snapshot = {
+      v: 1 as const,
+      serviceId: 'openai-codex' as const,
+      profileId: 'fresh-member',
+      fetchedAt: 1_000,
+      staleAfterMs: 300_000,
+      providerId: 'codex',
+      planLabel: 'pro',
+      accountLabel: null,
+      meters: [
+        {
+          meterId: 'primary',
+          label: 'Primary',
+          used: 10,
+          limit: 100,
+          unit: 'requests' as const,
+          utilizationPct: 10,
+          remainingPct: 90,
+          resetsAt: 10_000,
+          status: 'ok' as const,
+          limitCategory: 'usage_limit' as const,
+          details: {},
+        },
+      ],
+    };
+    const quotaCoordinator = {
+      recordInBandQuotaSnapshot: vi.fn(async () => ({ status: 'persisted' as const })),
+      recordRuntimeAccountIdentityFromSnapshot: vi.fn(),
+      computeQuotaSnapshotMaterialFingerprint: vi.fn(() => 'quota-fingerprint'),
+      resolveQuotaProbeFreshProof: vi.fn(() => ({
+        status: 'proof' as const,
+        proofKind: 'quota_probe_fresh' as const,
+      })),
+    };
+    const recordProviderOutcomeProof = vi.fn(async () => {});
+    const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+
+    await expect(recordConnectedServiceRuntimeQuotaSnapshotForSession({
+      getChildren: () => [{
+        startedBy: 'daemon',
+        happySessionId: 'sess_1',
+        pid: 123,
+        spawnOptions: {
+          directory: '/tmp/project',
+          connectedServices: {
+            v: 1,
+            bindingsByServiceId: {
+              'openai-codex': {
+                source: 'connected',
+                selection: 'group',
+                profileId: 'fresh-member',
+                groupId: 'main',
+              },
+            },
+          },
+          environmentVariables: {
+            [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
+              kind: 'group',
+              serviceId: 'openai-codex',
+              groupId: 'main',
+              activeProfileId: 'fresh-member',
+              fallbackProfileId: 'old-member',
+              generation: 9,
+            }]),
+          },
+        },
+      }],
+      quotaCoordinator,
+      recordProviderOutcomeProof,
+      runtimeQuotaSnapshots,
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      snapshot,
+    })).resolves.toEqual({ status: 'recorded', groupRuntimeStateRecorded: true, quotaStateRecorded: true });
+
+    expect(quotaCoordinator.resolveQuotaProbeFreshProof).toHaveBeenCalledWith({
+      serviceId: 'openai-codex',
+      profileId: 'fresh-member',
+      groupId: 'main',
+      expectedGroupGeneration: 9,
+      currentGroupGeneration: 9,
+      expectedMaterialFingerprint: null,
+      snapshotMaterialFingerprint: 'quota-fingerprint',
+      snapshot,
+    });
+    expect(recordProviderOutcomeProof).toHaveBeenCalledWith({
+      sessionId: 'sess_1',
+      serviceId: 'openai-codex',
+      profileId: 'fresh-member',
+      groupId: 'main',
+      proofKind: 'quota_probe_fresh',
+    });
+    expect(quotaCoordinator.recordRuntimeAccountIdentityFromSnapshot).not.toHaveBeenCalled();
+  });
+
   it('records runtime quota snapshots even when the session has no connected-service selection', async () => {
     const quotaCoordinator = {
       recordInBandQuotaSnapshot: vi.fn(async () => ({ status: 'persisted' as const })),

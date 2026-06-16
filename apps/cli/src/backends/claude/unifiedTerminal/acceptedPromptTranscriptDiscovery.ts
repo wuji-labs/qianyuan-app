@@ -8,10 +8,14 @@ type AcceptedPrompt = Readonly<{
 
 export type ClaudeUnifiedAcceptedPromptTranscriptDiscovery = Readonly<{
   recordAcceptedPrompt(input: Readonly<{ message: string; acceptedAtMs?: number | undefined }>): void;
-  consumeMatchingTranscript(messages: readonly RawJSONLines[]): boolean;
+  consumeMatchingTranscript(messages: readonly unknown[]): boolean;
 }>;
 
-function readMessageTimestampMs(message: RawJSONLines): number | null {
+function readObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function readMessageTimestampMs(message: unknown): number | null {
   const raw = (message as Record<string, unknown>).timestamp;
   if (typeof raw !== 'string' || raw.trim().length === 0) return null;
   const parsed = Date.parse(raw);
@@ -33,9 +37,39 @@ function readUserPromptTexts(message: RawJSONLines): readonly string[] {
   return commandName ? [content, commandName] : [content];
 }
 
+function readQueuedCommandPromptTexts(value: unknown): readonly string[] {
+  const message = readObject(value);
+  if (!message) return [];
+  if (message.type === 'queue-operation') {
+    if (message.operation !== 'enqueue') return [];
+    const content = message.content;
+    return typeof content === 'string' && content.length > 0 ? [content] : [];
+  }
+  if (message.type === 'attachment') {
+    const attachment = readObject(message.attachment);
+    if (!attachment || attachment.type !== 'queued_command') return [];
+    const prompt = attachment.prompt;
+    return typeof prompt === 'string' && prompt.length > 0 ? [prompt] : [];
+  }
+  return [];
+}
+
+function readPromptTexts(message: unknown): readonly string[] {
+  const record = readObject(message);
+  if (!record) return [];
+  if (record.type === 'user') return readUserPromptTexts(record as RawJSONLines);
+  return readQueuedCommandPromptTexts(record);
+}
+
 function promptTextsMatch(transcriptText: string, acceptedPromptText: string): boolean {
   if (transcriptText === acceptedPromptText) return true;
   return transcriptText.startsWith('/')
+    && acceptedPromptText.startsWith(`${transcriptText} `);
+}
+
+function isCommandNameOnlyFallbackMatch(transcriptText: string, acceptedPromptText: string): boolean {
+  return transcriptText.startsWith('/')
+    && transcriptText !== acceptedPromptText
     && acceptedPromptText.startsWith(`${transcriptText} `);
 }
 
@@ -55,7 +89,7 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     }
   }
 
-  function matchesPromptWindow(message: RawJSONLines, acceptedPrompt: AcceptedPrompt): boolean {
+  function matchesPromptWindow(message: unknown, acceptedPrompt: AcceptedPrompt): boolean {
     const timestampMs = readMessageTimestampMs(message);
     if (timestampMs === null) {
       return nowMs() <= acceptedPrompt.expiresAtMs;
@@ -83,11 +117,30 @@ export function createClaudeUnifiedAcceptedPromptTranscriptDiscovery(opts: Reado
     consumeMatchingTranscript(messages) {
       pruneExpired(nowMs());
       for (const message of messages) {
-        const texts = readUserPromptTexts(message);
+        const texts = readPromptTexts(message);
         if (texts.length === 0) continue;
-        const matchIndex = acceptedPrompts.findIndex((acceptedPrompt) => (
-          texts.some((text) => promptTextsMatch(text, acceptedPrompt.text)) && matchesPromptWindow(message, acceptedPrompt)
-        ));
+        let matchIndex = -1;
+        for (const text of texts) {
+          const matchingIndices = acceptedPrompts
+            .map((acceptedPrompt, index) => ({ acceptedPrompt, index }))
+            .filter(({ acceptedPrompt }) => (
+              promptTextsMatch(text, acceptedPrompt.text) && matchesPromptWindow(message, acceptedPrompt)
+            ));
+          if (matchingIndices.length === 0) continue;
+          const exactMatch = matchingIndices.find(({ acceptedPrompt }) => acceptedPrompt.text === text);
+          if (exactMatch) {
+            matchIndex = exactMatch.index;
+            break;
+          }
+          const fallbackMatches = matchingIndices.filter(({ acceptedPrompt }) => (
+            isCommandNameOnlyFallbackMatch(text, acceptedPrompt.text)
+          ));
+          if (fallbackMatches.length > 1 && fallbackMatches.length === matchingIndices.length) {
+            continue;
+          }
+          matchIndex = matchingIndices[0]?.index ?? -1;
+          break;
+        }
         if (matchIndex < 0) continue;
         acceptedPrompts.splice(matchIndex, 1);
         return true;

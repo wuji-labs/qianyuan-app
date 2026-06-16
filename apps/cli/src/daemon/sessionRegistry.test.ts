@@ -5,6 +5,30 @@ import { join } from 'node:path';
 import { STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS } from '@happier-dev/cli-common/firstPartyRuntime';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
+function createDeferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('Timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe('sessionRegistry', () => {
   const releaseEnvScope = createEnvKeyScope(STANDARD_MANAGED_CLI_RELEASE_CHANNEL_ENV_KEYS);
   const originalHappyHomeDir = process.env.HAPPIER_HOME_DIR;
@@ -199,6 +223,200 @@ describe('sessionRegistry', () => {
     const markers = await listSessionMarkers();
     expect(markers).toHaveLength(1);
     expect(markers[0]).not.toHaveProperty('connectedServiceRestartIntent');
+  });
+
+  it('can preserve a connected-service restart intent across routine marker refreshes', async () => {
+    const {
+      listSessionMarkers,
+      markSessionMarkerConnectedServiceRestartIntent,
+      writeSessionMarker,
+    } = await import('./sessionRegistry');
+
+    await writeSessionMarker({
+      pid: 9995,
+      happySessionId: 'sess-preserve-restart-intent',
+      startedBy: 'daemon',
+      cwd: '/tmp/work',
+    });
+    await expect(markSessionMarkerConnectedServiceRestartIntent({
+      pid: 9995,
+      requestedAtMs: 55_000,
+    })).resolves.toBe(true);
+
+    await writeSessionMarker(
+      {
+        pid: 9995,
+        happySessionId: 'sess-preserve-restart-intent',
+        startedBy: 'daemon',
+        cwd: '/tmp/work',
+        metadata: { codexSessionId: 'codex-thread' },
+      },
+      { preserveConnectedServiceRestartIntent: true },
+    );
+
+    await expect(listSessionMarkers()).resolves.toEqual([
+      expect.objectContaining({
+        pid: 9995,
+        metadata: { codexSessionId: 'codex-thread' },
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 55_000,
+        },
+      }),
+    ]);
+  });
+
+  it('preserves a connected-service restart intent when mark races with a routine marker refresh', async () => {
+    const refreshWriteBlock = createDeferred<void>();
+    let refreshWriteBlocked = false;
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return {
+        ...actual,
+        writeFile: vi.fn(async (...args: Parameters<typeof actual.writeFile>) => {
+          const data = args[1];
+          if (
+            !refreshWriteBlocked
+            && typeof data === 'string'
+            && data.includes('"refreshMarkerRace": true')
+          ) {
+            refreshWriteBlocked = true;
+            await refreshWriteBlock.promise;
+          }
+          return await actual.writeFile(...args);
+        }),
+      };
+    });
+
+    try {
+      const {
+        listSessionMarkers,
+        markSessionMarkerConnectedServiceRestartIntent,
+        writeSessionMarker,
+      } = await import('./sessionRegistry');
+
+      await writeSessionMarker({
+        pid: 9996,
+        happySessionId: 'sess-mark-refresh-race',
+        startedBy: 'daemon',
+        cwd: '/tmp/work',
+      });
+
+      const refreshPromise = writeSessionMarker(
+        {
+          pid: 9996,
+          happySessionId: 'sess-mark-refresh-race',
+          startedBy: 'daemon',
+          cwd: '/tmp/work',
+          metadata: { refreshMarkerRace: true },
+        },
+        { preserveConnectedServiceRestartIntent: true },
+      );
+      await waitUntil(() => refreshWriteBlocked);
+
+      const markPromise = markSessionMarkerConnectedServiceRestartIntent({
+        pid: 9996,
+        requestedAtMs: 99_960,
+      });
+      await Promise.race([
+        markPromise,
+        new Promise((resolve) => setTimeout(resolve, 100)),
+      ]);
+
+      refreshWriteBlock.resolve();
+      await Promise.all([refreshPromise, markPromise]);
+
+      await expect(listSessionMarkers()).resolves.toEqual([
+        expect.objectContaining({
+          pid: 9996,
+          metadata: { refreshMarkerRace: true },
+          connectedServiceRestartIntent: {
+            v: 1,
+            requestedAtMs: 99_960,
+          },
+        }),
+      ]);
+    } finally {
+      refreshWriteBlock.resolve();
+      vi.doUnmock('node:fs/promises');
+      vi.resetModules();
+    }
+  });
+
+  it('does not resurrect a connected-service restart intent when clear races with a routine marker refresh', async () => {
+    const refreshWriteBlock = createDeferred<void>();
+    let refreshWriteBlocked = false;
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      return {
+        ...actual,
+        writeFile: vi.fn(async (...args: Parameters<typeof actual.writeFile>) => {
+          const data = args[1];
+          if (
+            !refreshWriteBlocked
+            && typeof data === 'string'
+            && data.includes('"refreshMarkerRace": true')
+          ) {
+            refreshWriteBlocked = true;
+            await refreshWriteBlock.promise;
+          }
+          return await actual.writeFile(...args);
+        }),
+      };
+    });
+
+    try {
+      const {
+        clearSessionMarkerConnectedServiceRestartIntent,
+        listSessionMarkers,
+        writeSessionMarker,
+      } = await import('./sessionRegistry');
+
+      await writeSessionMarker({
+        pid: 9997,
+        happySessionId: 'sess-clear-refresh-race',
+        startedBy: 'daemon',
+        cwd: '/tmp/work',
+        connectedServiceRestartIntent: {
+          v: 1,
+          requestedAtMs: 99_970,
+        },
+      });
+
+      const refreshPromise = writeSessionMarker(
+        {
+          pid: 9997,
+          happySessionId: 'sess-clear-refresh-race',
+          startedBy: 'daemon',
+          cwd: '/tmp/work',
+          metadata: { refreshMarkerRace: true },
+        },
+        { preserveConnectedServiceRestartIntent: true },
+      );
+      await waitUntil(() => refreshWriteBlocked);
+
+      const clearPromise = clearSessionMarkerConnectedServiceRestartIntent(9997);
+      await Promise.race([
+        clearPromise,
+        new Promise((resolve) => setTimeout(resolve, 100)),
+      ]);
+
+      refreshWriteBlock.resolve();
+      await Promise.all([refreshPromise, clearPromise]);
+
+      const markers = await listSessionMarkers();
+      expect(markers).toEqual([
+        expect.objectContaining({
+          pid: 9997,
+          metadata: { refreshMarkerRace: true },
+        }),
+      ]);
+      expect(markers[0]).not.toHaveProperty('connectedServiceRestartIntent');
+    } finally {
+      refreshWriteBlock.resolve();
+      vi.doUnmock('node:fs/promises');
+      vi.resetModules();
+    }
   });
 
   it('does not create a connected-service restart intent marker when no session marker exists', async () => {

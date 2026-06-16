@@ -16,7 +16,8 @@ const claudeConnectedServiceCredentialLifecycleDescriptor: ConnectedServiceCrede
   serviceIds: AGENTS_CORE.claude.connectedServices.supportedServiceIds,
   spawnPreflightOauthRefresh: { mode: 'force' },
   refreshedCredentialApplication: { mode: 'restart_required' },
-  predictiveSoftSwitch: { mode: 'supported' },
+  predictiveSoftSwitch: { mode: 'unsupported', liveSessionRequirement: { kind: 'none' } },
+  sameAccountFanoutStrategy: 'shared_group_auth_surface',
 };
 
 export const agent = {

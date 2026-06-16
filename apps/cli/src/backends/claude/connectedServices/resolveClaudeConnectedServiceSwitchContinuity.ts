@@ -8,17 +8,19 @@ import {
   hasExactConnectedServiceRestartContinuityContext,
   isConnectedToConnectedServiceSwitch,
   isExactSameConnectedServiceSelection,
+  isSameConnectedServiceAuthGroup,
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
-import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { canResumeFromMaterializedStateCore } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedStateCore';
 import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
 import { logger } from '@/ui/logger';
 
 import { claudeConnectedServiceStateSharingDescriptor } from './claudeConnectedServiceStateSharingDescriptor';
 import {
   CLAUDE_CONNECTED_SERVICES_LEGACY_RESTART_SAME_HOME_ENV,
+  verifyResumeReachableClaude,
 } from './verifyResumeReachableClaude';
-import { readClaudeRuntimeAuthHotApplyMetadata } from './claudeRuntimeAuthHotApplyMetadata';
+import { readClaudeRuntimeAuthSharedGroupSurfaceMetadata } from './claudeRuntimeAuthSharedGroupSurfaceMetadata';
 
 const CLAUDE_RESTART_REMATERIALIZE_REQUIRED_REASON = 'claude_restart_rematerialize_required';
 const CLAUDE_SHARED_STATE_REQUIRED_REASON = 'claude_shared_state_required';
@@ -38,14 +40,59 @@ function asNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function canUseClaudeRuntimeConfigHotApply(params: ConnectedServiceSwitchContinuityParams): boolean {
+function targetsClaudeSharedGroupRuntimeConfig(params: ConnectedServiceSwitchContinuityParams): boolean {
   if (params.serviceId !== 'claude-subscription') return false;
-  const metadata = readClaudeRuntimeAuthHotApplyMetadata(params.runtimeAuthSelection);
+  const metadata = readClaudeRuntimeAuthSharedGroupSurfaceMetadata(params.runtimeAuthSelection);
   if (!metadata) return false;
   return (
     params.targetMaterializedRoot === metadata.runtimeMaterializedRoot
     && params.targetMaterializedEnv?.CLAUDE_CONFIG_DIR === metadata.runtimeClaudeConfigDir
   );
+}
+
+async function resolveClaudeRestartSameHomeContinuity(
+  params: ConnectedServiceSwitchContinuityParams,
+): Promise<ConnectedServiceSwitchContinuityResult> {
+  if (!hasExactConnectedServiceRestartContinuityContext(params)) {
+    return providerSessionStateUnavailableForResume();
+  }
+
+  const targetMaterializedRoot = asNonEmptyString(params.targetMaterializedRoot);
+  const vendorResumeId = asNonEmptyString(params.vendorResumeId);
+  const cwd = asNonEmptyString(params.cwd);
+  const materializationIdentity = params.connectedServiceMaterializationIdentityV1 ?? null;
+  const targetMaterializedEnv = params.targetMaterializedEnv ?? null;
+  if (
+    !targetMaterializedRoot
+    || !vendorResumeId
+    || !cwd
+    || !materializationIdentity
+    || !targetMaterializedEnv
+  ) {
+    return providerSessionStateUnavailableForResume();
+  }
+
+  const reachability = await canResumeFromMaterializedStateCore({
+    targetMaterializedRoot,
+    targetMaterializedEnv,
+    requestedStateMode: 'isolated',
+    effectiveStateMode: 'isolated',
+    materializationIdentity,
+    vendorResumeId,
+    cwd,
+    candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+    verifyResumeReachable: async (providerInput) => await verifyResumeReachableClaude({
+      vendorResumeId: providerInput.vendorResumeId,
+      processEnv: providerInput.targetMaterializedEnv as NodeJS.ProcessEnv,
+      candidatePersistedSessionFile: providerInput.candidatePersistedSessionFile ?? null,
+      targetStrict: providerInput.targetStrict === true,
+    }),
+  });
+  return reachability.ok
+    ? { mode: 'restart_same_home' }
+    : providerSessionStateUnavailableForResume({
+        diagnostics: reachability.continuityDiagnostics,
+      });
 }
 
 export async function resolveClaudeConnectedServiceSwitchContinuity(
@@ -64,47 +111,15 @@ export async function resolveClaudeConnectedServiceSwitchContinuity(
   }
 
   if (isExactSameConnectedServiceSelection(params)) {
-    if (!hasExactConnectedServiceRestartContinuityContext(params)) {
-      return providerSessionStateUnavailableForResume();
-    }
-
-    const targetMaterializedRoot = asNonEmptyString(params.targetMaterializedRoot);
-    const vendorResumeId = asNonEmptyString(params.vendorResumeId);
-    const cwd = asNonEmptyString(params.cwd);
-    const materializationIdentity = params.connectedServiceMaterializationIdentityV1 ?? null;
-    const targetMaterializedEnv = params.targetMaterializedEnv ?? null;
-    if (
-      !targetMaterializedRoot
-      || !vendorResumeId
-      || !cwd
-      || !materializationIdentity
-      || !targetMaterializedEnv
-    ) {
-      return providerSessionStateUnavailableForResume();
-    }
-
-    const reachability = await canResumeFromMaterializedState({
-      agentId: 'claude',
-      serviceId: params.serviceId,
-      targetMaterializedRoot,
-      targetMaterializedEnv,
-      requestedStateMode: 'isolated',
-      effectiveStateMode: 'isolated',
-      materializationIdentity,
-      vendorResumeId,
-      cwd,
-      candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
-    });
-    return reachability.ok
-      ? { mode: 'restart_same_home' }
-      : providerSessionStateUnavailableForResume({
-          diagnostics: reachability.continuityDiagnostics,
-        });
+    return await resolveClaudeRestartSameHomeContinuity(params);
   }
 
   if (isConnectedToConnectedServiceSwitch(params)) {
-    if (canUseClaudeRuntimeConfigHotApply(params)) {
-      return { mode: 'hot_apply' };
+    if (
+      isSameConnectedServiceAuthGroup(params)
+      && targetsClaudeSharedGroupRuntimeConfig(params)
+    ) {
+      return await resolveClaudeRestartSameHomeContinuity(params);
     }
     return resolveConnectedServiceRestartContinuityAction({
       stateSharingDescriptor: claudeConnectedServiceStateSharingDescriptor,

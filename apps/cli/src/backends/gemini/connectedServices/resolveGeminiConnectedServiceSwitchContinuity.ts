@@ -10,9 +10,10 @@ import {
   isExactSameConnectedServiceSelection,
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
-import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { canResumeFromMaterializedStateCore } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedStateCore';
 import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
 import { geminiConnectedServiceStateSharingDescriptor } from './geminiConnectedServiceStateSharingDescriptor';
+import { verifyResumeReachableGemini } from './verifyResumeReachableGemini';
 
 const GEMINI_RESTART_REMATERIALIZE_REQUIRED_REASON = 'gemini_restart_rematerialize_required';
 
@@ -58,9 +59,7 @@ export async function resolveGeminiConnectedServiceSwitchContinuity(
       return providerSessionStateUnavailableForResume();
     }
 
-    const reachability = await canResumeFromMaterializedState({
-      agentId: 'gemini',
-      serviceId: params.serviceId,
+    const reachability = await canResumeFromMaterializedStateCore({
       targetMaterializedRoot,
       targetMaterializedEnv,
       requestedStateMode: 'isolated',
@@ -69,6 +68,7 @@ export async function resolveGeminiConnectedServiceSwitchContinuity(
       vendorResumeId,
       cwd,
       candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+      verifyResumeReachable: verifyResumeReachableGemini,
     });
     return reachability.ok
       ? { mode: 'restart_same_home' }

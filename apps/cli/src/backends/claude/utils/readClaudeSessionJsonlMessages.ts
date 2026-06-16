@@ -20,6 +20,8 @@ export async function readClaudeSessionJsonlMessages(params: Readonly<{
    * memory can cause OOMs in long-running scanners and integration tests.
    */
   maxBytes?: number;
+  /** Observes every parsed JSONL value before conversation/internal filtering. */
+  onJsonValue?: ((value: unknown) => void) | undefined;
 }>): Promise<RawJSONLines[]> {
   logger.debug(`[${params.logLabel}] Reading session file: ${params.sessionFilePath}`);
 
@@ -39,6 +41,11 @@ export async function readClaudeSessionJsonlMessages(params: Readonly<{
     try {
       if (line.trim() === '') continue;
       const raw = JSON.parse(line);
+      try {
+        params.onJsonValue?.(raw);
+      } catch (observerError) {
+        logger.debug(`[${params.logLabel}] Error observing raw message: ${observerError}`);
+      }
 
       if (raw?.type && INTERNAL_CLAUDE_EVENT_TYPES.has(String(raw.type))) {
         continue;

@@ -61,6 +61,10 @@ import {
 } from './createConnectedServiceQuotaPersistenceScheduler';
 import { RuntimeAccountIdentityIndex } from './identity/RuntimeAccountIdentityIndex';
 import { resolveSessionsSharingProviderAccount } from './identity/resolveSessionsSharingProviderAccount';
+import {
+  requiresExactProviderAccountFanout,
+  type ConnectedServiceSameAccountFanoutStrategy,
+} from './identity/providerFanoutStrategy';
 import type {
   RuntimeAccountIdentityEntry,
   RuntimeAccountIdentityRecordInput,
@@ -252,6 +256,11 @@ export type ConnectedServiceQuotaSoftSwitchRecoveryGuard = (
     reason: 'soft_threshold';
   }>,
 ) => SoftSwitchRecoveryGuardResult | Promise<SoftSwitchRecoveryGuardResult>;
+type ConnectedServiceSameAccountFanoutStrategyResolver = (input: Readonly<{
+  sourceSessionId: string;
+  serviceId: ConnectedServiceId;
+  groupId: string;
+}>) => ConnectedServiceSameAccountFanoutStrategy | Promise<ConnectedServiceSameAccountFanoutStrategy>;
 
 /**
  * RD-QUO-13: edge-triggered quota lifecycle transition emitted by the coordinator.
@@ -518,6 +527,7 @@ export class ConnectedServiceQuotasCoordinator {
   private readonly authGroupSwitchCoordinator: AuthGroupSwitchCoordinator | null;
   private readonly softSwitchPolicyGuard: ConnectedServiceQuotaSoftSwitchPolicyGuard | null;
   private readonly softSwitchRecoveryGuard: ConnectedServiceQuotaSoftSwitchRecoveryGuard | null;
+  private readonly sameAccountFanoutStrategyResolver: ConnectedServiceSameAccountFanoutStrategyResolver | null;
   private readonly groupSwitchCheckMinIntervalMs: number;
   private readonly groupSwitchCheckJitterMs: number;
   private readonly quotaWorkGate: DaemonServerWorkGate | null;
@@ -571,6 +581,7 @@ export class ConnectedServiceQuotasCoordinator {
     authGroupSwitchCoordinator?: AuthGroupSwitchCoordinator | null;
     softSwitchPolicyGuard?: ConnectedServiceQuotaSoftSwitchPolicyGuard | null;
     softSwitchRecoveryGuard?: ConnectedServiceQuotaSoftSwitchRecoveryGuard | null;
+    sameAccountFanoutStrategyResolver?: ConnectedServiceSameAccountFanoutStrategyResolver | null;
     groupSwitchCheckMinIntervalMs?: number;
     groupSwitchCheckJitterMs?: number;
     quotaWorkGate?: DaemonServerWorkGate | null;
@@ -626,6 +637,7 @@ export class ConnectedServiceQuotasCoordinator {
     this.authGroupSwitchCoordinator = params.authGroupSwitchCoordinator ?? null;
     this.softSwitchPolicyGuard = params.softSwitchPolicyGuard ?? null;
     this.softSwitchRecoveryGuard = params.softSwitchRecoveryGuard ?? null;
+    this.sameAccountFanoutStrategyResolver = params.sameAccountFanoutStrategyResolver ?? null;
     this.groupSwitchCheckMinIntervalMs =
       typeof params.groupSwitchCheckMinIntervalMs === 'number' && Number.isFinite(params.groupSwitchCheckMinIntervalMs)
         ? Math.max(0, Math.trunc(params.groupSwitchCheckMinIntervalMs))
@@ -754,6 +766,27 @@ export class ConnectedServiceQuotasCoordinator {
     });
   }
 
+  public updateSpawnTargetSessionId(params: Readonly<{
+    pid: number;
+    sessionId?: string;
+  }>): void {
+    const pid = Math.trunc(Number(params.pid));
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    const target = this.spawnTargetsByPid.get(pid);
+    if (!target) return;
+    const sessionId = typeof params.sessionId === 'string' ? params.sessionId.trim() : '';
+    if (!sessionId) return;
+    if (target.sessionId === sessionId) return;
+    if (target.sessionId) {
+      this.runtimeAccountIdentities.invalidateSession(target.sessionId);
+    }
+    this.runtimeAccountIdentities.invalidateSession(sessionId);
+    this.spawnTargetsByPid.set(pid, {
+      ...target,
+      sessionId,
+    });
+  }
+
   public unregisterPid(pidRaw: number): void {
     const pid = Math.trunc(Number(pidRaw));
     if (!Number.isFinite(pid) || pid <= 0) return;
@@ -770,6 +803,9 @@ export class ConnectedServiceQuotasCoordinator {
     if (!Number.isFinite(fromPid) || fromPid <= 0 || !Number.isFinite(toPid) || toPid <= 0) return;
     const target = this.spawnTargetsByPid.get(fromPid);
     if (!target) return;
+    if (target.sessionId) {
+      this.runtimeAccountIdentities.invalidateSession(target.sessionId);
+    }
     this.spawnTargetsByPid.delete(fromPid);
     this.spawnTargetsByPid.set(toPid, {
       ...target,
@@ -898,6 +934,19 @@ export class ConnectedServiceQuotasCoordinator {
     if (!authGroupSwitchCoordinator) {
       return { status: 'recorded', fanoutCandidates: 0, fanoutRequests: 0 };
     }
+    const fanoutStrategy = await this.resolveSameAccountFanoutStrategy({
+      sourceSessionId: input.sourceSessionId,
+      serviceId: input.serviceId,
+      groupId: input.groupId,
+    });
+    if (!requiresExactProviderAccountFanout(fanoutStrategy)) {
+      this.recordDiagnostic?.({
+        event: 'quota_work_suppressed',
+        phase: 'same_account_fanout',
+        reason: 'same_account_fanout_strategy_not_exact_provider_account',
+      });
+      return { status: 'recorded', fanoutCandidates: 0, fanoutRequests: 0 };
+    }
     const currentGroupGenerationBySessionId = this.buildCurrentGroupGenerationBySessionId({
       serviceId: input.serviceId,
       groupId: input.groupId,
@@ -968,8 +1017,26 @@ export class ConnectedServiceQuotasCoordinator {
     });
   }
 
+  public computeQuotaSnapshotMaterialFingerprint(snapshot: ConnectedServiceQuotaSnapshotV1): string {
+    return this.computeQuotaMaterialFingerprint(snapshot);
+  }
+
+  private async resolveSameAccountFanoutStrategy(input: Readonly<{
+    sourceSessionId: string;
+    serviceId: ConnectedServiceId;
+    groupId: string;
+  }>): Promise<ConnectedServiceSameAccountFanoutStrategy> {
+    if (!this.sameAccountFanoutStrategyResolver) return 'none';
+    try {
+      return await this.sameAccountFanoutStrategyResolver(input);
+    } catch {
+      return 'none';
+    }
+  }
+
   private isSameAccountFanoutCoalesced(input: Readonly<{
     serviceId: ConnectedServiceId;
+    groupId: string;
     providerAccountId: string;
     resetAtMs: number | null;
   }>): boolean {
@@ -987,14 +1054,16 @@ export class ConnectedServiceQuotasCoordinator {
 
   private buildSameAccountFanoutCoalescingKey(input: Readonly<{
     serviceId: ConnectedServiceId;
+    groupId: string;
     providerAccountId: string;
     resetAtMs: number | null;
   }>): string {
+    const groupId = input.groupId.trim();
     const providerAccountId = input.providerAccountId.trim();
     const resetBucket = typeof input.resetAtMs === 'number' && Number.isFinite(input.resetAtMs)
       ? Math.floor(Math.max(0, input.resetAtMs) / SAME_ACCOUNT_FANOUT_RESET_BUCKET_MS)
       : 'unknown';
-    return `${input.serviceId}\u0000${providerAccountId}\u0000${resetBucket}`;
+    return `${input.serviceId}\u0000${groupId}\u0000${providerAccountId}\u0000${resetBucket}`;
   }
 
   private buildCurrentGroupGenerationBySessionId(input: Readonly<{

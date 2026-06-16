@@ -226,6 +226,24 @@ describe('resolveSessionRuntimeSnapshot', () => {
     });
   });
 
+  it('restores the vendor resume id from persisted provider metadata when respawn options omit resume', () => {
+    const result = resolveSessionRuntimeSnapshot({
+      incomingOptions: baseIncomingOptions({
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      }),
+      persistedMetadata: {
+        flavor: 'codex',
+        codexSessionId: ' codex-thread-from-metadata ',
+      },
+    });
+
+    expect(result.snapshot.vendorResumeId).toEqual({
+      value: 'codex-thread-from-metadata',
+      updatedAt: null,
+    });
+    expect(result.spawnOptions.resume).toBe('codex-thread-from-metadata');
+  });
+
   it('preserves incoming controls without timestamps when no persisted or tracked snapshot exists', () => {
     const result = resolveSessionRuntimeSnapshot({
       incomingOptions: baseIncomingOptions({

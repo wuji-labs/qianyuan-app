@@ -12,9 +12,10 @@ import {
   isSameConnectedServiceAuthGroup,
   providerSessionStateUnavailableForResume,
 } from '@/backends/connectedServices/switchContinuityContext';
-import { canResumeFromMaterializedState } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedState';
+import { canResumeFromMaterializedStateCore } from '@/daemon/connectedServices/stateSharing/canResumeFromMaterializedStateCore';
 import { resolveConnectedServiceRestartContinuityAction } from '@/daemon/connectedServices/sessionAuthSwitch/continuity/resolveConnectedServiceSwitchAction';
 import { piConnectedServiceStateSharingDescriptor } from './piConnectedServiceStateSharingDescriptor';
+import { verifyResumeReachablePi } from './verifyResumeReachablePi';
 
 const PI_RESTART_REMATERIALIZE_REQUIRED_REASON = 'pi_restart_rematerialize_required';
 const PI_EXACT_CONNECTED_SERVICE_SELECTION_REQUIRED_REASON = 'pi_exact_connected_service_selection_required';
@@ -111,9 +112,7 @@ export async function resolvePiConnectedServiceSwitchContinuity(
       });
     }
 
-    const reachability = await canResumeFromMaterializedState({
-      agentId: 'pi',
-      serviceId: params.serviceId,
+    const reachability = await canResumeFromMaterializedStateCore({
       targetMaterializedRoot,
       targetMaterializedEnv,
       requestedStateMode: 'isolated',
@@ -122,6 +121,7 @@ export async function resolvePiConnectedServiceSwitchContinuity(
       vendorResumeId,
       cwd,
       candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+      verifyResumeReachable: verifyResumeReachablePi,
     });
     return reachability.ok
       ? { mode: 'restart_same_home' }

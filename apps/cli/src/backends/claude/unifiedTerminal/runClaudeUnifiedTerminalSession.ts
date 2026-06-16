@@ -53,6 +53,7 @@ import {
 } from './controlCommandEcho';
 import type {
   ClaudeUnifiedInputConsumer,
+  ClaudeUnifiedInputArbiter,
   ClaudeUnifiedPromptAcceptance,
   ClaudeUnifiedStartableDisposable,
 } from './_types';
@@ -867,11 +868,15 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       // its permission/plan mode applied to the RUNNING turn (verified ShiftTab, probe Q-A) so the
       // text steers instead of deferring to turn end. No bridge -> unchanged refusal/defer behavior.
       const bridgeForInFlightModeApply = runtimeControlBridge;
+      let arbiterForPromptCustody: ClaudeUnifiedInputArbiter<Mode> | null = null;
       const steerWiring = createClaudeUnifiedInFlightSteerEvaluator<Mode>({
         hostAdapter: hostResolution.adapter,
         handle: activeHandle,
         telemetry,
         initialPermissionMode: startupInput.mode.permissionMode,
+        onPromptCustodyByTerminal: async (batch) => {
+          await arbiterForPromptCustody?.observePromptCustodyByTerminal(batch);
+        },
         onAvailabilitySnapshot: opts.onInFlightSteerAvailabilitySnapshot,
         ownComposerTexts: ownComposerTextLog,
         ...(steerDraftClearPort
@@ -957,7 +962,8 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           }
         },
       });
-      const confirmPromptAcceptedFromTranscript = (messages: readonly RawJSONLines[]): boolean => {
+      arbiterForPromptCustody = arbiter;
+      const confirmPromptAcceptedFromTranscript = (messages: readonly unknown[]): boolean => {
         if (!acceptedPromptTranscriptDiscovery.consumeMatchingTranscript(messages)) return false;
         observeTrustedProviderProgress();
         void arbiter.confirmPromptAcceptedByProvider().catch(() => undefined);
@@ -1022,6 +1028,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
                 confirmCompactBoundaryPromptAcceptedFromTranscript(message);
               }
               lifecycleBridge?.observeTranscript(message);
+            },
+            onRawTranscriptValue: (value) => {
+              confirmPromptAcceptedFromTranscript([value]);
             },
             onSessionFound: opts.onSessionFound,
             loadCommittedClaudeJsonlMessageBaseline: opts.loadCommittedClaudeJsonlMessageBaseline,

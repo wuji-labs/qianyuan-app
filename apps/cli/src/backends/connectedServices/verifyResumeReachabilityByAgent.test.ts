@@ -32,7 +32,7 @@ function baseInput(overrides?: Partial<VerifyResumeReachableInput>): VerifyResum
 const providerCases: ReadonlyArray<Readonly<{ agentId: CatalogAgentId; reason: string }>> = [
   { agentId: 'pi', reason: 'pi_session_file_not_found' },
   { agentId: 'codex', reason: 'codex_session_file_not_found' },
-  { agentId: 'gemini', reason: 'gemini_state_not_shared' },
+  { agentId: 'gemini', reason: 'gemini_session_file_not_found' },
   { agentId: 'opencode', reason: 'opencode_state_not_shared' },
   { agentId: 'claude', reason: 'claude_session_not_in_native_store' },
 ];
