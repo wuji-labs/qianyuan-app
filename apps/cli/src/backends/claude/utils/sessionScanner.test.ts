@@ -935,6 +935,63 @@ describe('sessionScanner', () => {
     expect(uuids).toContain('bound-live-row')
   }, 10_000)
 
+  it('does not observe raw rows from untrusted discovered sibling sessions before binding', async () => {
+    const rawValues: unknown[] = []
+    const foreignSessionId = '11111111-1111-4111-8111-111111111111'
+    const boundSessionId = '22222222-2222-4222-8222-222222222222'
+    const foreignFile = join(projectDir, `${foreignSessionId}.jsonl`)
+    const boundFile = join(projectDir, `${boundSessionId}.jsonl`)
+
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onRawJsonlValue: (value) => rawValues.push(value),
+      discoverNewSessions: true,
+      bindToFirstSession: true,
+      bindDiscoveredSessions: false,
+      replayInitialMessages: true,
+    })
+
+    await writeFile(
+      foreignFile,
+      JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: new Date().toISOString(),
+        sessionId: foreignSessionId,
+        content: 'queued prompt for a different Claude session',
+      }) + '\n',
+    )
+
+    await new Promise((resolve) => setTimeout(resolve, 1250))
+    expect(rawValues).toHaveLength(0)
+
+    await writeFile(boundFile, '')
+    scanner.onNewSession({ sessionId: boundSessionId, transcriptPath: boundFile })
+    await appendFile(
+      boundFile,
+      JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: new Date().toISOString(),
+        sessionId: boundSessionId,
+        content: 'queued prompt for this Claude session',
+      }) + '\n',
+    )
+
+    await waitFor(() => rawValues.length > 0, 3000)
+    expect(rawValues).toSatisfy((values: unknown[]) =>
+      values.every((value) => {
+        if (!value || typeof value !== 'object') return false
+        const record = value as Record<string, unknown>
+        return record.type === 'queue-operation'
+          && record.operation === 'enqueue'
+          && record.sessionId === boundSessionId
+      }),
+    )
+  }, 10_000)
+
   it('drops rows whose sessionId differs from the bound session (hard per-row filter)', async () => {
     const boundSessionId = '44444444-4444-4444-4444-444444444444'
     const boundFile = join(projectDir, `${boundSessionId}.jsonl`)

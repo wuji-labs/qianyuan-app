@@ -38,6 +38,7 @@ export async function createSessionScanner(opts: {
     claudeConfigDir?: string | null,
     workingDirectory: string
     onMessage: (message: RawJSONLines) => void
+    onRawJsonlValue?: ((value: unknown) => void) | undefined
     onTranscriptMissing?: (info: { sessionId: string; filePath: string }) => void
     /** How long to wait (ms) before warning that the transcript file is missing. Set <= 0 to disable. */
     transcriptMissingWarningMs?: number
@@ -143,7 +144,31 @@ export async function createSessionScanner(opts: {
     /** Session JSONLs that already existed at scanner start — never discoverable (see pid-14419 guard). */
     const sessionDiscoveryBaselines = new Set<string>();
     let boundSessionId: string | null = opts.bindToFirstSession && opts.sessionId ? opts.sessionId : null;
+    const trustedRawTranscriptSessionIds = new Set<string>();
+    if (opts.sessionId) trustedRawTranscriptSessionIds.add(opts.sessionId);
     let closed = false;
+
+    function observeRawJsonlValue(value: unknown): void {
+        if (!opts.onRawJsonlValue) return;
+        try {
+            opts.onRawJsonlValue(value);
+        } catch (err) {
+            logger.debug('[SESSION_SCANNER] onRawJsonlValue callback threw:', err);
+        }
+    }
+
+    function trustRawTranscriptSession(sessionId: string): void {
+        trustedRawTranscriptSessionIds.add(sessionId);
+    }
+
+    function observeRawJsonlValueForTrustedSession(sessionId: string, value: unknown): void {
+        if (!trustedRawTranscriptSessionIds.has(sessionId)) return;
+        observeRawJsonlValue(value);
+    }
+
+    function rawJsonlObserverForSession(sessionId: string): ((value: unknown) => void) | undefined {
+        return trustedRawTranscriptSessionIds.has(sessionId) ? observeRawJsonlValue : undefined;
+    }
 
     function isMainSessionAllowed(sessionId: string): boolean {
         return !boundSessionId || boundSessionId === sessionId;
@@ -208,6 +233,7 @@ export async function createSessionScanner(opts: {
             if (disposition === 'ignore') continue;
             if (disposition === 'main') {
                 bindMainSession(sessionId);
+                trustRawTranscriptSession(sessionId);
             }
             discoveredSessions.add(sessionId);
             sessionIds.push(sessionId);
@@ -347,6 +373,7 @@ export async function createSessionScanner(opts: {
         let messages = await readClaudeSessionJsonlMessages({
             sessionFilePath: getSessionFilePath(opts.sessionId),
             logLabel: 'SESSION_SCANNER',
+            onJsonValue: rawJsonlObserverForSession(opts.sessionId),
         });
         logger.debug(`[SESSION_SCANNER] Marking ${messages.length} existing messages as processed from session ${opts.sessionId}`);
         for (let m of messages) {
@@ -468,7 +495,8 @@ export async function createSessionScanner(opts: {
         }
     }
 
-    async function processSessionJsonValue(value: unknown): Promise<void> {
+    async function processSessionJsonValue(session: string, value: unknown): Promise<void> {
+        observeRawJsonlValueForTrustedSession(session, value);
         const parsed = parseClaudeJsonlValue(value);
         if (!parsed) return;
         processSessionMessage(parsed);
@@ -487,6 +515,7 @@ export async function createSessionScanner(opts: {
         const sessionMessages = await readClaudeSessionJsonlMessages({
             sessionFilePath: getSessionFilePath(session),
             logLabel: 'SESSION_SCANNER',
+            onJsonValue: rawJsonlObserverForSession(session),
         });
         if (closed) return startOffsetBytes;
         let skipped = 0;
@@ -522,7 +551,7 @@ export async function createSessionScanner(opts: {
         const controller = createJsonlFollowController({
             filePath: desiredPath,
             startOffsetBytes,
-            onJson: (value) => processSessionJsonValue(value),
+            onJson: (value) => processSessionJsonValue(session, value),
             onError: (error) => {
                 logger.debug('[SESSION_SCANNER] Follower error:', error);
             },
@@ -604,6 +633,7 @@ export async function createSessionScanner(opts: {
             pendingSessions.clear();
             finishedSessions.clear();
             discoveredSessions.clear();
+            trustedRawTranscriptSessionIds.clear();
             currentSessionId = null;
             for (const timeoutId of missingTranscriptTimers.values()) {
                 clearTimeout(timeoutId);
@@ -623,6 +653,7 @@ export async function createSessionScanner(opts: {
                 return;
             }
             bindMainSession(sessionId);
+            trustRawTranscriptSession(sessionId);
             cleanupUnallowedSessionFollowers();
 
             let didUpdatePaths = false;
