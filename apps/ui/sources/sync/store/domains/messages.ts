@@ -14,6 +14,11 @@ import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { shouldIncludeSubagentSourceMessage } from '@/sync/domains/session/subagents/subagentSourceMessageDetection';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import {
+    compareTranscriptMessagesOldestFirst,
+    hasTranscriptMessageOrderChanged,
+    normalizeTranscriptSeq,
+} from '@/sync/domains/messages/transcriptOrdering';
 
 import { persistSessionPermissionData } from './sessionPermissionPersistence';
 import type { SessionPending } from './pending';
@@ -22,26 +27,6 @@ import {
     applySessionListRenderableCommitPlan,
     planSessionListRenderablePatchesCommit,
 } from './sessionListRenderableCommit';
-
-function normalizeSeq(seq: unknown): number | null {
-    if (typeof seq !== 'number' || !Number.isFinite(seq)) return null;
-    return Math.trunc(seq);
-}
-
-function compareTranscriptMessagesOldestFirst(a: Message, b: Message): number {
-    const aSeq = normalizeSeq(a.seq);
-    const bSeq = normalizeSeq(b.seq);
-    if (aSeq !== null && bSeq !== null && aSeq !== bSeq) {
-        return aSeq - bSeq;
-    }
-
-    if (a.createdAt !== b.createdAt) {
-        return a.createdAt - b.createdAt;
-    }
-
-    // Stable deterministic fallback.
-    return String(a.id).localeCompare(String(b.id));
-}
 
 export type SessionMessages = {
     messageIdsOldestFirst: string[];
@@ -290,7 +275,7 @@ function findLatestThinkingMessageId(params: Readonly<{
 function deriveLatestCommittedMessageSeq(messages: ReadonlyArray<Message>): number | null {
     let latest: number | null = null;
     for (const message of messages) {
-        const seq = normalizeSeq((message as { seq?: unknown }).seq);
+        const seq = normalizeTranscriptSeq((message as { seq?: unknown }).seq);
         if (seq === null) continue;
         latest = latest === null ? seq : Math.max(latest, seq);
     }
@@ -327,13 +312,9 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
         }
         if (!prev) {
             idsToInsert.push(message.id);
-        } else {
-            const prevSeq = normalizeSeq((prev as any).seq);
-            const nextSeq = normalizeSeq((message as any).seq);
-            if (prev.createdAt !== message.createdAt || prevSeq !== nextSeq) {
-                idsToRemove.add(message.id);
-                idsToInsert.push(message.id);
-            }
+        } else if (hasTranscriptMessageOrderChanged(prev, message)) {
+            idsToRemove.add(message.id);
+            idsToInsert.push(message.id);
         }
 
         if (message.kind === 'agent-text' && message.isThinking === true) {
@@ -562,7 +543,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     const sample = processedMessages.slice(0, 8).map((m) => ({
                         id: m.id,
                         kind: m.kind,
-                        seq: normalizeSeq((m as any).seq),
+                        seq: normalizeTranscriptSeq((m as any).seq),
                         createdAt: m.createdAt,
                     }));
                     // eslint-disable-next-line no-console
@@ -593,13 +574,9 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                     }
                     if (!prev) {
                         idsToInsert.push(message.id);
-                    } else {
-                        const prevSeq = normalizeSeq((prev as any).seq);
-                        const nextSeq = normalizeSeq((message as any).seq);
-                        if (prev.createdAt !== message.createdAt || prevSeq !== nextSeq) {
-                            idsToRemove.add(message.id);
-                            idsToInsert.push(message.id);
-                        }
+                    } else if (hasTranscriptMessageOrderChanged(prev, message)) {
+                        idsToRemove.add(message.id);
+                        idsToInsert.push(message.id);
                     }
 
                     if (message.kind === 'agent-text' && message.isThinking === true) {
@@ -743,10 +720,7 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                 let updatedSessions = state.sessions;
                 let sessionListRenderablePatch: { sessionId: string; patch: SessionListRenderableSession } | null = null;
                 const latestCommittedMessageSeq = deriveLatestCommittedMessageSeq(processedMessages);
-                const currentSessionSeq =
-                    typeof session?.seq === 'number' && Number.isFinite(session.seq)
-                        ? Math.trunc(session.seq)
-                        : 0;
+                const currentSessionSeq = normalizeTranscriptSeq(session?.seq) ?? 0;
                 const shouldAdvanceSessionSeq =
                     session != null
                     && latestCommittedMessageSeq !== null

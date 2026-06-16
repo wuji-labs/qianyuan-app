@@ -134,12 +134,12 @@ afterEach(() => {
     resetSessionSettingsEntryState();
 });
 
-describe('Session settings (summary runner text-node guard)', () => {
+describe('Session resume settings (summary runner text-node guard)', () => {
     it('does not emit raw text nodes under non-Text parents when summary runner controls are visible', async () => {
-        const mod = await import('@/app/(app)/settings/session');
-        const SessionSettingsScreen = mod.default;
+        const mod = await import('@/app/(app)/settings/session/resume');
+        const SessionResumeSettingsScreen = mod.default;
 
-        const screen = await renderScreen(React.createElement(SessionSettingsScreen));
+        const screen = await renderScreen(React.createElement(SessionResumeSettingsScreen));
         const badNodes = collectUnexpectedRawTextNodes(screen.tree.toJSON());
         expect(badNodes).toEqual([]);
     });

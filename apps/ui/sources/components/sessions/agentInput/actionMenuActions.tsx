@@ -13,6 +13,7 @@ export function buildAgentInputActionMenuActions(opts: {
     profileLabel: string | null;
     profileIcon: string;
     envVarsCount?: number;
+    engineLabel?: string | null;
     agentType?: AgentId;
     machineName?: string | null;
     currentPath?: string | null;

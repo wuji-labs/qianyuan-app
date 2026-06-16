@@ -119,6 +119,7 @@ export function renderGroupedToolCallRowContent(params: Readonly<{
             forcePermissionPromptsInTranscript={params.forcePermissionPromptsInTranscript}
             approvalRequests={params.approvalRequests}
             interaction={params.interaction}
+            embedded
         />
     );
 }

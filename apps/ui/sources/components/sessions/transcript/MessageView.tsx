@@ -1367,6 +1367,7 @@ function ToolCallBlock(props: {
           approvalRequests={props.approvalRequests}
           forcePermissionPromptsInTranscript={props.forcePermissionPromptsInTranscript}
           interaction={props.interaction}
+          embedded={props.layoutContext === 'tool_calls_group'}
         />
       )) : null}
     </View>

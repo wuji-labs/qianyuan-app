@@ -179,6 +179,187 @@ describe('messages domain: ordering', () => {
         expect(get().sessionListRenderables.s1.hasPendingUserActionRequests).toBe(false);
     });
 
+    it('orders an agent-state permission placeholder by the matching transcript tool call once it arrives', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    lastViewedSessionSeq: 1,
+                    metadataVersion: 1,
+                    agentStateVersion: 2,
+                    metadata: null,
+                    agentState: {
+                        controlledByUser: null,
+                        requests: {
+                            ask1: {
+                                tool: 'AskUserQuestion',
+                                kind: 'user_action',
+                                arguments: { questions: [{ question: 'Choose a path' }] },
+                                createdAt: 1_000,
+                            },
+                        },
+                        completedRequests: null,
+                    },
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                },
+            },
+            sessionMessages: {
+                s1: {
+                    reducerState: undefined,
+                    messageIdsOldestFirst: [],
+                    messagesById: {},
+                    messagesMap: {},
+                    latestThinkingMessageId: null,
+                    latestThinkingMessageActivityAtMs: null,
+                    latestReadyEventSeq: null,
+                    latestReadyEventAt: null,
+                    messagesVersion: 0,
+                    lastAppliedAgentStateVersion: 1,
+                    isLoaded: true,
+                },
+            },
+            sessionListRenderables: {},
+        });
+
+        domain.applyMessages('s1', []);
+
+        const placeholderIds = get().sessionMessages.s1.messageIdsOldestFirst;
+        expect(placeholderIds).toHaveLength(1);
+        const placeholder = get().sessionMessages.s1.messagesById[placeholderIds[0]!] as any;
+        expect(placeholder.kind).toBe('tool-call');
+        expect(placeholder.seq).toBeUndefined();
+
+        domain.applyMessages('s1', [
+            {
+                id: 'assistant-text',
+                seq: 10,
+                localId: null,
+                createdAt: 2_000,
+                isSidechain: false,
+                role: 'agent',
+                content: [{ type: 'text', text: 'Here is the rationale before the question.' }],
+            } as any,
+            {
+                id: 'assistant-tool',
+                seq: 11,
+                localId: null,
+                createdAt: 2_100,
+                isSidechain: false,
+                role: 'agent',
+                content: [{
+                    type: 'tool-call',
+                    id: 'ask1',
+                    name: 'AskUserQuestion',
+                    input: { questions: [{ question: 'Choose a path' }] },
+                    description: null,
+                    uuid: 'tool-uuid',
+                    parentUUID: null,
+                }],
+            } as any,
+        ]);
+
+        const messages = get().sessionMessages.s1.messageIdsOldestFirst
+            .map((id: string) => get().sessionMessages.s1.messagesById[id]);
+
+        expect(messages.map((message: any) => message.kind)).toEqual(['agent-text', 'tool-call']);
+        expect((messages[0] as any).text).toBe('Here is the rationale before the question.');
+        expect((messages[1] as any).tool.id).toBe('ask1');
+        expect((messages[1] as any).seq).toBe(11);
+    });
+
+    it('orders blocks from the same transcript message by provider content order', () => {
+        const { get, domain } = createHarness({
+            sessions: {
+                s1: {
+                    id: 's1',
+                    seq: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    active: true,
+                    activeAt: 1,
+                    lastViewedSessionSeq: 1,
+                    metadataVersion: 1,
+                    agentStateVersion: 1,
+                    metadata: null,
+                    agentState: null,
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                    permissionMode: null,
+                    permissionModeUpdatedAt: 0,
+                },
+            },
+            sessionMessages: {
+                s1: {
+                    reducerState: undefined,
+                    messageIdsOldestFirst: [],
+                    messagesById: {},
+                    messagesMap: {},
+                    latestThinkingMessageId: null,
+                    latestThinkingMessageActivityAtMs: null,
+                    latestReadyEventSeq: null,
+                    latestReadyEventAt: null,
+                    messagesVersion: 0,
+                    lastAppliedAgentStateVersion: 1,
+                    isLoaded: true,
+                },
+            },
+            sessionListRenderables: {},
+        });
+
+        const randomSpy = vi.spyOn(Math, 'random')
+            .mockReturnValueOnce(0.9)
+            .mockReturnValueOnce(0.1);
+
+        try {
+            domain.applyMessages('s1', [
+                {
+                    id: 'assistant-message',
+                    seq: 10,
+                    localId: null,
+                    createdAt: 2_000,
+                    isSidechain: false,
+                    role: 'agent',
+                    content: [
+                        {
+                            type: 'text',
+                            text: 'Text before the tool call.',
+                            uuid: 'text-uuid',
+                            parentUUID: null,
+                        },
+                        {
+                            type: 'tool-call',
+                            id: 'tool1',
+                            name: 'AskUserQuestion',
+                            input: { questions: [{ question: 'Choose a path' }] },
+                            description: null,
+                            uuid: 'tool-uuid',
+                            parentUUID: null,
+                        },
+                    ],
+                } as any,
+            ]);
+        } finally {
+            randomSpy.mockRestore();
+        }
+
+        const messages = get().sessionMessages.s1.messageIdsOldestFirst
+            .map((id: string) => get().sessionMessages.s1.messagesById[id]);
+
+        expect(messages.map((message: any) => message.kind)).toEqual(['agent-text', 'tool-call']);
+        expect((messages[0] as any).text).toBe('Text before the tool call.');
+        expect((messages[1] as any).tool.id).toBe('tool1');
+    });
+
     it('records latest ready event metadata without adding a visible transcript message', () => {
         const { get, domain } = createHarness({
             sessions: {

@@ -1,5 +1,6 @@
 import type { ApiMessage } from '@/sync/api/types/apiTypes';
 import type { DecryptedMessage, Session } from '@/sync/domains/state/storageTypes';
+import type { SessionMessageRole } from '@happier-dev/protocol';
 import { readStoredSessionMessage } from '@/sync/runtime/readStoredSessionContent';
 import { markStreamingMessagesAppliedForSessionUiTelemetry } from '@/sync/runtime/performance/sessionUiTelemetry';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
@@ -16,6 +17,7 @@ export type TranscriptStreamSegmentEphemeralUpdate = Readonly<{
     message: Readonly<{
         localId: string;
         sidechainId?: string | null;
+        messageRole?: SessionMessageRole | null;
         content: ApiMessage['content'];
         createdAt: number;
         updatedAt: number;
@@ -61,6 +63,7 @@ async function applyTranscriptStreamSegmentEphemeralUpdate(
             seq: 0,
             localId: update.message.localId,
             ...(typeof update.message.sidechainId === 'string' ? { sidechainId: update.message.sidechainId } : {}),
+            ...(update.message.messageRole !== undefined ? { messageRole: update.message.messageRole } : {}),
             content: update.message.content,
             createdAt: update.message.createdAt,
             updatedAt: update.message.updatedAt,
@@ -90,6 +93,7 @@ async function applyTranscriptStreamSegmentEphemeralUpdate(
         decrypted.localId,
         decrypted.createdAt,
         decrypted.content,
+        { messageRole: decrypted.messageRole ?? undefined },
     );
 
     const normalized = telemetryFields

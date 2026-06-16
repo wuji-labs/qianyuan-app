@@ -2,6 +2,7 @@ import type { AgentEvent, NormalizedMessage } from '../../typesRaw';
 import type { ReducerState } from '../reducer';
 import { parseMessageAsEvent } from '../messageToEvent';
 import { setThinkingMergeCursor } from '../helpers/mergeCursors';
+import { normalizeTranscriptSeq } from '../../domains/messages/transcriptOrdering';
 
 export function runMessageToEventConversion({
   state,
@@ -51,8 +52,8 @@ export function runMessageToEventConversion({
       // Mark as processed to prevent duplication but don't add to messages
       state.messageIds.set(msg.id, msg.id);
       hasReadyEvent = true;
-      if (typeof msg.seq === 'number' && Number.isFinite(msg.seq)) {
-        const seq = Math.trunc(msg.seq);
+      const seq = normalizeTranscriptSeq(msg.seq);
+      if (seq !== null) {
         latestReadyEventSeq = latestReadyEventSeq === null ? seq : Math.max(latestReadyEventSeq, seq);
       }
       readyAt = readyAt === null ? msg.createdAt : Math.max(readyAt, msg.createdAt);
@@ -130,7 +131,7 @@ export function runMessageToEventConversion({
 		    state.messages.set(mid, {
 		      id: mid,
 		      realID: message.id,
-	      seq: typeof message.seq === 'number' ? message.seq : null,
+		      seq: normalizeTranscriptSeq(message.seq),
 	      localId: message.localId ?? null,
 	      role: 'agent',
 	      createdAt: message.createdAt,

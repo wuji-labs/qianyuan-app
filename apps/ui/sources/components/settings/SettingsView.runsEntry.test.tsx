@@ -305,6 +305,16 @@ describe('SettingsView (runs entry)', () => {
         expect(routerPushSpy).toHaveBeenCalledWith('/settings/sub-agent');
     });
 
+    it('includes a Connected services entry that routes through the settings stack', async () => {
+        mockFeatureEnabled = (featureId) => featureId === 'connectedServices';
+        const screen = await renderSettingsViewUnderTest();
+        expect(screen.findRowByTitle('settings.connectedServices')).toBeTruthy();
+
+        await screen.pressRowByTitle('settings.connectedServices');
+
+        expect(routerPushSpy).toHaveBeenCalledWith('/settings/connected-services');
+    });
+
     it('includes an Actions entry that routes to /settings/actions', async () => {
         const screen = await renderSettingsViewUnderTest();
         expect(screen.findRowByTitle('common.actions')).toBeTruthy();

@@ -82,6 +82,10 @@
  * - **Timestamp Preservation**: NEVER change a message's createdAt timestamp. The timestamp
  *   represents when the message was originally created and must be preserved throughout all
  *   processing phases. This is critical for maintaining correct message ordering.
+ * - **Transcript Ordering Reconciliation**: AgentState permission placeholders are created before
+ *   their transcript row exists. When the matching tool-call row arrives, missing transcript
+ *   ordering coordinates (`seq`, `transcriptBlockIndex`) may be filled in without changing the
+ *   placeholder's original `createdAt`.
  * 
  * ## Permission Matching Algorithm:
  * 
@@ -128,6 +132,7 @@ import { coerceStreamingToolResultChunk, mergeExistingStdStreamsIntoFinalResultI
 import type { OrphanToolResultBucket } from "./helpers/orphanToolResults";
 import { isDebugFlagEnabled } from "./helpers/debugFlags";
 import { markRunningToolsUnavailable } from "./helpers/markRunningToolsUnavailable";
+import { compareIncomingTranscriptRowsOldestFirst, normalizeTranscriptSeq } from "../domains/messages/transcriptOrdering";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -174,6 +179,7 @@ export type ReducerMessage = {
     id: string;
     realID: string | null;
     seq: number | null;
+    transcriptBlockIndex?: number | null;
     localId: string | null;
     createdAt: number;
     role: 'user' | 'agent';
@@ -332,10 +338,7 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
     for (const [mid, m] of state.messages) {
         if (sidechainMessageIds.has(mid)) continue;
 
-        const nextSeq =
-            typeof m.seq === 'number' && Number.isFinite(m.seq)
-                ? Math.trunc(m.seq)
-                : null;
+        const nextSeq = normalizeTranscriptSeq(m.seq);
 
         if (lastMainMessageId === null) {
             lastMainMessageId = mid;
@@ -404,49 +407,15 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
     const orderedIncomingMessages = (() => {
         if (messages.length <= 1) return messages;
 
-        const seqValue = (msg: NormalizedMessage): number | null => {
-            const raw = msg.seq;
-            if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
-            return Math.trunc(raw);
-        };
-
-        const createdAtValue = (msg: NormalizedMessage): number | null => {
-            const raw = msg.createdAt;
-            if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
-            return raw;
-        };
-
         const indexed = messages.map((msg, index) => ({
             msg,
-            index,
-            seq: seqValue(msg),
-            createdAt: createdAtValue(msg),
+            id: msg.id,
+            seq: normalizeTranscriptSeq(msg.seq),
+            createdAt: msg.createdAt,
+            inputIndex: index,
         }));
 
-        indexed.sort((a, b) => {
-            const aSeq = a.seq;
-            const bSeq = b.seq;
-            if (aSeq !== null && bSeq !== null) {
-                if (aSeq !== bSeq) return aSeq - bSeq;
-            } else if (aSeq !== null && bSeq === null) {
-                return -1;
-            } else if (aSeq === null && bSeq !== null) {
-                return 1;
-            }
-
-            const aCreatedAt = a.createdAt;
-            const bCreatedAt = b.createdAt;
-            if (aCreatedAt !== null && bCreatedAt !== null) {
-                if (aCreatedAt !== bCreatedAt) return aCreatedAt - bCreatedAt;
-            } else if (aCreatedAt !== null && bCreatedAt === null) {
-                return -1;
-            } else if (aCreatedAt === null && bCreatedAt !== null) {
-                return 1;
-            }
-
-            // Stable tie-breaker so arrival order doesn't affect merge behavior.
-            return a.index - b.index;
-        });
+        indexed.sort(compareIncomingTranscriptRowsOldestFirst);
 
         return indexed.map((e) => e.msg);
     })();
@@ -666,6 +635,7 @@ function convertReducerMessageToMessage(reducerMsg: ReducerMessage, state: Reduc
             id: reducerMsg.id,
             realID: reducerMsg.realID,
             ...(typeof reducerMsg.seq === 'number' ? { seq: reducerMsg.seq } : {}),
+            ...(typeof reducerMsg.transcriptBlockIndex === 'number' ? { transcriptBlockIndex: reducerMsg.transcriptBlockIndex } : {}),
             localId: reducerMsg.localId,
             createdAt: reducerMsg.createdAt,
             kind: 'user-text',
@@ -678,6 +648,7 @@ function convertReducerMessageToMessage(reducerMsg: ReducerMessage, state: Reduc
             id: reducerMsg.id,
             realID: reducerMsg.realID,
             ...(typeof reducerMsg.seq === 'number' ? { seq: reducerMsg.seq } : {}),
+            ...(typeof reducerMsg.transcriptBlockIndex === 'number' ? { transcriptBlockIndex: reducerMsg.transcriptBlockIndex } : {}),
             localId: reducerMsg.localId,
             createdAt: reducerMsg.createdAt,
             kind: 'agent-text',
@@ -705,6 +676,7 @@ function convertReducerMessageToMessage(reducerMsg: ReducerMessage, state: Reduc
             id: reducerMsg.id,
             realID: reducerMsg.realID,
             ...(typeof reducerMsg.seq === 'number' ? { seq: reducerMsg.seq } : {}),
+            ...(typeof reducerMsg.transcriptBlockIndex === 'number' ? { transcriptBlockIndex: reducerMsg.transcriptBlockIndex } : {}),
             localId: reducerMsg.localId,
             createdAt: reducerMsg.createdAt,
             kind: 'tool-call',
@@ -717,6 +689,7 @@ function convertReducerMessageToMessage(reducerMsg: ReducerMessage, state: Reduc
             id: reducerMsg.id,
             realID: reducerMsg.realID,
             ...(typeof reducerMsg.seq === 'number' ? { seq: reducerMsg.seq } : {}),
+            ...(typeof reducerMsg.transcriptBlockIndex === 'number' ? { transcriptBlockIndex: reducerMsg.transcriptBlockIndex } : {}),
             createdAt: reducerMsg.createdAt,
             kind: 'agent-event',
             event: reducerMsg.event,

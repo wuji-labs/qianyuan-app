@@ -2182,6 +2182,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         closeSelectionOverlay,
         toggleSelectionOverlay,
     });
+    const engineChipLabel = React.useMemo(() => {
+        return hasAgentPickerOptions ? effectiveModelLabel : resolvedAgentLabel;
+    }, [effectiveModelLabel, hasAgentPickerOptions, resolvedAgentLabel]);
     const hasRecipient = React.useMemo(() => {
         return (props.extraActionChips ?? []).some((chip) => chip.controlId === 'recipient');
     }, [props.extraActionChips]);
@@ -2352,6 +2355,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         profileLabel,
         profileIcon,
         envVarsCount: props.envVarsCount,
+        engineLabel: engineChipLabel,
         agentType: props.agentType,
         machineName: props.machineName,
         currentPath: props.currentPath,
@@ -2423,9 +2427,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         envVarsChipAnchorRef,
         envVarsCount: props.envVarsCount,
         onEnvVarsPress: handleEnvVarsPress,
+        agentId,
         hasAgentSelection: hasAgent,
         agentChipAnchorRef,
         agentLabel: resolvedAgentLabel,
+        engineLabel: engineChipLabel,
         onAgentPress: handleAgentPress,
         machineChipAnchorRef,
         onMachinePress: handleMachinePress,

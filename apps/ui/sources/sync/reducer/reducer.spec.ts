@@ -3,6 +3,7 @@ import { NormalizedMessage } from '../typesRaw';
 import { createReducer } from './reducer';
 import { reducer } from './reducer';
 import { AgentState } from '../domains/state/storageTypes';
+import { markSyntheticNoResponseMeta } from '../domains/messages/syntheticNoResponseMessageMeta';
 
 describe('reducer', () => {
     // it('should process golden cases', () => {
@@ -2130,6 +2131,7 @@ describe('reducer', () => {
                 createdAt: 1700,
                 role: 'agent',
                 isSidechain: false,
+                meta: markSyntheticNoResponseMeta(),
                 content: [{
                     type: 'text',
                     text: 'No response requested.',
@@ -2145,6 +2147,42 @@ describe('reducer', () => {
             expect(toolMessage?.tool?.permission?.status).toBe('approved');
             expect(toolMessage?.tool?.completedAt).toBe(1700);
             expect(toolMessage?.tool?.result).toBeUndefined();
+            expect(
+                Array.from(state.messages.values()).some((message) =>
+                    message.role === 'agent'
+                    && message.text === 'No response requested.'
+                    && !message.tool
+                    && !message.event
+                )
+            ).toBe(false);
+        });
+
+        it('renders ordinary agent text that happens to match the synthetic no-response copy', () => {
+            const state = createReducer();
+            const ordinaryNoResponseText: NormalizedMessage = {
+                id: 'ordinary-no-response',
+                localId: null,
+                createdAt: 1700,
+                role: 'agent',
+                isSidechain: false,
+                content: [{
+                    type: 'text',
+                    text: 'No response requested.',
+                    uuid: 'text-uuid-ordinary-no-response',
+                    parentUUID: null,
+                }],
+            };
+
+            reducer(state, [ordinaryNoResponseText]);
+
+            expect(
+                Array.from(state.messages.values()).some((message) =>
+                    message.role === 'agent'
+                    && message.text === 'No response requested.'
+                    && !message.tool
+                    && !message.event
+                )
+            ).toBe(true);
         });
 
         it('preserves partial output when orphaned running approved tools become unavailable', () => {
@@ -2215,6 +2253,7 @@ describe('reducer', () => {
                 createdAt: 1700,
                 role: 'agent',
                 isSidechain: false,
+                meta: markSyntheticNoResponseMeta(),
                 content: [{
                     type: 'text',
                     text: 'No response requested.',

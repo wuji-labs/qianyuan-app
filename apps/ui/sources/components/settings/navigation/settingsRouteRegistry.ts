@@ -31,7 +31,7 @@ const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefinition[
     { name: 'appearance/themes/export', titleKey: 'settingsAppearance.themeProfiles.exportProfile' },
     { name: 'attachments', titleKey: 'settings.attachments' },
     { name: 'connect/claude', headerShown: false },
-    { name: 'connected-services', titleKey: 'settings.connectedServices' },
+    { name: 'connected-services/index', titleKey: 'settings.connectedServices' },
     { name: 'connected-services/[serviceId]', titleKey: 'connectedServices.fallbackName' },
     { name: 'connected-services/group', titleKey: 'connectedServices.detail.groupDetail.routeTitle' },
     { name: 'connected-services/oauth', titleKey: 'connectedServices.detail.addOauthProfileTitle' },

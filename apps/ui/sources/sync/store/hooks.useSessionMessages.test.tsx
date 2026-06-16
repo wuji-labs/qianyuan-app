@@ -298,6 +298,74 @@ describe('useSessionMessages', () => {
             storage.setState(previousState);
         }
     });
+
+    it('uses transcript block order when deriving committed messages from the populated message map fallback', async () => {
+        const previousState = storage.getState();
+        try {
+            const messagesById = {
+                'z-text': {
+                    id: 'z-text',
+                    kind: 'agent-text',
+                    localId: null,
+                    createdAt: 2_000,
+                    text: 'Text before the question.',
+                    isThinking: false,
+                    seq: 10,
+                    transcriptBlockIndex: 0,
+                } as any,
+                'a-tool': {
+                    id: 'a-tool',
+                    kind: 'tool-call',
+                    localId: null,
+                    createdAt: 2_000,
+                    tool: {
+                        id: 'ask1',
+                        name: 'AskUserQuestion',
+                        state: 'running',
+                        input: { questions: [{ question: 'Choose a path' }] },
+                        createdAt: 2_000,
+                        startedAt: 2_000,
+                        completedAt: null,
+                        description: null,
+                    },
+                    children: [],
+                    seq: 10,
+                    transcriptBlockIndex: 1,
+                } as any,
+            };
+
+            storage.setState((state) => ({
+                ...state,
+                sessionMessages: {
+                    ...state.sessionMessages,
+                    's-1': {
+                        messageIdsOldestFirst: [],
+                        messagesById,
+                        messagesMap: messagesById,
+                        reducerState: {} as any,
+                        latestThinkingMessageId: null,
+                        latestThinkingMessageActivityAtMs: null,
+                        latestReadyEventSeq: null,
+                        latestReadyEventAt: null,
+                        messagesVersion: 3,
+                        lastAppliedAgentStateVersion: null,
+                        isLoaded: true,
+                    },
+                },
+            }));
+
+            const hook = await renderHook(() => useSessionMessages('s-1'), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+
+            expect(hook.getCurrent().isLoaded).toBe(true);
+            expect(hook.getCurrent().messages.map((message) => message.id)).toEqual(['z-text', 'a-tool']);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
 });
 
 describe('useSessionSubagentSourceMessages', () => {

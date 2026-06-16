@@ -10,6 +10,7 @@ import {
     createSessionTerminalMetadataSchema,
     createSessionSystemSessionV1Schema,
     type PrimaryTurnStatusV1,
+    type SessionMessageRole,
     type SessionRuntimeIssueV1,
     type SessionTurnsProjectionV1,
     WindowsRemoteSessionLaunchModeSchema,
@@ -485,6 +486,7 @@ export interface DecryptedMessage {
     id: string,
     seq: number | null,
     localId: string | null,
+    messageRole?: SessionMessageRole | null,
     content: any,
     createdAt: number,
 }

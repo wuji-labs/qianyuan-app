@@ -1,4 +1,5 @@
 import type { NormalizedMessage, RawRecord } from '@/sync/typesRaw';
+import type { SessionMessageRole } from '@happier-dev/protocol';
 import { normalizeRawMessage } from '@/sync/typesRaw';
 import { computeNextSessionSeqFromUpdate } from '@/sync/domains/session/sequence/realtimeSessionSeq';
 import type { AgentState, Metadata, Session } from '@/sync/domains/state/storageTypes';
@@ -376,6 +377,7 @@ type DecryptedSessionMessage = Readonly<{
     id: string;
     seq?: number | null;
     localId: string | null;
+    messageRole?: SessionMessageRole | null;
     content: unknown | null;
     createdAt: number;
 }>;
@@ -737,7 +739,10 @@ export async function fetchAndApplyMessages(params: {
                     params.onTaskLifecycleEvent?.(lifecycleEvent);
                 }
                 // Normalize the decrypted message
-                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, { seq: decrypted.seq ?? undefined });
+                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, {
+                    seq: decrypted.seq ?? undefined,
+                    messageRole: decrypted.messageRole ?? undefined,
+                });
                 if (normalized) {
                     applySidechainScopeMetadata({
                         normalizedMessage: normalized,
@@ -874,7 +879,10 @@ export async function fetchAndApplyOlderMessages(params: {
                 // Older pages can include historical lifecycle markers (task_complete/turn_aborted) that
                 // should not clobber current in-flight UI state. Lifecycle handling is reserved for
                 // newer/socket flows.
-                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, { seq: decrypted.seq ?? undefined });
+                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, {
+                    seq: decrypted.seq ?? undefined,
+                    messageRole: decrypted.messageRole ?? undefined,
+                });
                 if (normalized) {
                     applySidechainScopeMetadata({
                         normalizedMessage: normalized,
@@ -992,7 +1000,10 @@ export async function fetchAndApplyNewerMessages(params: {
                 if (lifecycleEvent) {
                     params.onTaskLifecycleEvent?.(lifecycleEvent);
                 }
-                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, { seq: decrypted.seq ?? undefined });
+                const normalized = normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, {
+                    seq: decrypted.seq ?? undefined,
+                    messageRole: decrypted.messageRole ?? undefined,
+                });
                 if (normalized) {
                     applySidechainScopeMetadata({
                         normalizedMessage: normalized,

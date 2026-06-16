@@ -8,11 +8,11 @@ import { Text } from "@/components/ui/text/Text";
 import { normalizeNodeForView } from "@/components/ui/rendering/normalizeNodeForView";
 import { AgentInputChipPickerTopSelector } from "./AgentInputChipPickerTopSelector";
 import {
-  AGENT_INPUT_CHIP_PICKER_OPTION_ICON_SIZE,
   AGENT_INPUT_CHIP_PICKER_OPTION_ROW_RADIUS,
   createAgentInputChipPickerOptionTransientStyles,
   type AgentInputChipPickerOptionTransientStyles,
 } from "./agentInputChipPickerOptionStyles";
+import { normalizeAgentInputChipPickerOptionIcon } from "./agentInputChipPickerOptionIcon";
 
 import type {
   AgentInputChipPickerOption,
@@ -181,11 +181,7 @@ function AgentInputChipPickerOptionButton(
   const content = (
     <>
       <View style={styles.optionLeft}>
-        {props.option.icon ? (
-          <View style={styles.optionIcon}>
-            {normalizeNodeForView(props.option.icon)}
-          </View>
-        ) : null}
+        {props.option.icon ? normalizeAgentInputChipPickerOptionIcon(props.option.icon) : null}
         <View style={styles.optionTextBlock}>
           <Text style={[styles.optionLabel, props.focused ? styles.optionLabelFocused : null]}>{props.option.label}</Text>
           {shouldShowSubtitle ? (
@@ -303,12 +299,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-  },
-  optionIcon: {
-    width: AGENT_INPUT_CHIP_PICKER_OPTION_ICON_SIZE,
-    height: AGENT_INPUT_CHIP_PICKER_OPTION_ICON_SIZE,
-    alignItems: "center",
-    justifyContent: "center",
   },
   optionTextBlock: {
     flex: 1,

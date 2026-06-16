@@ -2,8 +2,7 @@ import * as React from 'react';
 import { View, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Image } from 'expo-image';
-import Color from 'color';
+import { Ionicons } from '@expo/vector-icons';
 import { t } from '@/text';
 import { Typography } from '@/constants/Typography';
 import { useInboxHasContent } from '@/hooks/inbox/useInboxHasContent';
@@ -50,7 +49,8 @@ const styles = StyleSheet.create((theme) => ({
         left: 4,
         right: 4,
         borderRadius: 16,
-        backgroundColor: Color(theme.colors.text.primary).alpha(0.05).rgb().string(),
+        backgroundColor: theme.colors.text.primary,
+        opacity: 0.05,
     },
     label: {
         fontSize: 10,
@@ -77,19 +77,19 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
     const inboxBadgeEnabled = useSetting('tabBarInboxBadgeEnabled');
     const metrics = resolveTabBarMetrics(useSetting('tabBarSize'), useSetting('tabBarShowLabels'));
 
-    const tabs: { key: TabType; icon: any; label: string }[] = React.useMemo(() => {
+    const tabs: { key: TabType; label: string }[] = React.useMemo(() => {
         const tabKeys = resolveTabBarTabs({ inboxEnabled, friendsEnabled });
         return tabKeys.map((key) => {
             switch (key) {
                 case 'inbox':
-                    return { key, icon: require('@/assets/images/brutalist/Brutalism 27.png'), label: t('tabs.inbox') };
+                    return { key, label: t('tabs.inbox') };
                 case 'friends':
-                    return { key, icon: require('@/assets/images/brutalist/Brutalism 28.png'), label: t('tabs.friends') };
+                    return { key, label: t('tabs.friends') };
                 case 'settings':
-                    return { key, icon: require('@/assets/images/brutalist/Brutalism 9.png'), label: t('tabs.settings') };
+                    return { key, label: t('tabs.settings') };
                 case 'sessions':
                 default:
-                    return { key: 'sessions', icon: require('@/assets/images/brutalist/Brutalism 15.png'), label: t('tabs.sessions') };
+                    return { key: 'sessions', label: t('tabs.sessions') };
             }
         });
     }, [friendsEnabled, inboxEnabled]);
@@ -108,14 +108,13 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
                             onPress={() => onTabPress(tab.key)}
                             hitSlop={8}
                         >
-                            {isActive ? <View pointerEvents="none" style={styles.activePill} /> : null}
+                            {isActive ? <View pointerEvents="none" style={[styles.activePill, { borderRadius: metrics.activePillRadius }]} /> : null}
                             <View style={styles.tabContent}>
-                                <Image
-                                    source={tab.icon}
-                                    contentFit="contain"
-                                    style={[{ width: metrics.iconSize, height: metrics.iconSize }]}
-                                    tintColor={isActive ? theme.colors.text.primary : theme.colors.text.secondary}
-                                />
+                                {renderMainTabIcon(
+                                    tab.key,
+                                    metrics.iconSize,
+                                    isActive ? theme.colors.text.primary : theme.colors.text.secondary,
+                                )}
                                 {tab.key === 'friends' && friendsBadgeEnabled && friendRequests.length > 0 && (
                                     <TabBadge variant="count" value={friendRequests.length} />
                                 )}
@@ -138,3 +137,16 @@ export const TabBar = React.memo(({ activeTab, onTabPress }: TabBarProps) => {
         </FloatingTabBarSurface>
     );
 });
+
+// Match the app's cockpit-bar line icons (all Ionicons outline, same weight):
+// tray for Inbox, chat for Sessions, gear for Settings, people for Friends.
+function renderMainTabIcon(key: TabType, size: number, color: string): React.ReactNode {
+    const name = key === 'inbox'
+        ? 'file-tray-outline'
+        : key === 'settings'
+            ? 'cog-outline'
+            : key === 'friends'
+                ? 'people-outline'
+                : 'chatbubbles-outline';
+    return <Ionicons name={name} size={size} color={color} />;
+}

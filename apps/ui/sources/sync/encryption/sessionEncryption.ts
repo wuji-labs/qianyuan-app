@@ -64,14 +64,15 @@ export class SessionEncryption {
         };
 
         const computeMessageFingerprint = (message: ApiMessage): string => {
+            const messageRole = typeof message.messageRole === 'string' ? message.messageRole : 'null';
             const content: any = (message as any)?.content;
             if (content && content.t === 'encrypted' && typeof content.c === 'string') {
-                return computeMessageCiphertextFingerprint(content.c);
+                return `${computeMessageCiphertextFingerprint(content.c)}:role:${messageRole}`;
             }
             if (content && content.t === 'plain') {
-                return computePlainValueFingerprint(content.v);
+                return `${computePlainValueFingerprint(content.v)}:role:${messageRole}`;
             }
-            return 'plain:unknown';
+            return `plain:unknown:role:${messageRole}`;
         };
 
         // Check cache for all messages first
@@ -115,6 +116,7 @@ export class SessionEncryption {
                     id: message.id,
                     seq: message.seq,
                     localId: message.localId ?? null,
+                    messageRole: message.messageRole ?? null,
                     content: parsed.success ? parsed.data : null,
                     createdAt: message.createdAt,
                 };
@@ -127,6 +129,7 @@ export class SessionEncryption {
                     id: message.id,
                     seq: message.seq,
                     localId: message.localId ?? null,
+                    messageRole: message.messageRole ?? null,
                     content: null,
                     createdAt: message.createdAt,
                 };
@@ -166,6 +169,7 @@ export class SessionEncryption {
                         id: message.id,
                         seq: message.seq,
                         localId: message.localId ?? null,
+                        messageRole: message.messageRole ?? null,
                         content: decryptedData,
                         createdAt: message.createdAt,
                     };
@@ -176,6 +180,7 @@ export class SessionEncryption {
                         id: message.id,
                         seq: message.seq,
                         localId: message.localId ?? null,
+                        messageRole: message.messageRole ?? null,
                         content: null,
                         createdAt: message.createdAt,
                     };

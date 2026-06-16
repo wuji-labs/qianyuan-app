@@ -249,4 +249,24 @@ describe('ToolCallsGroupUnitToolRow', () => {
             expect(flattenStyleProp(gutterLine?.props.style).marginBottom).toBeUndefined();
         }
     });
+
+    it('stacks consecutive cards tool rows tightly with no extra inter-row spacing', async () => {
+        // Each grouped tool already renders its own ToolView card (with intrinsic
+        // vertical margin) against the uniform unit-card background, so the row must
+        // not add a second gap between consecutive tools — they read as one list.
+        for (const expanded of [false, true]) {
+            const screen = await renderToolRow({
+                message: createToolCallMessageFixture({ id: 'm1', createdAt: 1 }),
+                expanded,
+                ...createTranscriptSessionCommonPropsFixture({
+                    toolChromeCommon: { toolViewTimelineChromeMode: 'cards' },
+                }),
+            });
+
+            const toolRow = screen.findByTestId('transcript-tool-calls-tool-row') as any;
+            const style = flattenStyleProp(toolRow?.props.style);
+            expect(style.paddingBottom ?? 0).toBe(0);
+            expect(style.marginBottom ?? 0).toBe(0);
+        }
+    });
 });

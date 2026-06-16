@@ -278,6 +278,38 @@ describe('MessageView (tool timeline chrome mode)', () => {
 
         expect(renderedToolViewProps).toHaveLength(1);
         expect(renderedToolTimelineRowProps).toHaveLength(0);
+        // Standalone transcript tool cards keep their intrinsic margin: not embedded.
+        expect(renderedToolViewProps[0]!.embedded).toBeFalsy();
+    });
+
+    it('marks ToolView embedded when rendered inside a tool-calls group so grouped rows stay flush', async () => {
+        toolChromeMode = 'cards';
+        const { MessageView } = await import('./MessageView');
+
+        const message: any = {
+            kind: 'tool-call',
+            id: 'm1',
+            localId: null,
+            createdAt: 1,
+            tool: {
+                name: 'read',
+                state: 'completed',
+                input: {},
+                createdAt: 1,
+                startedAt: 1,
+                completedAt: 2,
+                description: null,
+                result: {},
+            },
+            children: [],
+        };
+
+        await renderScreen(
+            <MessageView message={message} metadata={null} sessionId="s1" layoutContext="tool_calls_group" />,
+        );
+
+        expect(renderedToolViewProps).toHaveLength(1);
+        expect(renderedToolViewProps[0]!.embedded).toBe(true);
     });
 
     it('forwards approval requests to ToolView when toolViewTimelineChromeMode is cards', async () => {

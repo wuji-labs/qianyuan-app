@@ -478,6 +478,39 @@ describe('OptionPickerOverlay', () => {
         expect(onSelectOptionControlValue).toHaveBeenCalledWith('speed', 'fast');
     });
 
+    it('renders option icons beside the model title and provider subtitle', async () => {
+        const { OptionPickerOverlay } = await import('./OptionPickerOverlay');
+
+        const screen = await renderScreen(<OptionPickerOverlay
+                    title="Favorites"
+                    effectiveLabel="Fable 5"
+                    notes={[]}
+                    options={[
+                        {
+                            value: 'claude-fable-5',
+                            label: 'Fable 5',
+                            description: 'Claude',
+                            icon: React.createElement('ProviderLogo', { testID: 'provider-logo:claude' }),
+                        },
+                    ]}
+                    selectedValue="claude-fable-5"
+                    emptyText="empty"
+                    canEnterCustomValue={false}
+                    onSelect={() => {}}
+                />);
+
+        const option = screen.findByTestId('model-picker-overlay-option:claude-fable-5');
+        expect(option).toBeTruthy();
+        expect(option?.findAll((node) => node.props?.testID === 'model-picker-overlay-option-icon:claude-fable-5')).toHaveLength(1);
+        expect(option?.findAll((node) => node.props?.testID === 'provider-logo:claude')).toHaveLength(1);
+        expect(option?.findAll((node) => (
+            String(node.type) === 'Text' && node.props?.children === 'Fable 5'
+        ))).toHaveLength(1);
+        expect(option?.findAll((node) => (
+            String(node.type) === 'Text' && node.props?.children === 'Claude'
+        ))).toHaveLength(1);
+    });
+
     it('renders boolean fast model controls as segmented choices', async () => {
         const onSelectOptionControlValue = vi.fn();
         const { OptionPickerOverlay } = await import('./OptionPickerOverlay');

@@ -29,6 +29,35 @@ describe("AgentInputChipPickerOptionSelector (hover)", () => {
         return Object.assign({}, ...resolvedArray.filter(Boolean));
     }
 
+    it("normalizes rail option icons to the shared picker icon size", async () => {
+        const { AgentInputChipPickerOptionSelector } = await import("./AgentInputChipPickerOptionSelector");
+        const { AGENT_INPUT_CHIP_PICKER_OPTION_ICON_SIZE } = await import("./agentInputChipPickerOptionStyles");
+
+        const screen = await renderScreen(
+            <AgentInputChipPickerOptionSelector
+                sections={[
+                    {
+                        id: "sec",
+                        label: "Section",
+                        options: [
+                            {
+                                id: "engine:codex",
+                                label: "Codex",
+                                icon: React.createElement("EngineIcon", { testID: "engine-icon", size: 12 }),
+                            },
+                        ],
+                    },
+                ]}
+                focusedOptionId={null}
+                selectedOptionId={null}
+                onFocusOption={() => {}}
+                variant="rail"
+            />,
+        );
+
+        expect(screen.findByTestId("engine-icon")?.props.size).toBe(AGENT_INPUT_CHIP_PICKER_OPTION_ICON_SIZE);
+    });
+
     it("shows rail option actions only while hovering and keeps action presses from focusing the row", async () => {
         const {
             AgentInputChipPickerOptionSelector,

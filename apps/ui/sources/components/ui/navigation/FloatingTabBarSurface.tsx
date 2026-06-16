@@ -4,7 +4,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { layout } from '@/components/ui/layout/layout';
-import { shadowLevelStyle } from '@/shadowElevation';
+import { buildTabBarCastShadowStyle } from '@/shadowElevation';
 import { useSetting } from '@/sync/domains/state/storage';
 
 const BLUR_INTENSITY: Record<'light' | 'regular' | 'strong', number> = {
@@ -38,8 +38,11 @@ const FLOATING_MIN_BOTTOM_GAP = 8;
 // Sit the bar lower/closer to the home indicator: use most of the safe-area
 // inset as the float gap rather than the whole inset, while keeping clearance.
 const SAFE_AREA_BOTTOM_TRIM = 12;
-const PILL_PADDING_VERTICAL = 4;
-const PILL_PADDING_HORIZONTAL = 8;
+// Capsule inner padding. Combined with the active-highlight inset (CockpitTabBar/
+// TabBar `activePill`: left/right 4, top/bottom 3) this sets the gap from the
+// capsule rim to a selected tab at the edge: H = 2 + 4 = 6, V = 1 + 3 = 4.
+const PILL_PADDING_VERTICAL = 1;
+const PILL_PADDING_HORIZONTAL = 2;
 
 const styles = StyleSheet.create((theme) => ({
     positioner: {
@@ -48,31 +51,42 @@ const styles = StyleSheet.create((theme) => ({
         paddingTop: FLOATING_TOP_GAP,
         backgroundColor: 'transparent',
     },
-    // Opaque reserved band for in-flow (cockpit) chrome so the area behind the
-    // floating capsule matches the transcript/composer background instead of the
-    // window canvas showing through.
-    positionerBand: {
-        backgroundColor: theme.colors.surface.base,
-    },
     shadow: {
         maxWidth: layout.maxWidth,
         borderRadius: TAB_BAR_RADIUS,
-        ...shadowLevelStyle(theme.colors.shadowLevels[4]),
+        // Cross-platform soft cast shadow (boxShadow on Android/web, native shadow*
+        // on iOS) — never Android `elevation`, which reads hard/over-strong.
+        ...buildTabBarCastShadowStyle(theme.colors.shadowLevels[4], false),
+    },
+    // Cockpit chrome sits on an opaque band (no content showing through), so the
+    // full cast shadow reads too strong — keep the same offset/radius but soften it.
+    shadowSoft: {
+        maxWidth: layout.maxWidth,
+        borderRadius: TAB_BAR_RADIUS,
+        ...buildTabBarCastShadowStyle(theme.colors.shadowLevels[4], true),
     },
     pill: {
         borderRadius: TAB_BAR_RADIUS,
         overflow: 'hidden',
         paddingHorizontal: PILL_PADDING_HORIZONTAL,
         paddingVertical: PILL_PADDING_VERTICAL,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.default,
+        // Reddit-style glass rim: bright near-white on light, subtle light rim on
+        // dark — reads as a distinct floating surface against either background.
+        borderWidth: 1.5,
+        borderColor: theme.colors.tabBarBorder,
+        // iOS-26 / Reddit-style subtle top inner-shadow for inset depth.
+        boxShadow: theme.colors.tabBarInnerShadow,
     },
 }));
 
 export type FloatingTabBarSurfaceProps = Readonly<{
     children: React.ReactNode;
     bottomInset: number;
-    /** Paint the reserved band behind the capsule (for in-flow cockpit chrome). */
+    /**
+     * The bar sits on an opaque reserved band (in-flow cockpit chrome). The band
+     * itself is painted by the chrome host so it can fade independently; this flag
+     * only softens the cast shadow, which reads too strong over the opaque band.
+     */
     opaqueBand?: boolean;
     testID?: string;
 }>;
@@ -81,13 +95,14 @@ export const FloatingTabBarSurface = React.memo(function FloatingTabBarSurface(p
     const bottomPadding = Math.max(props.bottomInset - SAFE_AREA_BOTTOM_TRIM, FLOATING_MIN_BOTTOM_GAP);
     const blurEnabled = useSetting('tabBarBlurEnabled');
     const blurIntensity = BLUR_INTENSITY[useSetting('tabBarBlurIntensity')] ?? BLUR_INTENSITY.regular;
+    const onOpaqueBand = props.opaqueBand === true;
 
     return (
         <View
             pointerEvents="box-none"
-            style={[styles.positioner, props.opaqueBand ? styles.positionerBand : null, { paddingBottom: bottomPadding }]}
+            style={[styles.positioner, { paddingBottom: bottomPadding }]}
         >
-            <View style={styles.shadow}>
+            <View style={onOpaqueBand ? styles.shadowSoft : styles.shadow}>
                 <GlassSurface
                     testID={props.testID}
                     style={styles.pill}

@@ -20,6 +20,9 @@ const badgeSettingsState = vi.hoisted(() => ({
     friends: true,
     inbox: true,
 }));
+const themeState = vi.hoisted(() => ({
+    textPrimaryColor: '#111111',
+}));
 
 installNavigationCommonModuleMocks({
     reactNative: async () => {
@@ -42,6 +45,18 @@ installNavigationCommonModuleMocks({
                 return undefined;
             }) as typeof import('@/sync/domains/state/storage').useSetting,
         };
+    },
+    unistyles: async () => {
+        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+        return createUnistylesMock({
+            theme: {
+                colors: {
+                    text: {
+                        primary: themeState.textPrimaryColor,
+                    },
+                },
+            },
+        });
     },
 });
 
@@ -86,12 +101,34 @@ function hasIndicatorDot(node: renderer.ReactTestInstance) {
     }).length > 0;
 }
 
+function styleObjects(style: unknown): Record<string, unknown>[] {
+    const styles = Array.isArray(style) ? style : [style];
+    return styles.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object');
+}
+
 describe('TabBar', () => {
     beforeEach(() => {
+        vi.resetModules();
         friendRequestsState.items = [];
         inboxState.hasContent = false;
         badgeSettingsState.friends = true;
         badgeSettingsState.inbox = true;
+        themeState.textPrimaryColor = 'var(--colors-text-primary)';
+    });
+
+    it('keeps the active pill linked to CSS variable theme colors', async () => {
+        const { TabBar } = await import('./TabBar');
+
+        const screen = await renderScreen(<TabBar activeTab="settings" onTabPress={() => {}} />);
+
+        const activePills = screen.tree.root.findAll((node) => (
+            node.props?.pointerEvents === 'none'
+            && styleObjects(node.props.style).some((style) => (
+                style.backgroundColor === 'var(--colors-text-primary)'
+                && style.opacity === 0.05
+            ))
+        ));
+        expect(activePills).toHaveLength(1);
     });
 
     it('hides tab badges when disabled in settings', async () => {

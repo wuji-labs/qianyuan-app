@@ -111,6 +111,10 @@ vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
 }));
 
+vi.mock('react-native-svg', () => ({
+    SvgXml: (props: Record<string, unknown>) => React.createElement('SvgXml', props, null),
+}));
+
 vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
     PermissionFooter: () => null,
 }));
@@ -142,6 +146,13 @@ vi.mock('@/agents/catalog/catalog', () => ({
             acpApplyBehavior: 'none',
         },
     }),
+    getAgentIconSource: () => null,
+    getAgentIconSvgXml: (agentId: string) => (
+        agentId === 'codex' || agentId === 'pi' || agentId === 'opencode'
+            ? '<svg viewBox="0 0 16 16"><path fill="#111111" d="M8 0 16 8 8 16 0 8Z" /></svg>'
+            : null
+    ),
+    getAgentIconTintColor: () => undefined,
     getAgentBehavior: (agentId: string) => ({
         sessionUsage: {
             supportsExactContextUsageBadge: agentId !== 'codex' && agentId !== 'gemini',
@@ -1256,6 +1267,104 @@ describe('AgentInput (modelOptionsOverride)', () => {
         expect(onModelModeChange).toHaveBeenCalledWith('session-model');
     });
 
+    it('renders the selected model label and provider logo in the engine chip', async () => {
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+                    value: 'hello',
+                    placeholder: 'placeholder',
+                    onChangeText: () => {},
+                    onSend: () => {},
+                    autocompletePrefixes: [],
+                    autocompleteSuggestions: async () => [],
+                    agentType: 'codex',
+                    permissionMode: 'default',
+                    onPermissionModeChange: () => {},
+                    modelMode: 'session-model',
+                    onModelModeChange: () => {},
+                    metadata: {
+                        sessionModelsV1: {
+                            provider: 'codex',
+                            availableModels: [
+                                { id: 'session-model', name: 'Session Model' },
+                            ],
+                        },
+                    },
+                } as any));
+
+        const agentChip = screen.findByTestId('agent-input-agent-chip');
+        expect(agentChip).toBeTruthy();
+        if (!agentChip) {
+            throw new Error('Expected agent chip');
+        }
+
+        expect(findTestInstanceByTypeContainingText(agentChip, 'Text', 'Session Model')).toBeTruthy();
+        expect(findTestInstanceByTypeContainingText(agentChip, 'Text', 'agents.codex')).toBeUndefined();
+
+        const logo = screen.findByTestId('agent-input-agent-chip-logo');
+        expect(logo?.type).toBe('SvgXml');
+        expect(logo?.props.width).toBe(14);
+        expect(logo?.props.height).toBe(14);
+    });
+
+    it('applies the shared provider picker icon scale to the engine chip logo', async () => {
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+                    value: 'hello',
+                    placeholder: 'placeholder',
+                    onChangeText: () => {},
+                    onSend: () => {},
+                    autocompletePrefixes: [],
+                    autocompleteSuggestions: async () => [],
+                    agentType: 'pi',
+                    permissionMode: 'default',
+                    onPermissionModeChange: () => {},
+                    modelMode: 'pi-model',
+                    onModelModeChange: () => {},
+                    modelOptionsOverride: [
+                        { value: 'pi-model', label: 'Pi Model', description: '' },
+                    ],
+                } as any));
+
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('agent-input-agent-chip')!, 'Text', 'Pi Model')).toBeTruthy();
+
+        const logo = screen.findByTestId('agent-input-agent-chip-logo');
+        expect(logo?.type).toBe('SvgXml');
+        expect(logo?.props.width).toBe(14);
+        expect(logo?.props.height).toBe(14);
+        expect(logo?.props.style).toEqual({ transform: [{ scale: 0.9 }] });
+    });
+
+    it('reuses non-Pi picker-row scaling for the engine chip logo', async () => {
+        const { AgentInput } = await import('./AgentInput');
+
+        const screen = await renderScreen(React.createElement(AgentInput, {
+                    value: 'hello',
+                    placeholder: 'placeholder',
+                    onChangeText: () => {},
+                    onSend: () => {},
+                    autocompletePrefixes: [],
+                    autocompleteSuggestions: async () => [],
+                    agentType: 'opencode',
+                    permissionMode: 'default',
+                    onPermissionModeChange: () => {},
+                    modelMode: 'open-model',
+                    onModelModeChange: () => {},
+                    modelOptionsOverride: [
+                        { value: 'open-model', label: 'Open Model', description: '' },
+                    ],
+                } as any));
+
+        expect(findTestInstanceByTypeContainingText(screen.findByTestId('agent-input-agent-chip')!, 'Text', 'Open Model')).toBeTruthy();
+
+        const logo = screen.findByTestId('agent-input-agent-chip-logo');
+        expect(logo?.type).toBe('SvgXml');
+        expect(logo?.props.width).toBe(14);
+        expect(logo?.props.height).toBe(14);
+        expect(logo?.props.style).toEqual({ transform: [{ scale: 0.9 }] });
+    });
+
     it('caps the engine popover at 570px when the rail is hidden in stacked layout', async () => {
         const { AgentInput } = await import('./AgentInput');
         mockWindowWidth = 520;
@@ -1313,7 +1422,7 @@ describe('AgentInput (modelOptionsOverride)', () => {
                         agentType: 'codex',
                         permissionMode: 'default',
                         onPermissionModeChange: () => {},
-                        modelMode: 'default',
+                        modelMode: 'session-model',
                         onModelModeChange: () => {},
                         metadata: {
                             sessionModelsV1: {
@@ -1330,10 +1439,10 @@ describe('AgentInput (modelOptionsOverride)', () => {
             expect(screen.findByTestId('agent-input-action-menu-overlay')).toBeTruthy();
             expect(lastModelPickerOverlayProps).toBeNull();
 
-            const engineAction = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'agents.codex');
+            const engineAction = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'Session Model');
             expect(engineAction).toBeTruthy();
 
-            await pressTestInstanceAsync(engineAction, 'agents.codex pressable');
+            await pressTestInstanceAsync(engineAction, 'Session Model pressable');
 
             expect(screen.findByTestId('agent-input-action-menu-overlay')).toBeNull();
             expect(screen.findByTestId('agent-input-chip-picker-popover')).toBeTruthy();

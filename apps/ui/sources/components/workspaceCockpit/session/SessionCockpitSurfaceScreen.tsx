@@ -5,6 +5,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 
+import {
+    SessionCockpitBottomChromeHeightContext,
+    useSessionCockpitBottomChromeHeight,
+} from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
@@ -229,12 +233,27 @@ export const SessionCockpitSurfaceScreen = React.memo((props: SessionCockpitSurf
         );
     }
 
+    if (props.safeAreaPadding === false) {
+        // Cockpit fullscreen details: reserve the overlay bar like the other
+        // surfaces so the panel's bottom content clears it.
+        return renderSessionChrome(
+            <SessionCockpitFullscreenSurface screenTestID="session-details-screen" safeAreaPadding={false}>
+                <SessionDetailsPanel
+                    sessionId={props.sessionId}
+                    scopeId={props.scopeId}
+                    presentation="screen"
+                    showHeaderActions={false}
+                />
+            </SessionCockpitFullscreenSurface>,
+        );
+    }
+
     return renderSessionChrome(
         <View testID="session-details-screen" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
             <SessionDetailsPanel
                 sessionId={props.sessionId}
                 scopeId={props.scopeId}
-                presentation={props.safeAreaPadding === false ? 'screen' : undefined}
+                presentation={undefined}
                 showHeaderActions={false}
             />
         </View>,
@@ -254,7 +273,21 @@ const SessionCockpitFullscreenSurface = React.memo((props: Readonly<{
 }>) => {
     const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
+    const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
     const safeAreaPaddingEnabled = props.safeAreaPadding !== false;
+
+    // Cockpit fullscreen surfaces (files/git/terminal/details) sit under the
+    // floating overlay bar, so reserve its height at the screen level — this keeps
+    // fixed footers/buttons above the bar (scroll content alone self-pads, but
+    // fixed elements don't). The reserved area is part of the session screen, so it
+    // slides away on dismiss. Then zero the height for descendants so nested scroll
+    // content doesn't reserve it a second time. `bottomChromeHeight` is 0 when the
+    // bar is hidden, collapsing the reservation.
+    const body = safeAreaPaddingEnabled ? props.children : (
+        <SessionCockpitBottomChromeHeightContext.Provider value={0}>
+            {props.children}
+        </SessionCockpitBottomChromeHeightContext.Provider>
+    );
 
     return (
         <View
@@ -265,10 +298,10 @@ const SessionCockpitFullscreenSurface = React.memo((props: Readonly<{
                 minWidth: 0,
                 backgroundColor: theme.colors.surface.base,
                 paddingTop: safeAreaPaddingEnabled ? safeArea.top : 0,
-                paddingBottom: safeAreaPaddingEnabled ? safeArea.bottom : 0,
+                paddingBottom: safeAreaPaddingEnabled ? safeArea.bottom : bottomChromeHeight,
             }}
         >
-            {props.children}
+            {body}
         </View>
     );
 });

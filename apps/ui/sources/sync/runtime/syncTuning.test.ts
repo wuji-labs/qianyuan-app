@@ -68,6 +68,7 @@ describe('loadSyncTuning', () => {
                     transcriptForwardPrefetchThresholdPx: 34,
                     transcriptFlashListEstimatedItemSize: 222,
                     transcriptWebHotTailItemCount: 9,
+                    transcriptNativeHotTailItemCount: 3,
                     transcriptMaxTurnEntriesPerListItem: 6,
                     transcriptWebInitialPinStabilizeMs: 3000,
                     transcriptWebInitialPinRetryMilestonesMs: [25, 75, 125],
@@ -141,6 +142,7 @@ describe('loadSyncTuning', () => {
         expect(tuning.transcriptForwardPrefetchThresholdPx).toBe(34);
         expect(tuning.transcriptFlashListEstimatedItemSize).toBe(222);
         expect(tuning.transcriptWebHotTailItemCount).toBe(9);
+        expect(tuning.transcriptNativeHotTailItemCount).toBe(3);
         expect(tuning.transcriptMaxTurnEntriesPerListItem).toBe(6);
         expect(tuning.transcriptWebInitialPinStabilizeMs).toBe(3000);
         expect(tuning.transcriptWebInitialPinRetryMilestonesMs).toEqual([25, 75, 125]);

@@ -175,6 +175,49 @@ describe('transcript FlashList bottom maintenance policy', () => {
         });
     });
 
+    describe('live-region single pin owner (plan §12 #3)', () => {
+        // While the native edge-slot carve is active, the JS force-pin owns the visual bottom and
+        // MVCP must keep ONLY prepend/top offset correction. Arming the bottom autoscroll threshold
+        // here re-introduces a second bottom authority that races the JS pin (the #1 pin-loss). So
+        // following + liveRegionActive must withhold the threshold (startRenderingFromBottom only),
+        // while following + inactive live region keeps today's threshold branch unchanged.
+        it('withholds the bottom autoscroll threshold while following with the live region active', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...baseParams,
+                liveRegionActive: true,
+            })).toEqual({ startRenderingFromBottom: true });
+
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...invertedParams,
+                liveRegionActive: true,
+            })).toEqual({ startRenderingFromBottom: true });
+        });
+
+        it('keeps the threshold branch unchanged while following with the live region inactive', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...baseParams,
+                liveRegionActive: false,
+            })).toEqual({
+                animateAutoScrollToBottom: false,
+                autoscrollToBottomThreshold: 72 / 600,
+                startRenderingFromBottom: true,
+            });
+
+            // Omitting the flag entirely (existing call sites) behaves exactly like inactive.
+            expect(resolveTranscriptFlashListBottomMaintenance(baseParams)).toMatchObject({
+                autoscrollToBottomThreshold: 72 / 600,
+            });
+        });
+
+        it('does not change the released/escaping policy when the live region is active', () => {
+            expect(resolveTranscriptFlashListBottomMaintenance({
+                ...baseParams,
+                bottomFollowMode: 'released',
+                liveRegionActive: true,
+            })).toEqual({ startRenderingFromBottom: true });
+        });
+    });
+
     it('does not pass a bottom autoscroll threshold when pinning or auto-follow is disabled', () => {
         expect(resolveTranscriptFlashListBottomMaintenance({
             ...baseParams,

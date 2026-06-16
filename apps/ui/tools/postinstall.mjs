@@ -97,6 +97,13 @@ function findReactNativeEnrichedMarkdownPackageDirs() {
     ].filter((packageDir) => fs.existsSync(packageDir));
 }
 
+function findSentryReactNativePackageDirs() {
+    return [
+        path.resolve(repoRootNodeModulesDir, '@sentry', 'react-native'),
+        path.resolve(expoAppNodeModulesDir, '@sentry', 'react-native'),
+    ].filter((packageDir) => fs.existsSync(packageDir));
+}
+
 function createFilteredPatchDir({ patchDir: inputPatchDir, nodeModulesDir, label }) {
     const patchFiles = listPatchFiles(inputPatchDir);
     if (patchFiles.length === 0) return '';
@@ -289,6 +296,50 @@ if (wants('verify-expo-router-web-modal-patch')) {
     if (unpatchedPaths.length > 0) {
         console.error(
             `expo-router web modals patch does not appear to be applied to:\n${unpatchedPaths
+                .map((p) => `- ${p}`)
+                .join('\n')}`,
+        );
+        process.exit(1);
+    }
+}
+
+if (wants('verify-sentry-react-native-replay-post-init-patch')) {
+    const packageDirs = findSentryReactNativePackageDirs();
+
+    if (packageDirs.length === 0) {
+        console.error('Could not find @sentry/react-native under repo or UI node_modules.');
+        process.exit(1);
+    }
+
+    const unpatchedPaths = [];
+    for (const packageDir of packageDirs) {
+        const nativeStartPath = path.resolve(packageDir, 'ios', 'RNSentryStart.m');
+        if (!fs.existsSync(nativeStartPath)) {
+            unpatchedPaths.push(nativeStartPath);
+            continue;
+        }
+
+        const contents = fs.readFileSync(nativeStartPath, 'utf8');
+        const postInitIndex = contents.indexOf('[RNSentryReplay postInit]');
+        const precedingSource = postInitIndex >= 0 ? contents.slice(0, postInitIndex) : '';
+        const guardIndex = Math.max(
+            precedingSource.lastIndexOf('if (options.sessionReplay.sessionSampleRate > 0'),
+            precedingSource.lastIndexOf('if (isSessionReplayEnabled)'),
+        );
+
+        if (
+            !contents.includes('HAPPIER PATCH(sentry-replay-post-init-guard)')
+            || postInitIndex < 0
+            || guardIndex < 0
+            || !contents.includes('sessionReplay.onErrorSampleRate > 0')
+        ) {
+            unpatchedPaths.push(nativeStartPath);
+        }
+    }
+
+    if (unpatchedPaths.length > 0) {
+        console.error(
+            `@sentry/react-native replay postInit guard patch does not appear to be applied to:\n${unpatchedPaths
                 .map((p) => `- ${p}`)
                 .join('\n')}`,
         );

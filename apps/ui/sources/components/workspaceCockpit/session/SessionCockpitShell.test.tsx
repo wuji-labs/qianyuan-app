@@ -6,6 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import {
+    SessionCockpitChromeRegistryProvider,
+    useSessionCockpitDismissingSessionId,
+} from './SessionCockpitChromeRegistry';
+import { SessionCockpitShell } from './SessionCockpitShell';
 import { SessionCockpitSurfaceNavigationProvider } from './SessionCockpitSurfaceNavigation';
 import {
     SessionCockpitSurfaceScreen,
@@ -30,11 +35,30 @@ const navigationFocusState = vi.hoisted(() => ({
 const bottomTabsState = vi.hoisted(() => ({
     navigations: [] as string[],
 }));
+const navigationEventsState = vi.hoisted(() => {
+    const listenersByEventName = new Map<string, Set<(event?: unknown) => void>>();
+    const addListener = vi.fn((eventName: string, listener: (event?: unknown) => void) => {
+        const listeners = listenersByEventName.get(eventName) ?? new Set();
+        listenersByEventName.set(eventName, listeners);
+        listeners.add(listener);
+        return () => {
+            listeners.delete(listener);
+        };
+    });
+
+    return {
+        addListener,
+        listenersByEventName,
+    };
+});
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({
         pathname: () => pathnameState.pathname,
+        navigation: {
+            addListener: navigationEventsState.addListener,
+        },
         router: {
             push: routerPushSpy,
         },
@@ -84,6 +108,11 @@ vi.mock('@/components/navigation/mobile/chrome/bars/SessionCockpitTabBar', () =>
     SessionCockpitTabBar: (props: Record<string, unknown>) => React.createElement('SessionCockpitTabBar', props),
 }));
 
+vi.mock('./SessionCockpitTabNavigator', () => ({
+    SessionCockpitTabNavigator: (props: Record<string, unknown>) =>
+        React.createElement('SessionCockpitTabNavigator', props),
+}));
+
 function PaneScopeProbe(props: Readonly<{ scopeId: string }>) {
     const pane = useAppPaneScope(props.scopeId);
 
@@ -118,7 +147,7 @@ function CockpitSurfaceHarness(props: SessionCockpitSurfaceScreenProps) {
         setSurface(props.surface);
     }, [props.surface]);
 
-    const switchSurface = React.useCallback((nextSurface: typeof surface) => {
+    const switchSurface = React.useCallback((nextSurface: SessionCockpitSurfaceScreenProps['surface']) => {
         bottomTabsState.navigations.push(nextSurface);
         setSurface(nextSurface);
     }, []);
@@ -128,6 +157,38 @@ function CockpitSurfaceHarness(props: SessionCockpitSurfaceScreenProps) {
             <SessionCockpitSurfaceScreen {...props} surface={surface} />
         </SessionCockpitSurfaceNavigationProvider>
     );
+}
+
+function DismissingSessionProbe() {
+    const dismissingSessionId = useSessionCockpitDismissingSessionId();
+
+    return React.createElement('DismissingSessionProbe', { dismissingSessionId });
+}
+
+function SharedShellDismissHarness(props: Readonly<{ mounted?: boolean }>) {
+    return (
+        <AppPaneProvider>
+            <SessionCockpitChromeRegistryProvider>
+                {props.mounted === false ? null : (
+                    <SessionCockpitShell
+                        sessionId="s_1"
+                        scopeId="session:s_1"
+                        surface="git"
+                        routeServerId="server-b"
+                        terminalTabAvailable
+                    />
+                )}
+                <DismissingSessionProbe />
+            </SessionCockpitChromeRegistryProvider>
+        </AppPaneProvider>
+    );
+}
+
+function emitNavigationEvent(eventName: string, event?: unknown): void {
+    const listeners = navigationEventsState.listenersByEventName.get(eventName);
+    for (const listener of listeners ? [...listeners] : []) {
+        listener(event);
+    }
 }
 
 function flattenStyle(style: unknown): Record<string, unknown> {
@@ -140,10 +201,60 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return {};
 }
 
+describe('SessionCockpitShell', () => {
+    beforeEach(() => {
+        standardCleanup();
+        pathnameState.pathname = '/session/s_1/git';
+        navigationEventsState.listenersByEventName.clear();
+        navigationEventsState.addListener.mockClear();
+    });
+
+    it('signals dismiss start, cancel, and unmount cleanup from the shared shell', async () => {
+        const screen = await renderScreen(<SharedShellDismissHarness />);
+
+        expect(navigationEventsState.addListener).toHaveBeenCalledWith('transitionStart', expect.any(Function));
+        expect(navigationEventsState.addListener).toHaveBeenCalledWith('gestureCancel', expect.any(Function));
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBeNull();
+
+        await act(async () => {
+            emitNavigationEvent('transitionStart', { data: { closing: true } });
+        });
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBe('s_1');
+
+        await act(async () => {
+            emitNavigationEvent('transitionStart', { data: { closing: false } });
+        });
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBeNull();
+
+        await act(async () => {
+            emitNavigationEvent('transitionStart', { data: { closing: true } });
+        });
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBe('s_1');
+
+        await act(async () => {
+            emitNavigationEvent('gestureCancel');
+        });
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBeNull();
+
+        await act(async () => {
+            emitNavigationEvent('transitionStart', { data: { closing: true } });
+        });
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBe('s_1');
+
+        await screen.update(<SharedShellDismissHarness mounted={false} />);
+
+        expect(screen.tree.findByType('DismissingSessionProbe' as never).props.dismissingSessionId).toBeNull();
+        expect(navigationEventsState.listenersByEventName.get('transitionStart')?.size ?? 0).toBe(0);
+        expect(navigationEventsState.listenersByEventName.get('gestureCancel')?.size ?? 0).toBe(0);
+    });
+});
+
 describe('SessionCockpitSurfaceScreen', () => {
     beforeEach(() => {
         standardCleanup();
         pathnameState.pathname = '/session/s_1/git';
+        navigationEventsState.listenersByEventName.clear();
+        navigationEventsState.addListener.mockClear();
         bottomTabsState.navigations = [];
         navigationFocusState.isFocused = true;
         safeAreaInsetsMock.top = 0;

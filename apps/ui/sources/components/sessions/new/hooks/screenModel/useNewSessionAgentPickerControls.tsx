@@ -87,12 +87,12 @@ function areEngineSelectionsEqual(left: EngineSelectionLike, right: EngineSelect
 
 const ENGINE_FAVORITE_RAIL_ICON_SIZE = 14;
 
-function FavoriteModelsPickerIcon() {
+function FavoriteModelsPickerIcon(props: Readonly<{ size?: number }>) {
     const { theme } = useUnistyles();
     return (
         <Ionicons
             name="star"
-            size={12}
+            size={props.size ?? 12}
             color={theme.dark ? theme.colors.text.primary : theme.colors.button.primary.background}
         />
     );

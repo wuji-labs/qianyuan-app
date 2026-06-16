@@ -4,6 +4,8 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { getAgentCore } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { getAgentPickerIconScale } from '@/agents/registry/registryUi';
 import { OptionPickerOverlay, type OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import { sanitizeNewSessionConfigOverridesForModelSelection } from '@/components/sessions/new/modules/newSessionConfigOptionOverrideSanitization';
@@ -37,6 +39,7 @@ type FavoriteModelTogglePayload = Readonly<{
 type FavoriteModelOption = Readonly<{
     value: string;
     label: string;
+    icon?: React.ReactNode;
     description: string;
 }>;
 
@@ -118,6 +121,7 @@ function areFavoriteModelMapsEqual(
 
 function areFavoriteModelSnapshotsEqual(a: FavoriteModelSnapshot, b: FavoriteModelSnapshot): boolean {
     if (a.entry.targetKey !== b.entry.targetKey) return false;
+    if (a.entry.iconAgentId !== b.entry.iconAgentId) return false;
     if (a.selectedValue !== b.selectedValue) return false;
     if (a.selectedLabel !== b.selectedLabel) return false;
     if (a.probe?.phase !== b.probe?.phase) return false;
@@ -149,6 +153,17 @@ function areFavoriteModelSnapshotsEqual(a: FavoriteModelSnapshot, b: FavoriteMod
         }
     }
     return true;
+}
+
+function renderFavoriteModelOptionIcon(entry: ResolvedBackendCatalogEntry): React.ReactNode {
+    const agentId = entry.iconAgentId;
+    return (
+        <AgentIcon
+            agentId={agentId}
+            size={20}
+            style={{ transform: [{ scale: getAgentPickerIconScale(agentId) }] }}
+        />
+    );
 }
 
 function FavoriteBackendModelsCollector(props: Readonly<{
@@ -247,6 +262,7 @@ function FavoriteBackendModelsCollector(props: Readonly<{
         ...selectableFavorites.map((model) => ({
             value: buildFavoriteOptionValue(props.entry, model.modelId),
             label: model.modelLabel,
+            icon: renderFavoriteModelOptionIcon(props.entry),
             description: model.backendLabel ?? props.entry.title,
         })),
         ...staleFavorites.map((favorite) => {
@@ -254,6 +270,7 @@ function FavoriteBackendModelsCollector(props: Readonly<{
             return {
                 value: buildFavoriteOptionValue(props.entry, modelId),
                 label: favorite.modelLabel || modelId,
+                icon: renderFavoriteModelOptionIcon(props.entry),
                 description: props.entry.title,
             };
         }),

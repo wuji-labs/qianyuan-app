@@ -3,6 +3,8 @@ import {
     buildDarkShadowLevels,
     buildLightShadowLevels,
     buildShadowPopoverArrowBoxShadow,
+    buildTabBarBorderColor,
+    buildTabBarInnerShadow,
 } from '../shadowElevation';
 import { createVerticalGradient } from './verticalGradient';
 
@@ -147,6 +149,8 @@ export const lightTheme = {
         },
         shadowLevels: buildLightShadowLevels(),
         shadowPopoverArrowBoxShadow: buildShadowPopoverArrowBoxShadow(false),
+        tabBarInnerShadow: buildTabBarInnerShadow(false),
+        tabBarBorder: buildTabBarBorderColor(false),
 
         //
         // System components
@@ -448,6 +452,8 @@ export const darkTheme = {
         },
         shadowLevels: buildDarkShadowLevels(),
         shadowPopoverArrowBoxShadow: buildShadowPopoverArrowBoxShadow(true),
+        tabBarInnerShadow: buildTabBarInnerShadow(true),
+        tabBarBorder: buildTabBarBorderColor(true),
 
         //
         // System components

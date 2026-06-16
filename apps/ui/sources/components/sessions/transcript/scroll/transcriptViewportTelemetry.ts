@@ -102,6 +102,33 @@ export type TranscriptViewportTelemetryBlankAreaSource =
     | 'index-estimate'
     | 'native-blank-area';
 
+/**
+ * §12 native live-tail carve — why the anchor that opened the edge-slot carve engaged.
+ * `turn-floor` = the whole-turn gate (`session.thinking`) held the carve across a transition
+ * frame where no single row was detectably mid-stream (thinking→answer / text→tool).
+ */
+export type TranscriptViewportTelemetryLiveTailAnchorKind =
+    | 'streaming-message'
+    | 'streaming-tool'
+    | 'thinking'
+    | 'turn-floor';
+
+/**
+ * §12 native live-tail carve pin diagnostics (review R9). The device-QA proof surface for the
+ * deterministic pin height (#2) and the single pin owner (#3): each carve pin records the
+ * just-measured hot-tail height it compensated for, the anchor that opened the carve, whether the
+ * live region owns the bottom, and whether the JS pin was issued or skipped. Correlate against the
+ * `mvcpPolicy` field (`start-rendering-from-bottom` = threshold withheld) and `offset-correction`
+ * events to PROVE FlashList MVCP is not fighting the JS pin while the live region is active.
+ */
+export type TranscriptViewportTelemetryLiveTailCarveDiagnostics = Readonly<{
+    liveRegionActive?: boolean;
+    nativeHotTailHeightPx?: number;
+    liveTailAnchorId?: string;
+    liveTailAnchorKind?: TranscriptViewportTelemetryLiveTailAnchorKind;
+    nativeCarvePinIssued?: boolean;
+}>;
+
 export type TranscriptViewportTelemetryWebTrigger = 'scroll' | 'edge-reached' | 'restore' | 'prepend-restore' | 'jump';
 
 export type TranscriptViewportTelemetryPaginationPhase = 'idle' | 'armed' | 'loading' | 'cooldown';
@@ -185,7 +212,7 @@ export type TranscriptViewportTelemetryEvent =
         visibleWindowSource?: TranscriptViewportTelemetryVisibleWindowSource;
         blankAreaSource?: TranscriptViewportTelemetryBlankAreaSource;
         timestampMs: number;
-    } & TranscriptViewportTelemetryWebDiagnostics)>
+    } & TranscriptViewportTelemetryWebDiagnostics & TranscriptViewportTelemetryLiveTailCarveDiagnostics)>
     | Readonly<({
         type: 'scroll-write-rejected';
         writer: TranscriptViewportTelemetryScrollWriter;
@@ -220,7 +247,7 @@ export type TranscriptViewportTelemetryEvent =
         visibleWindowSource?: TranscriptViewportTelemetryVisibleWindowSource;
         blankAreaSource?: TranscriptViewportTelemetryBlankAreaSource;
         timestampMs: number;
-    } & TranscriptViewportTelemetryWebDiagnostics)>
+    } & TranscriptViewportTelemetryWebDiagnostics & TranscriptViewportTelemetryLiveTailCarveDiagnostics)>
     | Readonly<({
         type:
             | 'restore-decision'
@@ -281,7 +308,7 @@ export type TranscriptViewportTelemetryEvent =
         blankAreaSource?: TranscriptViewportTelemetryBlankAreaSource;
         reason?: TranscriptViewportTelemetryObservationReason;
         timestampMs: number;
-    } & TranscriptViewportTelemetryWebDiagnostics)>;
+    } & TranscriptViewportTelemetryWebDiagnostics & TranscriptViewportTelemetryLiveTailCarveDiagnostics)>;
 
 export type TranscriptViewportTelemetrySnapshot = Readonly<{
     events: TranscriptViewportTelemetryEvent[];
@@ -443,6 +470,13 @@ const BLANK_AREA_SOURCES = new Set<TranscriptViewportTelemetryBlankAreaSource>([
     'native-blank-area',
 ]);
 
+const LIVE_TAIL_ANCHOR_KINDS = new Set<TranscriptViewportTelemetryLiveTailAnchorKind>([
+    'streaming-message',
+    'streaming-tool',
+    'thinking',
+    'turn-floor',
+]);
+
 const WEB_TRIGGERS = new Set<TranscriptViewportTelemetryWebTrigger>([
     'scroll',
     'edge-reached',
@@ -582,6 +616,20 @@ function readNativeDiagnostics(source: Record<string, unknown>): TranscriptViewp
     };
 }
 
+function readLiveTailCarveDiagnostics(
+    source: Record<string, unknown>,
+): TranscriptViewportTelemetryLiveTailCarveDiagnostics {
+    const liveTailAnchorId = readString(source.liveTailAnchorId) ?? undefined;
+    const liveTailAnchorKind = readEnum(source.liveTailAnchorKind, LIVE_TAIL_ANCHOR_KINDS) ?? undefined;
+    return {
+        ...spreadBoolean('liveRegionActive', source.liveRegionActive),
+        ...spreadNumber('nativeHotTailHeightPx', readNumber(source.nativeHotTailHeightPx)),
+        ...(liveTailAnchorId ? { liveTailAnchorId } : {}),
+        ...(liveTailAnchorKind ? { liveTailAnchorKind } : {}),
+        ...spreadBoolean('nativeCarvePinIssued', source.nativeCarvePinIssued),
+    };
+}
+
 function readWebDiagnostics(source: Record<string, unknown>): TranscriptViewportTelemetryWebDiagnostics {
     const trigger = readEnum(source.trigger, WEB_TRIGGERS) ?? undefined;
     const paginationPhase = readEnum(source.paginationPhase, PAGINATION_PHASES) ?? undefined;
@@ -651,6 +699,7 @@ function sanitizeTelemetryEvent(
                 : undefined,
             ...readNativeDiagnostics(source),
             ...readWebDiagnostics(source),
+            ...readLiveTailCarveDiagnostics(source),
             timestampMs,
         };
         if (type === 'scroll-write-rejected') {
@@ -730,6 +779,7 @@ function sanitizeTelemetryEvent(
                 ...(spreadNumber('rowPreviousContentCount', readNumber(source.rowPreviousContentCount))),
                 ...readNativeDiagnostics(source),
                 ...readWebDiagnostics(source),
+                ...readLiveTailCarveDiagnostics(source),
                 ...(reason ? { reason } : {}),
                 timestampMs,
             },

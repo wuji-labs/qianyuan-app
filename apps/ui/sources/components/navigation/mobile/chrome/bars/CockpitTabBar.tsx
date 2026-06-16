@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Color from 'color';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -38,7 +37,8 @@ const styles = StyleSheet.create((theme) => ({
         left: 4,
         right: 4,
         borderRadius: 16,
-        backgroundColor: Color(theme.colors.text.primary).alpha(0.05).rgb().string(),
+        backgroundColor: theme.colors.text.primary,
+        opacity: 0.05,
     },
     label: {
         marginTop: 4,
@@ -97,7 +97,7 @@ export function CockpitTabBar<TSurface extends string>(props: CockpitTabBarProps
                             hitSlop={8}
                             style={[styles.tab, { paddingVertical: metrics.tabPaddingVertical, paddingHorizontal: metrics.tabPaddingHorizontal }]}
                         >
-                            {active ? <View pointerEvents="none" style={styles.activePill} /> : null}
+                            {active ? <View pointerEvents="none" style={[styles.activePill, { borderRadius: metrics.activePillRadius }]} /> : null}
                             <View style={styles.iconContainer}>
                                 {icon}
                                 {renderTabBadge(tab.badge, `${props.tabTestIdPrefix}${tab.id}-badge`)}

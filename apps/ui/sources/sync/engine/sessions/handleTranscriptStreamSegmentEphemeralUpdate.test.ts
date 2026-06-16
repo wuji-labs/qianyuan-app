@@ -123,6 +123,44 @@ describe('handleTranscriptStreamSegmentEphemeralUpdate', () => {
         expect(events.some((event) => event.name === 'sync.sessions.socket.transcriptStreamSegment.readMessage')).toBe(false);
     });
 
+    it('uses stream segment messageRole when normalizing plain live updates', async () => {
+        const applyMessages = vi.fn();
+
+        await handleTranscriptStreamSegmentEphemeralUpdate({
+            update: {
+                type: 'transcript-stream-segment',
+                sessionId: 's1',
+                message: {
+                    localId: 'event-segment-1',
+                    messageRole: 'event',
+                    content: {
+                        t: 'plain',
+                        v: {
+                            role: 'agent',
+                            content: {
+                                type: 'output',
+                                data: {
+                                    type: 'assistant',
+                                    message: {
+                                        role: 'assistant',
+                                        content: [{ type: 'text', text: 'transport status' }],
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    createdAt: 1_000,
+                    updatedAt: 1_001,
+                },
+            },
+            getSessionEncryption: () => null,
+            getSession: () => buildSession('s1'),
+            applyMessages,
+        });
+
+        expect(applyMessages).not.toHaveBeenCalled();
+    });
+
     it('drops in-flight stream segment work when the session is deleted before decrypt resolves', async () => {
         let session: Session | undefined = buildSession('s1', 'e2ee');
         let resolveDecrypt!: (message: DecryptedMessage) => void;

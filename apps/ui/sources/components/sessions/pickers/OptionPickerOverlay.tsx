@@ -6,6 +6,7 @@ import { Text, TextInput } from '@/components/ui/text/Text';
 import { Switch } from '@/components/ui/forms/Switch';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { normalizeNodeForView } from '@/components/ui/rendering/normalizeNodeForView';
 import type {
     SessionConfigOptionControl,
     SessionConfigOptionValueId,
@@ -27,6 +28,7 @@ type WebHoverablePressableState = Readonly<{
 export type OptionPickerOption = Readonly<{
     value: string;
     label: string;
+    icon?: React.ReactNode;
     description?: string;
 }>;
 
@@ -436,16 +438,26 @@ export function OptionPickerOverlay(props: OptionPickerOverlayProps) {
                                                             </Pressable>
                                                         ) : null}
                                                     </View>
-                                                    <View style={styles.optionCardHeader}>
-                                                        <Text style={[styles.optionCardTitle, isSelected ? styles.optionCardTitleSelected : null]}>
-                                                            {option.label}
-                                                        </Text>
+                                                    <View style={styles.optionCardContentRow}>
+                                                        {option.icon ? (
+                                                            <View
+                                                                testID={`${optionTestIDPrefix}-icon:${option.value}`}
+                                                                style={styles.optionCardIconSlot}
+                                                            >
+                                                                {normalizeNodeForView(option.icon)}
+                                                            </View>
+                                                        ) : null}
+                                                        <View style={styles.optionCardTextBlock}>
+                                                            <Text style={[styles.optionCardTitle, isSelected ? styles.optionCardTitleSelected : null]}>
+                                                                {option.label}
+                                                            </Text>
+                                                            {option.description ? (
+                                                                <Text style={styles.optionCardDescription}>
+                                                                    {option.description}
+                                                                </Text>
+                                                            ) : null}
+                                                        </View>
                                                     </View>
-                                                    {option.description ? (
-                                                        <Text style={styles.optionCardDescription}>
-                                                            {option.description}
-                                                        </Text>
-                                                    ) : null}
                                                     {isSelected ? renderSelectedOptionControls() : null}
                                                 </Pressable>
                                             );
@@ -609,6 +621,24 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 6,
         paddingRight: 32,
     },
+    optionCardContentRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingRight: 32,
+    },
+    optionCardIconSlot: {
+        width: 24,
+        height: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexShrink: 0,
+    },
+    optionCardTextBlock: {
+        flex: 1,
+        minWidth: 0,
+        gap: 0,
+    },
     optionCardTitle: {
         flex: 1,
         fontSize: 14,
@@ -640,7 +670,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     optionCardDescription: {
         fontSize: 12,
         color: theme.colors.text.secondary,
-        paddingRight: 32,
     },
     inlineSelectedControls: {
         marginTop: 10,

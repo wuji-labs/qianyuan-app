@@ -4,14 +4,21 @@ import { resolveTabBarMetrics } from './tabBarMetrics';
 
 describe('resolveTabBarMetrics', () => {
     it('scales the icon with size', () => {
-        expect(resolveTabBarMetrics('compact', true).iconSize).toBe(22);
-        expect(resolveTabBarMetrics('regular', true).iconSize).toBe(26);
-        expect(resolveTabBarMetrics('large', true).iconSize).toBe(30);
+        expect(resolveTabBarMetrics('compact', true).iconSize).toBe(20);
+        expect(resolveTabBarMetrics('regular', true).iconSize).toBe(24);
+        expect(resolveTabBarMetrics('large', true).iconSize).toBe(28);
     });
 
     it('adds vertical padding in icon-only mode for a balanced height', () => {
         expect(resolveTabBarMetrics('regular', false).tabPaddingVertical)
             .toBeGreaterThan(resolveTabBarMetrics('regular', true).tabPaddingVertical);
+    });
+
+    it('rounds the active pill more when labels are shown (taller tab)', () => {
+        expect(resolveTabBarMetrics('regular', true).activePillRadius)
+            .toBeGreaterThan(resolveTabBarMetrics('regular', false).activePillRadius);
+        expect(resolveTabBarMetrics('large', false).activePillRadius)
+            .toBeGreaterThan(resolveTabBarMetrics('compact', false).activePillRadius);
     });
 
     it('passes showLabels through', () => {
@@ -20,6 +27,6 @@ describe('resolveTabBarMetrics', () => {
     });
 
     it('falls back to regular for an unknown size', () => {
-        expect(resolveTabBarMetrics('huge' as never, true).iconSize).toBe(26);
+        expect(resolveTabBarMetrics('huge' as never, true).iconSize).toBe(24);
     });
 });

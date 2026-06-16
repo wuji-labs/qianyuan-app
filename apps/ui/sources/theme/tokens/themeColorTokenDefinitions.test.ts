@@ -217,6 +217,22 @@ describe('editable theme color token definitions', () => {
         expect(unclassifiedPaths).toEqual([]);
     });
 
+    it('classifies floating tab bar recipe leaves as internal chrome tokens', () => {
+        const classificationsByPath = new Map(
+            (tokenDefinitionsModule.THEME_COLOR_TOKEN_CLASSIFICATIONS ?? []).map((classification) => [
+                classification.path.join('.'),
+                classification,
+            ]),
+        );
+
+        expect(classificationsByPath.get('tabBarBorder')).toEqual(expect.objectContaining({
+            status: 'internal',
+        }));
+        expect(classificationsByPath.get('tabBarInnerShadow')).toEqual(expect.objectContaining({
+            status: 'internal',
+        }));
+    });
+
     it('exposes surface highlight as an editable color token with transparent base defaults', () => {
         const definition = getEditableThemeColorTokenDefinition('effect.surfaceHighlight');
 

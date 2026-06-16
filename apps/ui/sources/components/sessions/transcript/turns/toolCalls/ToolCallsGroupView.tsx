@@ -340,7 +340,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     toolRowCards: {
         marginHorizontal: 0,
-        marginBottom: 6,
+        marginBottom: 0,
     },
     toolRowFeed: {
         marginHorizontal: 0,

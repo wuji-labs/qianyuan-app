@@ -110,6 +110,29 @@ export function buildShadowPopoverArrowBoxShadow(dark: boolean): string {
 }
 
 /**
+ * Subtle top inner-shadow for the floating tab bar capsule (iOS-26 / Reddit-style
+ * inset depth). Light: a faint dark recess at the top edge; dark: a faint light
+ * highlight (a dark inset would be invisible on dark chrome). Cross-platform
+ * `inset` box-shadow (supported on RN 0.81 Fabric + web).
+ */
+export function buildTabBarInnerShadow(dark: boolean): string {
+    return dark
+        ? 'inset 0px 5px 18px rgba(255, 255, 255, 0.035)'
+        : 'inset 0px 6px 20px rgba(0, 0, 0, 0.035)';
+}
+
+/**
+ * Floating tab bar capsule rim. Light: a bright near-white rim (Reddit-style
+ * glass edge); dark: a subtle light translucent rim so the capsule separates
+ * from the dark background. Replaces the plain grey `border.strong` outline.
+ */
+export function buildTabBarBorderColor(dark: boolean): string {
+    return dark
+        ? 'rgba(255, 255, 255, 0.16)'
+        : 'rgba(255, 255, 255, 0.92)';
+}
+
+/**
  * View shadow styles for a themed elevation step.
  */
 export function shadowLevelStyle(level: ShadowElevationToken): ShadowLevelStyle {
@@ -123,4 +146,39 @@ export function shadowLevelStyle(level: ShadowElevationToken): ShadowLevelStyle 
         shadowRadius: level.shadowRadius,
         elevation: level.elevation,
     };
+}
+
+/** Scale the alpha of every `rgba(...)` in a CSS box-shadow string. */
+function scaleBoxShadowOpacity(boxShadow: string, multiplier: number): string {
+    if (multiplier === 1) {
+        return boxShadow;
+    }
+    return boxShadow.replace(
+        /rgba\((\s*\d+\s*,\s*\d+\s*,\s*\d+\s*),\s*([\d.]+)\)/g,
+        (_match, rgb: string, alpha: string) => `rgba(${rgb}, ${Number((Number(alpha) * multiplier).toFixed(3))})`,
+    );
+}
+
+/**
+ * Cast shadow for the floating tab bar capsule.
+ *
+ * iOS keeps the soft native `shadow*` props. Android + web use the cross-platform
+ * `boxShadow` (real Gaussian blur, two-layer) instead of Android `elevation` —
+ * elevation renders a hard, over-strong Material drop-shadow that ignores
+ * radius/opacity/color, so the bar's shadow read much stronger on Android than the
+ * tuned iOS one. `soft` halves the opacity for cockpit chrome sitting on an opaque
+ * band (matching the iOS `shadowOpacity * 0.5` softening), on both platforms.
+ */
+export function buildTabBarCastShadowStyle(level: ShadowElevationToken, soft: boolean): ShadowLevelStyle {
+    const opacityMultiplier = soft ? 0.5 : 1;
+    if (Platform.OS === 'ios') {
+        return {
+            shadowColor: level.shadowColor,
+            shadowOffset: level.shadowOffset,
+            shadowOpacity: level.shadowOpacity * opacityMultiplier,
+            shadowRadius: level.shadowRadius,
+            elevation: 0,
+        };
+    }
+    return { boxShadow: scaleBoxShadowOpacity(level.boxShadow, opacityMultiplier) };
 }

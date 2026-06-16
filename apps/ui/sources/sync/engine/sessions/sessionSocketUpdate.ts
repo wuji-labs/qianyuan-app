@@ -483,7 +483,10 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
                             ? Math.trunc(decrypted.seq)
                             : undefined
                     );
-            const normalizeMessage = () => normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, { seq: normalizedSeq });
+            const normalizeMessage = () => normalizeRawMessage(decrypted.id, decrypted.localId, decrypted.createdAt, decrypted.content, {
+                seq: normalizedSeq,
+                messageRole: decrypted.messageRole ?? undefined,
+            });
             lastMessage = telemetryFields
                 ? syncPerformanceTelemetry.measure(
                     'sync.sessions.socket.message.normalize',

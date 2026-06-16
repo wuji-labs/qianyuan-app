@@ -2,6 +2,7 @@ import type { TracedMessage } from '../reducerTracer';
 import type { ReducerState } from '../reducer';
 import { setThinkingMergeCursor } from '../helpers/mergeCursors';
 import { markRunningToolsUnavailable } from '../helpers/markRunningToolsUnavailable';
+import { normalizeTranscriptSeq } from '../../domains/messages/transcriptOrdering';
 
 const TERMINAL_TASK_LIFECYCLE_EVENTS = new Set([
     'task_complete',
@@ -44,7 +45,7 @@ export function runModeSwitchEventsPhase(params: Readonly<{
             state.messages.set(mid, {
                 id: mid,
                 realID: msg.id,
-                seq: typeof msg.seq === 'number' ? msg.seq : null,
+                seq: normalizeTranscriptSeq(msg.seq),
                 localId: msg.localId ?? null,
                 role: 'agent',
                 createdAt: msg.createdAt,

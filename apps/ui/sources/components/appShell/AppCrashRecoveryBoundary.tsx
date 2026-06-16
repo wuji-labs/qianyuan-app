@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Appearance, Image, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Appearance, Image, Platform, Pressable, ScrollView, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -15,6 +15,7 @@ import { getBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail
 import { getBugReportLogText } from '@/utils/system/bugReportLogBuffer';
 import { persistPreRestartBugReportSnapshot } from '@/utils/system/preRestartBugReportSnapshot';
 import { persistRestartBugReportIntent } from '@/utils/system/restartBugReportIntent';
+import { requireReactNativeScreens } from '@/utils/web/reactNativeScreensCjs';
 
 type AppCrashRecoveryBoundaryProps = Readonly<{
   children: React.ReactNode;
@@ -76,6 +77,31 @@ function readIsSecureContextForDiagnostics(): boolean | null {
   } catch {
     return null;
   }
+}
+
+function NativeCrashRecoveryOverlay(props: Readonly<{ children: React.ReactNode }>): React.ReactElement {
+  if (Platform.OS === 'ios') {
+    try {
+      const FullWindowOverlay = requireReactNativeScreens()?.FullWindowOverlay as
+        | React.ComponentType<{ children?: React.ReactNode }>
+        | undefined;
+      if (FullWindowOverlay) {
+        return <FullWindowOverlay>{props.children}</FullWindowOverlay>;
+      }
+    } catch {
+      // Fall through to a root overlay if react-native-screens is unavailable in this runtime.
+    }
+  }
+
+  return (
+    <View
+      testID="app-crash-recovery-native-overlay-fallback"
+      style={styles.nativeOverlayFallback}
+      pointerEvents="auto"
+    >
+      {props.children}
+    </View>
+  );
 }
 
 export function AppBlockingScreen(props: Readonly<{
@@ -300,21 +326,13 @@ export class AppCrashRecoveryBoundary extends React.PureComponent<
     // stack/modal) frozen on top of the root view. Rendering the fallback inline then paints
     // BENEATH that dead frame: the recovery UI mounts (it is present in the accessibility tree)
     // but the user keeps seeing the old frozen screen with dead touches (issue-2, 2026-06-12).
-    // Hosting the fallback in a full-screen RN Modal presents it above any stuck native view
-    // controllers, so the recovery UI is always visible and tappable.
+    // On iOS, the react-native-screens full-window overlay presents it above stuck native view
+    // controllers without adding another RN ModalHostView tree. Other native platforms use the
+    // root overlay fallback because FullWindowOverlay is iOS-only.
     return (
-      <Modal
-        testID="app-crash-recovery-modal-host"
-        visible
-        transparent={false}
-        animationType="none"
-        presentationStyle="fullScreen"
-        hardwareAccelerated
-        statusBarTranslucent
-        onRequestClose={() => {}}
-      >
+      <NativeCrashRecoveryOverlay>
         {fallback}
-      </Modal>
+      </NativeCrashRecoveryOverlay>
     );
   }
 }
@@ -334,6 +352,11 @@ const styles = StyleSheet.create(() => ({
   container: {
     flex: 1,
     minHeight: 0,
+  },
+  nativeOverlayFallback: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 100000,
+    elevation: 100000,
   },
   scrollView: {
     flex: 1,

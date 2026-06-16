@@ -64,6 +64,10 @@ import {
   agentTextLooksLikeExecutionRunSignal,
   shouldIncludeSubagentSourceMessage,
 } from '../domains/session/subagents/subagentSourceMessageDetection';
+import {
+  compareTranscriptMessagesOldestFirst,
+  normalizeTranscriptSeq,
+} from '../domains/messages/transcriptOrdering';
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { AgentEvent } from '../typesRaw';
 
@@ -247,27 +251,6 @@ const emptyRecord: Record<string, any> = {};
 const emptyReviewCommentDrafts: ReviewCommentDraft[] = [];
 const emptyActionDrafts: SessionActionDraft[] = [];
 
-function normalizeMessageSeq(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return null;
-  }
-  return Math.trunc(value);
-}
-
-function compareMessagesOldestFirst(a: Message, b: Message): number {
-  const aSeq = normalizeMessageSeq(a.seq);
-  const bSeq = normalizeMessageSeq(b.seq);
-  if (aSeq !== null && bSeq !== null && aSeq !== bSeq) {
-    return aSeq - bSeq;
-  }
-
-  if (a.createdAt !== b.createdAt) {
-    return a.createdAt - b.createdAt;
-  }
-
-  return String(a.id).localeCompare(String(b.id));
-}
-
 type SessionMessagesArrayCacheEntry = Readonly<{
   idsRef: readonly string[];
   messagesByIdRef: Record<string, Message>;
@@ -342,9 +325,7 @@ function appendSubagentSourceMessageSignature(parts: string[], message: Message)
   }
 
   const messageParts: string[] = [];
-  const seq = typeof (message as any).seq === 'number' && Number.isFinite((message as any).seq)
-    ? Math.trunc((message as any).seq)
-    : '';
+  const seq = normalizeTranscriptSeq((message as any).seq) ?? '';
   messageParts.push(`${message.id}:${message.kind}:${seq}:${message.createdAt ?? ''}`);
   if (message.kind === 'agent-text') {
     messageParts.push(buildExecutionRunSignalTextSignature(
@@ -409,7 +390,7 @@ export function useSessionSubagentSourceMessages(sessionId: string): readonly Me
     const ids = session.messageIdsOldestFirst;
     const orderedMessages = Array.isArray(ids) && ids.length > 0
       ? ids.map((id) => session.messagesById[id]).filter((message): message is Message => message != null)
-      : Object.values(session.messagesById ?? {}).sort(compareMessagesOldestFirst);
+      : Object.values(session.messagesById ?? {}).sort(compareTranscriptMessagesOldestFirst);
 
     for (const message of orderedMessages) {
       if (!shouldIncludeSubagentSourceMessage(message)) continue;
@@ -473,7 +454,7 @@ export function useSessionMessages(
           return cached.messages as Message[];
         }
 
-        const out = Object.values(messagesById).slice().sort(compareMessagesOldestFirst);
+        const out = Object.values(messagesById).slice().sort(compareTranscriptMessagesOldestFirst);
         sessionMessagesArrayCache.delete(sessionId);
         sessionMessagesArrayCache.set(sessionId, {
           idsRef: ids,

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { installNavigationCommonModuleMocks } from '@/components/ui/navigation/navigationTestHelpers';
@@ -14,6 +14,9 @@ let sessionState: { metadata?: Record<string, unknown> | null } | null = {
 let scmState: Record<string, unknown> | null = null;
 let gitBadgeMode: 'changedFiles' | 'diffLines' | 'off' = 'changedFiles';
 let openTabsBadgeEnabled = true;
+const themeState = vi.hoisted(() => ({
+    textPrimaryColor: '#111111',
+}));
 
 installNavigationCommonModuleMocks({
     reactNative: async () => {
@@ -42,6 +45,18 @@ installNavigationCommonModuleMocks({
             return undefined;
         },
     }),
+    unistyles: async () => {
+        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+        return createUnistylesMock({
+            theme: {
+                colors: {
+                    text: {
+                        primary: themeState.textPrimaryColor,
+                    },
+                },
+            },
+        });
+    },
 });
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -61,13 +76,46 @@ vi.mock('@/components/ui/layout/layout', () => ({
     layout: { maxWidth: 960 },
 }));
 
+function styleObjects(style: unknown): Record<string, unknown>[] {
+    const styles = Array.isArray(style) ? style : [style];
+    return styles.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object');
+}
+
 describe('cockpit tab bars', () => {
+    beforeEach(() => {
+        vi.resetModules();
+        themeState.textPrimaryColor = 'var(--colors-text-primary)';
+    });
+
     afterEach(() => {
         translationPrefix = 'en';
         sessionState = { metadata: { flavor: 'codex' } };
         scmState = null;
         gitBadgeMode = 'changedFiles';
         openTabsBadgeEnabled = true;
+    });
+
+    it('keeps the active pill linked to CSS variable theme colors', async () => {
+        const { SessionCockpitTabBar } = await import('./SessionCockpitTabBar');
+
+        const screen = await renderScreen(
+            <SessionCockpitTabBar
+                sessionId="sess_1"
+                activeSurface="chat"
+                terminalTabAvailable={true}
+                openDetailsTabCount={0}
+                onSurfacePress={() => {}}
+            />,
+        );
+
+        const activePills = screen.tree.root.findAll((node) => (
+            node.props?.pointerEvents === 'none'
+            && styleObjects(node.props.style).some((style) => (
+                style.backgroundColor === 'var(--colors-text-primary)'
+                && style.opacity === 0.05
+            ))
+        ));
+        expect(activePills.length).toBeGreaterThan(0);
     });
 
     it('renders session surfaces and omits terminal when unavailable', async () => {

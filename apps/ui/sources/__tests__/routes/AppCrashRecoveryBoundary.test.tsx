@@ -9,6 +9,13 @@ import { installRouteRootCommonModuleMocks } from './routeRootTestHelpers';
 
 installRouteRootCommonModuleMocks();
 
+vi.mock('@/utils/web/reactNativeScreensCjs', () => ({
+  requireReactNativeScreens: () => ({
+    FullWindowOverlay: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement('FullWindowOverlay', { testID: 'app-crash-recovery-full-window-overlay' }, children),
+  }),
+}));
+
 vi.mock('expo-clipboard', () => ({
   setStringAsync: vi.fn(async () => {}),
 }));
@@ -74,11 +81,11 @@ describe('AppCrashRecoveryBoundary', () => {
     expect(scrollView.props.contentContainerStyle).toEqual(expect.objectContaining({ flexGrow: 1 }));
   });
 
-  it('hosts the native crash fallback in a full-screen modal so it paints above stuck native screens', async () => {
+  it('hosts the native crash fallback in a full-window overlay without RN Modal', async () => {
     // iOS evidence (issue-2, T4h 2026-06-12): the boundary caught a FlashList crash, mounted its
     // fallback into the root view, but the screen kept showing the dead previous frame because a
-    // natively-presented screen container stayed on top. Hosting the fallback in a RN Modal
-    // presents it above any stuck native view controllers.
+    // natively-presented screen container stayed on top. Use the react-native-screens full-window
+    // overlay to paint above stuck native view controllers without reintroducing RN Modal trees.
     const reactNative = await import('react-native');
     const platform = reactNative.Platform as { OS: string };
     const originalOs = platform.OS;
@@ -93,12 +100,38 @@ describe('AppCrashRecoveryBoundary', () => {
             <Thrower />
           </AppCrashRecoveryBoundary>);
 
-      const modal = screen.findByType(reactNative.Modal as any);
-      expect(modal).toBeTruthy();
-      expect(modal.props.visible).toBe(true);
-      expect(modal.props.transparent).not.toBe(true);
-      // The recovery UI must live inside the modal host, not next to it.
-      expect(modal.findByProps({ testID: 'app-crash-restart' })).toBeTruthy();
+      expect(screen.findAll((node) => node.type === (reactNative.Modal as any))).toHaveLength(0);
+      const overlay = screen.findByTestId('app-crash-recovery-full-window-overlay');
+      expect(overlay).toBeTruthy();
+      if (!overlay) throw new Error('Expected crash recovery overlay to render');
+      // The recovery UI must live inside the overlay host, not next to it.
+      expect(overlay.findByProps({ testID: 'app-crash-restart' })).toBeTruthy();
+    } finally {
+      platform.OS = originalOs;
+      consoleError.mockRestore();
+    }
+  });
+
+  it('uses the native overlay fallback on Android even when react-native-screens exports FullWindowOverlay', async () => {
+    const reactNative = await import('react-native');
+    const platform = reactNative.Platform as { OS: string };
+    const originalOs = platform.OS;
+    platform.OS = 'android';
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { AppCrashRecoveryBoundary } = await import('@/components/appShell/AppCrashRecoveryBoundary');
+      const Thrower = () => {
+        throw new Error('boom');
+      };
+      const screen = await renderScreen(<AppCrashRecoveryBoundary onRestart={() => {}}>
+            <Thrower />
+          </AppCrashRecoveryBoundary>);
+
+      expect(screen.findAllByTestId('app-crash-recovery-full-window-overlay')).toHaveLength(0);
+      const fallback = screen.findByTestId('app-crash-recovery-native-overlay-fallback');
+      expect(fallback).toBeTruthy();
+      if (!fallback) throw new Error('Expected native crash recovery fallback to render');
+      expect(fallback.findByProps({ testID: 'app-crash-restart' })).toBeTruthy();
     } finally {
       platform.OS = originalOs;
       consoleError.mockRestore();

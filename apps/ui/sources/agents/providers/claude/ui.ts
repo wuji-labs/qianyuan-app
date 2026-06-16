@@ -5,6 +5,7 @@ export const CLAUDE_UI: AgentUiConfig = {
     id: 'claude',
     icon: null,
     svgIconXml: PROVIDER_LOGO_SVG_XML.claude ?? null,
+    pickerIconScale: 1.1,
     tintColor: null,
     avatarOverlay: {
         circleScale: 0.42,

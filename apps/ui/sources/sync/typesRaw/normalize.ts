@@ -1,4 +1,11 @@
+import type { SessionMessageRole } from '@happier-dev/protocol';
+
 import type { MessageMeta } from '../domains/messages/messageMetaTypes';
+import {
+    hasSyntheticNoResponseMeta,
+    markSyntheticNoResponseMeta,
+    SYNTHETIC_NO_RESPONSE_TEXT,
+} from '../domains/messages/syntheticNoResponseMessageMeta';
 import { hasSessionMediaRenderItems } from '../domains/sessionMedia/sessionMediaMessageMeta';
 import { rawRecordSchema, type AgentEvent, type RawAgentContent, type RawRecord, type UsageData } from './schemas';
 import { buildUsageDataFromTokenCountMessage } from './tokenCountUsage';
@@ -117,6 +124,46 @@ function firstMessageText(value: unknown): string | null {
         if (typeof item.text === 'string') return item.text;
     }
     return null;
+}
+
+function readRecordString(value: unknown, key: string): string | null {
+    if (!isPlainRecord(value)) return null;
+    const raw = value[key];
+    return typeof raw === 'string' ? raw : null;
+}
+
+function readSingleTextContentBlock(value: unknown): string | null {
+    if (!Array.isArray(value) || value.length !== 1) return null;
+    const block = value[0];
+    if (!isPlainRecord(block) || block.type !== 'text') return null;
+    return typeof block.text === 'string' ? block.text : null;
+}
+
+function isClaudeSyntheticNoResponseOutputData(value: unknown): boolean {
+    if (!isPlainRecord(value) || value.type !== 'assistant') return false;
+    const message = value.message;
+    if (!isPlainRecord(message)) return false;
+    const model = readRecordString(value, 'model') ?? readRecordString(message, 'model');
+    return model === '<synthetic>'
+        && readSingleTextContentBlock(message.content)?.trim() === SYNTHETIC_NO_RESPONSE_TEXT;
+}
+
+function shouldKeepNormalizedEventRoleOutput(message: NormalizedMessage, messageRole: SessionMessageRole | null | undefined): boolean {
+    if (messageRole !== 'event') return true;
+    if (message.role !== 'agent') return false;
+    if (hasSyntheticNoResponseMeta(message.meta)) return true;
+    return message.content.some((content) =>
+        content.type === 'thinking' ||
+        content.type === 'tool-call' ||
+        content.type === 'tool-result'
+    );
+}
+
+function filterNormalizedEventRoleOutput(
+    message: NormalizedMessage,
+    messageRole: SessionMessageRole | null | undefined,
+): NormalizedMessage | null {
+    return shouldKeepNormalizedEventRoleOutput(message, messageRole) ? message : null;
 }
 
 function isCompactHookLocalCommandStdoutText(text: unknown): boolean {
@@ -246,7 +293,7 @@ export function normalizeRawMessage(
     localId: string | null,
     createdAt: number,
     rawInput: unknown,
-    opts?: Readonly<{ seq?: number }>,
+    opts?: Readonly<{ seq?: number; messageRole?: SessionMessageRole | null }>,
 ): NormalizedMessage | null {
     const seq = typeof opts?.seq === 'number' && Number.isFinite(opts.seq) ? Math.trunc(opts.seq) : undefined;
 
@@ -489,7 +536,7 @@ export function normalizeRawMessage(
             return typeof content === 'string' || Array.isArray(content);
         };
 
-		        if (raw.content.type === 'output') {
+			        if (raw.content.type === 'output') {
             // Skip Meta messages
             if (raw.content.data.isMeta) {
                 return null;
@@ -506,6 +553,25 @@ export function normalizeRawMessage(
 
             if ((raw.content.data as { type?: unknown }).type === 'claude_jsonl_consumed_marker') {
                 return null;
+            }
+
+            if (isClaudeSyntheticNoResponseOutputData(raw.content.data)) {
+                const outputUuid = readRecordString(raw.content.data, 'uuid') ?? id;
+                return {
+                    id,
+                    ...(seq !== undefined ? { seq } : {}),
+                    localId,
+                    createdAt,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'text',
+                        text: SYNTHETIC_NO_RESPONSE_TEXT,
+                        uuid: outputUuid,
+                        parentUUID: null,
+                    }],
+                    meta: markSyntheticNoResponseMeta(raw.meta),
+                } satisfies NormalizedMessage;
             }
 
             // Progress records are transport-level status updates and are not rendered in transcript.
@@ -584,7 +650,7 @@ export function normalizeRawMessage(
                     }
                     const sidechainId = metaSidechainId ?? getOutputSidechainId(raw.content.data) ?? claudeParentToolUseId;
                     const legacyIsSidechain = getOutputIsSidechain(raw.content.data);
-	                  return {
+	                  const normalized = {
 	                        id,
 	                        ...(seq !== undefined ? { seq } : {}),
 	                        localId,
@@ -595,7 +661,8 @@ export function normalizeRawMessage(
 	                      content,
 	                      meta: raw.meta,
 	                      usage: raw.content.data.message.usage
-	                  };
+	                  } satisfies NormalizedMessage;
+                    return filterNormalizedEventRoleOutput(normalized, opts?.messageRole);
 	            } else if (isOutputUserData(raw.content.data)) {
 	                const outputUuid = raw.content.data.uuid ?? id;
 
@@ -609,7 +676,7 @@ export function normalizeRawMessage(
 	                // Handle sidechain user messages
 	                if (isSidechain && raw.content.data.message && typeof raw.content.data.message.content === 'string') {
 	                    // Return as a special agent message with sidechain content
-	                      return {
+	                      const normalized = {
 	                          id,
 	                          ...(seq !== undefined ? { seq } : {}),
 	                          localId,
@@ -622,7 +689,8 @@ export function normalizeRawMessage(
 	                            uuid: outputUuid,
 	                            prompt: raw.content.data.message.content
 	                        }]
-	                    };
+	                    } satisfies NormalizedMessage;
+                    return filterNormalizedEventRoleOutput(normalized, opts?.messageRole);
 	                }
 
                 // Handle regular user messages
@@ -630,7 +698,7 @@ export function normalizeRawMessage(
                     if (isClaudeTaskNotificationText(raw.content.data.message.content)) {
                         return null;
                     }
-                    return {
+                    const normalized = {
                         id,
                         ...(seq !== undefined ? { seq } : {}),
                         localId,
@@ -642,7 +710,8 @@ export function normalizeRawMessage(
                             type: 'text',
                             text: raw.content.data.message.content
                         }
-                    };
+                    } satisfies NormalizedMessage;
+                    return filterNormalizedEventRoleOutput(normalized, opts?.messageRole);
                 }
 
                 // Handle tool results
@@ -670,7 +739,7 @@ export function normalizeRawMessage(
 		                        }
 		                    }
 		                }
-                  return {
+                  const normalized = {
                       id,
                       ...(seq !== undefined ? { seq } : {}),
                       localId,
@@ -680,10 +749,11 @@ export function normalizeRawMessage(
                       isSidechain,
                     content,
                     meta: raw.meta
-                };
+                } satisfies NormalizedMessage;
+                return filterNormalizedEventRoleOutput(normalized, opts?.messageRole);
             }
             // Any other output payload should be surfaced as an opaque message rather than dropped.
-            return {
+            const normalized = {
                 id,
                 ...(seq !== undefined ? { seq } : {}),
                 localId,
@@ -697,7 +767,8 @@ export function normalizeRawMessage(
                     parentUUID: null,
                 }],
                 meta: raw.meta,
-            };
+            } satisfies NormalizedMessage;
+            return filterNormalizedEventRoleOutput(normalized, opts?.messageRole);
         }
           if (raw.content.type === 'event') {
               const originalEventData = readOriginalStructuredContentData(rawInput, 'event');

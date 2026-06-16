@@ -18,6 +18,15 @@ export function resolveTranscriptFlashListBottomMaintenance(params: Readonly<{
     /** Single-owner rule (plan B3): MVCP autoscroll only while following AND no transaction open. */
     hasOpenViewportTransaction: boolean;
     layoutHeight: number;
+    /**
+     * Native edge-slot carve active (plan §12 #3). While the actively-streaming live row renders
+     * OUTSIDE the recycler, the JS force-pin owns the visual bottom and MVCP must keep ONLY
+     * prepend/top offset correction. Arming the bottom autoscroll threshold here re-introduces a
+     * second bottom authority (MVCP `applyOffsetCorrection`) that races the JS pin — the #1
+     * pin-loss cause. So while following AND the live region is active we withhold the threshold
+     * (startRenderingFromBottom only). Omitted/false keeps today's threshold branch unchanged.
+     */
+    liveRegionActive?: boolean;
     nativeEntryShouldUseBottomMaintenance: boolean;
     orientation: TranscriptListOrientation;
     pinEnabled: boolean;
@@ -36,6 +45,13 @@ export function resolveTranscriptFlashListBottomMaintenance(params: Readonly<{
     }
 
     if (!params.pinEnabled || !params.autoFollowWhenPinned || params.hasOpenViewportTransaction) {
+        return { startRenderingFromBottom: true };
+    }
+
+    if (params.liveRegionActive === true) {
+        // Single pin owner (plan §12 #3): the JS force-pin owns the bottom while the carve is
+        // active; keep MVCP prepend/top correction armed (startRenderingFromBottom) but withhold
+        // the bottom autoscroll threshold so MVCP cannot fight the JS pin at the live tail.
         return { startRenderingFromBottom: true };
     }
 

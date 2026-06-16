@@ -10,6 +10,7 @@ export type SyncTuning = Readonly<{
     transcriptBackwardPrefetchThresholdPx: number;
     transcriptFlashListEstimatedItemSize: number;
     transcriptWebHotTailItemCount: number;
+    transcriptNativeHotTailItemCount: number;
     transcriptMaxTurnEntriesPerListItem: number;
     transcriptWebInitialPinStabilizeMs: number;
     transcriptWebInitialPinRetryIntervalMs: number;
@@ -208,6 +209,26 @@ export function loadSyncTuning(opts?: {
         transcriptBackwardPrefetchThresholdPx: 800,
         transcriptFlashListEstimatedItemSize: 120,
         transcriptWebHotTailItemCount: 24,
+        // Native hot/cold streaming carve-out (live-tail rows rendered in the inverted edge slot,
+        // outside the recycler). The number is a hard ceiling on hot-tail items (see
+        // buildTranscriptHotColdSegments#maxHotTailItems). 0 = OFF (all-in-FlashList); >0 = ON.
+        //
+        // DEFAULT-ON (4): the carve is the streaming transcript path on native. It eliminates
+        // streaming-overlap (the growing row renders in real layout), fixes the composer-inset gap,
+        // bounds the hot tail (no blank), and — critically — AUTO-FOLLOW: the inverted bottom pin
+        // fires authoritatively on a pre-change following decision (mirrors web's
+        // capture-before/write-after), beating FlashList MVCP's index-0 re-anchor. Device-validated
+        // end-to-end (2026-06-15): streaming holds the bottom (dist≈0, was 2055px), the hot→cold
+        // advance no longer parks, scrolled-up readers are not yanked, and jump-to-bottom +
+        // entry-restore land flush. All fix logic is carve-gated (nativeHotTailHeightRef>0), so 0
+        // remains a byte-for-byte fallback.
+        //
+        // NOTE for tests: the carve replaces the flag=0 inverted "zero-writes" design with the
+        // authoritative force-pin design. `dev/testkit/harness/chatListHarness.ts` pins this to 0 in
+        // its BASE so the flag=0-invariant inverted tests stay deterministic; the carve is covered by
+        // explicit flag>0 tests + segments/webHotColdSplit/TranscriptHotTail. Detail:
+        // .project/plans/native-streaming-hot-cold-split-scoping.md (§ON-path device findings).
+        transcriptNativeHotTailItemCount: 4,
         transcriptMaxTurnEntriesPerListItem: 8,
         transcriptWebInitialPinStabilizeMs: 1500,
         transcriptWebInitialPinRetryIntervalMs: 250,
@@ -307,6 +328,7 @@ export function loadSyncTuning(opts?: {
         transcriptBackwardPrefetchThresholdPx: readNumber(merged, 'transcriptBackwardPrefetchThresholdPx', { min: 0, max: 50_000 }) ?? defaults.transcriptBackwardPrefetchThresholdPx,
         transcriptFlashListEstimatedItemSize: readNumber(merged, 'transcriptFlashListEstimatedItemSize', { min: 20, max: 2000 }) ?? defaults.transcriptFlashListEstimatedItemSize,
         transcriptWebHotTailItemCount: readNumber(merged, 'transcriptWebHotTailItemCount', { min: 1, max: 200 }) ?? defaults.transcriptWebHotTailItemCount,
+        transcriptNativeHotTailItemCount: readNumber(merged, 'transcriptNativeHotTailItemCount', { min: 0, max: 200 }) ?? defaults.transcriptNativeHotTailItemCount,
         transcriptMaxTurnEntriesPerListItem: readNumber(merged, 'transcriptMaxTurnEntriesPerListItem', { min: 0, max: 200 }) ?? defaults.transcriptMaxTurnEntriesPerListItem,
         transcriptWebInitialPinStabilizeMs: readNumber(merged, 'transcriptWebInitialPinStabilizeMs', { min: 0, max: 20_000 }) ?? defaults.transcriptWebInitialPinStabilizeMs,
         transcriptWebInitialPinRetryIntervalMs: readNumber(merged, 'transcriptWebInitialPinRetryIntervalMs', { min: 16, max: 2000 }) ?? defaults.transcriptWebInitialPinRetryIntervalMs,

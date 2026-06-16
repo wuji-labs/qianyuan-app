@@ -8,6 +8,7 @@ import { isMobileWorkspaceCockpitEnabled } from '@/components/workspaceCockpit/m
 import {
     useSessionCockpitBottomChromeHeightSetter,
     useSessionCockpitChromeRegistration,
+    useSessionCockpitDismissingSessionId,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import {
     resolveSessionCockpitRouteFromPathname,
@@ -58,8 +59,6 @@ type BottomChromeItem = Readonly<{
     node: React.ReactElement;
 }>;
 
-const BOTTOM_CHROME_TRANSITION_TRANSLATE_Y = 10;
-
 /**
  * Passive settled keyboard visibility for chrome suppression only.
  * Composer positioning must use the keyboard scaffold instead of this React-state path.
@@ -81,9 +80,16 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const { setActiveTab } = useTabState();
     const mobileWorkspaceExperience = useSetting('mobileWorkspaceExperienceV1');
     const cockpitRegistration = useSessionCockpitChromeRegistration();
+    const dismissingSessionId = useSessionCockpitDismissingSessionId();
     const activeTab = auth.isAuthenticated === true && typeof pathname === 'string'
         ? resolveMobileBottomChromeActiveTab(pathname)
         : null;
+    // Remember the most recent main tab so a session dismiss can cross-fade to the
+    // bar it will actually land on, before the route commits.
+    const lastMainTabRef = React.useRef<TabType>('sessions');
+    if (activeTab) {
+        lastMainTabRef.current = activeTab;
+    }
     const sessionRouteMatch = React.useMemo(() => {
         const match = /^\/session\/([^/?#]+?)(?:\/|$)/.exec(typeof pathname === 'string' ? pathname : '');
         return match?.[1] ? decodeURIComponent(match[1]) : null;
@@ -145,6 +151,12 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         router.replace(resolveSessionRoutePathForSurface(sessionId, surface, { serverId }));
     }, [cockpitRegistration, cockpitRoute?.sessionId, persistSessionSurface, router, serverId]);
 
+    const buildMainChrome = React.useCallback((tab: TabType): BottomChromeItem => ({
+        key: 'mainAppTabs',
+        signature: `mainAppTabs:${tab}`,
+        node: <TabBar activeTab={tab} onTabPress={handleTabPress} />,
+    }), [handleTabPress]);
+
     const resolvedChrome = React.useMemo((): BottomChromeItem | null => {
         if (deviceType !== 'phone') {
             return null;
@@ -155,11 +167,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
                 return null;
             }
 
-            return {
-                key: 'mainAppTabs',
-                signature: `mainAppTabs:${activeTab}`,
-                node: <TabBar activeTab={activeTab} onTabPress={handleTabPress} />,
-            };
+            return buildMainChrome(activeTab);
         }
 
         const registeredCockpitRoute = cockpitRegistration
@@ -174,6 +182,15 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             activeCockpitRoute
             && isMobileWorkspaceCockpitEnabled({ deviceType, mobileWorkspaceExperience })
         ) {
+            // Dismiss-start: the session is sliding out but the route hasn't
+            // committed yet. Cross-fade to the destination main bar now (the band
+            // dissolves with the outgoing cockpit chrome) instead of at slide-end.
+            // The in-flow reservation is route-keyed below, so this is visual-only
+            // and a cancelled gesture (`closing:false`) reverts here.
+            if (dismissingSessionId === activeCockpitRoute.sessionId) {
+                return buildMainChrome(lastMainTabRef.current);
+            }
+
             const matchingRegistration =
                 cockpitRegistration?.sessionId === activeCockpitRoute.sessionId
                     ? cockpitRegistration
@@ -200,11 +217,12 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         return null;
     }, [
         activeTab,
+        buildMainChrome,
         cockpitRegistration,
         cockpitRoute,
         deviceType,
+        dismissingSessionId,
         handleCockpitSurfacePress,
-        handleTabPress,
         mobileWorkspaceExperience,
         softwareKeyboardVisible,
         terminalAvailability.sidebarTabAvailable,
@@ -220,6 +238,10 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const renderedChromeRef = React.useRef(renderedChrome);
     const progress = React.useRef(new Animated.Value(1)).current;
     const activeAnimationRef = React.useRef<Animated.CompositeAnimation | null>(null);
+    // Latest desired chrome, tracked so the cross-fade completion always settles on
+    // the freshest node even if the signature changed mid-transition.
+    const latestResolvedChromeRef = React.useRef(resolvedChrome);
+    latestResolvedChromeRef.current = resolvedChrome;
 
     const setRenderedChromeState = React.useCallback((nextChrome: typeof renderedChrome) => {
         renderedChromeRef.current = nextChrome;
@@ -257,6 +279,13 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             if (currentRenderedChrome.signature === resolvedChrome.signature) {
                 return;
             }
+            // Same bar, content changed (badge/surface/etc.). If a cross-fade is
+            // in flight, just swap the node and let the animation finish instead of
+            // snapping to the final frame (which reads as a flicker).
+            if (activeAnimationRef.current) {
+                setRenderedChromeState({ current: resolvedChrome, previous: renderedChromeRef.current.previous });
+                return;
+            }
             stopChromeAnimation();
             progress.setValue(1);
             setRenderedChromeState({ current: resolvedChrome, previous: null });
@@ -292,7 +321,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
                 return;
             }
             progress.setValue(1);
-            setRenderedChromeState({ current: resolvedChrome, previous: null });
+            setRenderedChromeState({ current: latestResolvedChromeRef.current ?? resolvedChrome, previous: null });
         });
     }, [progress, reduceMotion, resolvedChrome, setRenderedChromeState, stopChromeAnimation]);
 
@@ -310,17 +339,9 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         return null;
     }
 
-    const currentStyle = {
-        opacity: progress,
-        transform: [
-            {
-                translateY: progress.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [BOTTOM_CHROME_TRANSITION_TRANSLATE_Y, 0],
-                }),
-            },
-        ],
-    } as const;
+    // Incoming bar stays fully opaque; the outgoing bar dissolves over it. This
+    // avoids two translucent glass layers cross-fading at once (their backgrounds
+    // would compound at the midpoint, which reads as a flicker).
     const previousStyle = {
         position: 'absolute',
         left: 0,
@@ -330,30 +351,23 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
             inputRange: [0, 1],
             outputRange: [1, 0],
         }),
-        transform: [
-            {
-                translateY: progress.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, BOTTOM_CHROME_TRANSITION_TRANSLATE_Y],
-                }),
-            },
-        ],
     } as const;
 
-    // Main-app tabs overlay content (content scrolls under the glass; those screens
-    // pad their own bottom). Session/project cockpit chrome stays in normal flow so
-    // it reserves space and the composer/terminal sit above the bar — the spacing is
-    // transparent (no background band).
-    const isMainAppChrome = renderedChrome.current.key === 'mainAppTabs';
-    const wrapperStyle = isMainAppChrome
-        ? ({ position: 'absolute', left: 0, right: 0, bottom: 0 } as const)
-        : ({ position: 'relative' } as const);
-
+    // Both the main and cockpit bars float over content as a pure overlay: the bar
+    // never reserves in-flow space. Each surface clears the bar itself — lists via
+    // `ItemList`'s `bottomChromeHeight` padding, the chat composer via the session-
+    // owned reservation in `AgentContentView`. Because the reservation lives inside
+    // the session screen, it slides away with the session on dismiss, so the window
+    // canvas behind the chrome is never exposed as a lingering bottom band.
     return (
-        <View onLayout={handleChromeLayout} pointerEvents="box-none" style={wrapperStyle}>
-            <Animated.View style={currentStyle}>
+        <View
+            onLayout={handleChromeLayout}
+            pointerEvents="box-none"
+            style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
+        >
+            <View>
                 {renderedChrome.current.node}
-            </Animated.View>
+            </View>
             {renderedChrome.previous ? (
                 <Animated.View pointerEvents="none" style={previousStyle}>
                     {renderedChrome.previous.node}

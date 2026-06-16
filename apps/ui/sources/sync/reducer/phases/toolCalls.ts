@@ -4,6 +4,7 @@ import { compareToolCalls } from '../../../utils/tools/toolComparison';
 import type { ReducerState } from '../reducer';
 import { drainAndApplyOrphanToolResultsToMessage } from '../helpers/drainAndApplyOrphanToolResultsToMessage';
 import { setThinkingMergeCursor } from '../helpers/mergeCursors';
+import { normalizeTranscriptSeq, transcriptBlockIndexFromContentIndex } from '../../domains/messages/transcriptOrdering';
 
 export function runToolCallsPhase(params: Readonly<{
     state: ReducerState;
@@ -31,8 +32,10 @@ export function runToolCallsPhase(params: Readonly<{
     }
     for (let msg of nonSidechainMessages) {
         if (msg.role === 'agent') {
-            for (let c of msg.content) {
+            for (let contentIndex = 0; contentIndex < msg.content.length; contentIndex += 1) {
+                const c = msg.content[contentIndex]!;
                 if (c.type === 'tool-call') {
+                    const transcriptBlockIndex = transcriptBlockIndexFromContentIndex(contentIndex);
                     // Direct lookup by tool ID (since permission ID = tool ID now)
                     const existingMessageId = state.toolIdToMessageId.get(c.id);
 
@@ -44,6 +47,13 @@ export function runToolCallsPhase(params: Readonly<{
                         const message = state.messages.get(existingMessageId);
                         if (message?.tool) {
                             message.realID = msg.id;
+                            const incomingSeq = normalizeTranscriptSeq(msg.seq);
+                            if (message.seq === null && incomingSeq !== null) {
+                                message.seq = incomingSeq;
+                            }
+                            if (message.transcriptBlockIndex == null) {
+                                message.transcriptBlockIndex = transcriptBlockIndex;
+                            }
                             state.messageIds.set(msg.id, existingMessageId);
                             if (!message.tool.id) {
                                 message.tool.id = c.id;
@@ -183,7 +193,8 @@ export function runToolCallsPhase(params: Readonly<{
 		                        state.messages.set(mid, {
 		                            id: mid,
 		                            realID: msg.id,
-		                            seq: typeof msg.seq === 'number' ? msg.seq : null,
+		                            seq: normalizeTranscriptSeq(msg.seq),
+		                            transcriptBlockIndex,
 		                            localId: msg.localId ?? null,
 		                            role: 'agent',
 		                            createdAt: msg.createdAt,

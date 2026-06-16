@@ -52,6 +52,14 @@ interface ToolViewProps {
     messageId?: string;
     approvalRequests?: readonly OpenApprovalArtifactForSession[];
     forcePermissionPromptsInTranscript?: boolean;
+    /**
+     * True when the card is rendered inside a tool-calls group, where the group's
+     * unit card already supplies a continuous `surface.inset` background and the
+     * rows must stack flush. In that context the card drops its own outer vertical
+     * margin so no page background shows between consecutive grouped tools.
+     * Standalone tool cards (default) keep the intrinsic margin.
+     */
+    embedded?: boolean;
     interaction?: {
         canSendMessages: boolean;
         canApprovePermissions: boolean;
@@ -324,7 +332,10 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
         statusKind === 'error' ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error')) : null;
 
     return (
-        <View style={styles.container}>
+        <View
+            testID="tool-view-container"
+            style={[styles.container, props.embedded ? styles.containerEmbedded : null]}
+        >
             <View style={[styles.header, timelineDensity === 'compact' ? styles.headerCompact : null]}>
                 <TouchableOpacity
                     testID="tool-view-header-primary"
@@ -463,6 +474,12 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 8,
         marginVertical: 4,
         overflow: 'hidden'
+    },
+    containerEmbedded: {
+        // Inside a tool-calls group card the unit card already paints a continuous
+        // inset background; dropping the outer margin keeps grouped tools flush so no
+        // page background shows between them.
+        marginVertical: 0,
     },
     header: {
         flexDirection: 'row',

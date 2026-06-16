@@ -119,12 +119,13 @@ export const ToolCallsGroupUnitToolRowWithSessionCommon = React.memo(function To
 });
 
 const styles = StyleSheet.create(() => ({
-    // The whole-card expanded rows used marginBottom; unit rows use padding so the
-    // FlashList row measurement includes the inter-tool spacing (same rendered look
-    // against the uniform unit background).
+    // Consecutive grouped tools share one continuous unit-card inset background. The
+    // row adds no spacing and the embedded ToolView card drops its own vertical margin
+    // (see ToolView `embedded`), so no page background shows between tools — they stack
+    // contiguously as a single list.
     toolRowCards: {
         marginHorizontal: 0,
-        paddingBottom: 6,
+        paddingBottom: 0,
     },
     toolRowFeed: {
         marginHorizontal: 0,

@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import {
     DirectTranscriptRawMessageV1Schema,
+    SessionMessageRoleSchema,
     SessionStoredMessageContentSchema,
 } from '@happier-dev/protocol';
 import type {
     DirectTranscriptRawMessageV1,
+    SessionMessageRole,
     SessionStoredMessageContent,
 } from '@happier-dev/protocol';
 import { EphemeralUpdateSchema, UpdateContainerSchema } from '@happier-dev/protocol/updates';
@@ -16,6 +18,7 @@ export type TranscriptStreamSegmentEphemeralUpdate = Readonly<{
     message: Readonly<{
         localId: string;
         sidechainId?: string | null;
+        messageRole?: SessionMessageRole | null;
         content: SessionStoredMessageContent;
         createdAt: number;
         updatedAt: number;
@@ -43,6 +46,7 @@ const TranscriptStreamSegmentEphemeralUpdateSchema = z.object({
     message: z.object({
         localId: z.string(),
         sidechainId: z.string().nullable().optional(),
+        messageRole: SessionMessageRoleSchema.nullable().optional(),
         content: SessionStoredMessageContentSchema,
         createdAt: z.number(),
         updatedAt: z.number(),

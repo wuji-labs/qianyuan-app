@@ -232,7 +232,7 @@ export const ACCOUNT_DISPLAY_SETTING_DEFINITIONS = defineSettingDefinitions({
     },
     tabBarShowLabels: {
         schema: z.boolean(),
-        default: true,
+        default: false,
         description: 'Show text labels under the bottom tab bar icons (off = icon-only, Instagram-style)',
         storageScope: 'account',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'boolean', privacy: 'safe', identityScope: 'person' },

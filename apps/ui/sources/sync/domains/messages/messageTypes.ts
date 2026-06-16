@@ -38,6 +38,7 @@ export type UserTextMessage = {
     id: string;
     realID?: string | null;
     seq?: number;
+    transcriptBlockIndex?: number;
     localId: string | null;
     createdAt: number;
     text: string;
@@ -50,6 +51,7 @@ export type ModeSwitchMessage = {
     id: string;
     realID?: string | null;
     seq?: number;
+    transcriptBlockIndex?: number;
     createdAt: number;
     event: AgentEvent;
     meta?: MessageMeta;
@@ -60,6 +62,7 @@ export type AgentTextMessage = {
     id: string;
     realID?: string | null;
     seq?: number;
+    transcriptBlockIndex?: number;
     localId: string | null;
     createdAt: number;
     text: string;
@@ -72,6 +75,7 @@ export type ToolCallMessage = {
     id: string;
     realID?: string | null;
     seq?: number;
+    transcriptBlockIndex?: number;
     localId: string | null;
     createdAt: number;
     tool: ToolCall;

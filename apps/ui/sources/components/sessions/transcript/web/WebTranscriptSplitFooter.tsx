@@ -1,25 +1,26 @@
 import * as React from 'react';
-import { View } from 'react-native';
 
+import { TranscriptHotTail } from '@/components/sessions/transcript/segments/TranscriptHotTail';
+
+/**
+ * Web hot/cold split footer host. Thin adapter over the shared {@link TranscriptHotTail}
+ * so web and native share one hot-tail implementation; web keeps its stable
+ * `transcript-web-hot-tail` testIDs. (Phase 2 converges native onto this same host.)
+ */
 function WebTranscriptSplitFooterInner<T extends { id: string }>(props: {
     hotItems: readonly T[];
     startIndex: number;
     renderItemAtIndex: (item: T, index: number) => React.ReactNode;
     footer: React.ReactNode;
 }) {
-    if (props.hotItems.length === 0) {
-        return props.footer;
-    }
-
     return (
-        <View testID="transcript-web-hot-tail">
-            {props.hotItems.map((item, index) => (
-                <View key={item.id} testID={`transcript-web-hot-tail-item-${item.id}`}>
-                    {props.renderItemAtIndex(item, props.startIndex + index)}
-                </View>
-            ))}
-            {props.footer}
-        </View>
+        <TranscriptHotTail
+            hotItems={props.hotItems}
+            startIndex={props.startIndex}
+            renderItemAtIndex={props.renderItemAtIndex}
+            footer={props.footer}
+            testIDPrefix="transcript-web-hot-tail"
+        />
     );
 }
 

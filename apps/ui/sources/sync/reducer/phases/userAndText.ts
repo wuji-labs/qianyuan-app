@@ -8,8 +8,8 @@ import { drainAndApplyOrphanToolResultsToMessage } from '../helpers/drainAndAppl
 import { readStreamSegmentMetaV1 } from '../helpers/streamSegmentMeta';
 import { upsertStreamSegmentSnapshotMessage } from '../helpers/upsertStreamSegmentSnapshotMessage';
 import { markRunningToolsUnavailable } from '../helpers/markRunningToolsUnavailable';
-
-const NO_RESPONSE_REQUESTED_TEXT = 'No response requested.';
+import { hasSyntheticNoResponseMeta } from '../../domains/messages/syntheticNoResponseMessageMeta';
+import { normalizeTranscriptSeq, transcriptBlockIndexFromContentIndex } from '../../domains/messages/transcriptOrdering';
 
 export function runUserAndTextPhase(params: Readonly<{
     state: ReducerState;
@@ -73,7 +73,7 @@ export function runUserAndTextPhase(params: Readonly<{
             state.messages.set(mid, {
                 id: mid,
                 realID: msg.id,
-                seq: typeof msg.seq === 'number' ? msg.seq : null,
+                seq: normalizeTranscriptSeq(msg.seq),
                 localId: msg.localId ?? null,
                 role: 'user',
                 createdAt: msg.createdAt,
@@ -100,7 +100,9 @@ export function runUserAndTextPhase(params: Readonly<{
 	            // Process text and thinking content (tool calls handled in Phase 2)
                 let thinkingRunIndex = 0;
                 let isThinkingRunOpen = false;
-	            for (let c of msg.content) {
+	            for (let contentIndex = 0; contentIndex < msg.content.length; contentIndex += 1) {
+                    const c = msg.content[contentIndex]!;
+                    const transcriptBlockIndex = transcriptBlockIndexFromContentIndex(contentIndex);
                     if (c.type !== 'thinking' && isThinkingRunOpen) {
                         thinkingRunIndex += 1;
                         isThinkingRunOpen = false;
@@ -108,7 +110,16 @@ export function runUserAndTextPhase(params: Readonly<{
 
 	                if (c.type === 'text') {
                     const text = String(c.text ?? '');
-                    const isNoResponseRequested = text.trim() === NO_RESPONSE_REQUESTED_TEXT;
+                    const isNoResponseRequested = hasSyntheticNoResponseMeta(msg.meta);
+                    if (isNoResponseRequested) {
+                        markRunningToolsUnavailable({
+                            state,
+                            completedAt: msg.createdAt,
+                            changed,
+                        });
+                        clearAllCursors('synthetic-no-response');
+                        continue;
+                    }
 	                    const streamSegmentMeta = readStreamSegmentMetaV1(msg.meta);
 	                    const streamSegmentKind = streamSegmentMeta?.segmentKind ?? null;
 	                    const streamSegmentLocalId = streamSegmentMeta?.segmentLocalId ?? msg.localId;
@@ -122,6 +133,7 @@ export function runUserAndTextPhase(params: Readonly<{
                             realID: msg.id,
                             createdAt: msg.createdAt,
                             seq: msg.seq,
+                            transcriptBlockIndex,
                             isThinking: false,
                             text: nextText,
                             meta: msg.meta,
@@ -130,13 +142,6 @@ export function runUserAndTextPhase(params: Readonly<{
 
                         if (upsert.accepted && hasVisibleText) {
                             setThinkingCursor(null, 'agent-text-stream-segment');
-                        }
-                        if (isNoResponseRequested) {
-                            markRunningToolsUnavailable({
-                                state,
-                                completedAt: msg.createdAt,
-                                changed,
-                            });
                         }
                         continue;
 	                    }
@@ -168,11 +173,9 @@ export function runUserAndTextPhase(params: Readonly<{
                         const prev = state.messages.get(lastMainStreamMessageId!);
                         if (prev && typeof prev.text === 'string') {
                             prev.text = prev.text + String(c.text ?? '');
-                            if (typeof msg.seq === 'number') {
-                                const nextSeq = Math.trunc(msg.seq);
-                                if (prev.seq === null || nextSeq > prev.seq) {
-                                    prev.seq = nextSeq;
-                                }
+                            const nextSeq = normalizeTranscriptSeq(msg.seq);
+                            if (nextSeq !== null && (prev.seq === null || nextSeq > prev.seq)) {
+                                prev.seq = nextSeq;
                             }
                             changed.add(lastMainStreamMessageId!);
                         }
@@ -188,7 +191,8 @@ export function runUserAndTextPhase(params: Readonly<{
                     state.messages.set(mid, {
                         id: mid,
                         realID: msg.id,
-                        seq: typeof msg.seq === 'number' ? msg.seq : null,
+                        seq: normalizeTranscriptSeq(msg.seq),
+                        transcriptBlockIndex,
                         localId: msg.localId ?? null,
                         role: 'agent',
                         createdAt: msg.createdAt,
@@ -203,13 +207,6 @@ export function runUserAndTextPhase(params: Readonly<{
                         setThinkingCursor(null, 'agent-text-create');
                     }
                     setStreamCursor(streamKey ? { messageId: mid, streamKey } : null, 'agent-text-create');
-                    if (isNoResponseRequested) {
-                        markRunningToolsUnavailable({
-                            state,
-                            completedAt: msg.createdAt,
-                            changed,
-                        });
-                    }
 	                } else if (c.type === 'thinking') {
 	                    const streamSegmentMeta = readStreamSegmentMetaV1(msg.meta);
 	                    const streamSegmentKind = streamSegmentMeta?.segmentKind ?? null;
@@ -224,6 +221,7 @@ export function runUserAndTextPhase(params: Readonly<{
                             realID: msg.id,
                             createdAt: msg.createdAt,
                             seq: msg.seq,
+                            transcriptBlockIndex,
                             isThinking: true,
                             text: nextText,
                             meta: msg.meta,
@@ -261,11 +259,9 @@ export function runUserAndTextPhase(params: Readonly<{
                             const mapped = state.messages.get(mappedId) ?? null;
                             if (mapped && mapped.role === 'agent' && mapped.isThinking && typeof mapped.text === 'string') {
                                 mapped.text = mergeThinkingText(mapped.text, chunk);
-                                if (typeof msg.seq === 'number') {
-                                    const nextSeq = Math.trunc(msg.seq);
-                                    if (mapped.seq === null || nextSeq > mapped.seq) {
-                                        mapped.seq = nextSeq;
-                                    }
+                                const nextSeq = normalizeTranscriptSeq(msg.seq);
+                                if (nextSeq !== null && (mapped.seq === null || nextSeq > mapped.seq)) {
+                                    mapped.seq = nextSeq;
                                 }
                                 changed.add(mappedId);
                                 setThinkingCursor(mappedId, 'agent-thinking-uuid-merge');
@@ -288,11 +284,9 @@ export function runUserAndTextPhase(params: Readonly<{
                           const prev = prevThinkingId ? state.messages.get(prevThinkingId) : null;
                           if (prev && typeof prev.text === 'string') {
                               prev.text = mergeThinkingText(prev.text, chunk);
-                            if (typeof msg.seq === 'number') {
-                                const nextSeq = Math.trunc(msg.seq);
-                                if (prev.seq === null || nextSeq > prev.seq) {
-                                    prev.seq = nextSeq;
-                                }
+                            const nextSeq = normalizeTranscriptSeq(msg.seq);
+                            if (nextSeq !== null && (prev.seq === null || nextSeq > prev.seq)) {
+                                prev.seq = nextSeq;
                             }
                             changed.add(prevThinkingId!);
                         }
@@ -305,7 +299,8 @@ export function runUserAndTextPhase(params: Readonly<{
                         state.messages.set(mid, {
                             id: mid,
                             realID: msg.id,
-                            seq: typeof msg.seq === 'number' ? msg.seq : null,
+                            seq: normalizeTranscriptSeq(msg.seq),
+                            transcriptBlockIndex,
                             localId: msg.localId ?? null,
                             role: 'agent',
                             createdAt: msg.createdAt,
@@ -380,7 +375,8 @@ export function runUserAndTextPhase(params: Readonly<{
                     state.messages.set(mid, {
                         id: mid,
                         realID: msg.id,
-                        seq: typeof msg.seq === 'number' ? msg.seq : null,
+                        seq: normalizeTranscriptSeq(msg.seq),
+                        transcriptBlockIndex,
                         localId: msg.localId ?? null,
                         role: 'agent',
                         createdAt: msg.createdAt,

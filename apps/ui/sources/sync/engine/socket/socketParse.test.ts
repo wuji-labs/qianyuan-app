@@ -123,6 +123,38 @@ describe('socketParse', () => {
         expect((res as any)?.message?.localId).toBe('segment-1');
     });
 
+    it('preserves transcript stream segment messageRole for downstream normalization', () => {
+        const res = parseEphemeralUpdate({
+            type: 'transcript-stream-segment',
+            sessionId: 's1',
+            message: {
+                localId: 'event-segment-1',
+                messageRole: 'event',
+                content: {
+                    t: 'plain',
+                    v: {
+                        role: 'agent',
+                        content: {
+                            type: 'output',
+                            data: {
+                                type: 'assistant',
+                                message: {
+                                    role: 'assistant',
+                                    content: [{ type: 'text', text: 'transport status' }],
+                                },
+                            },
+                        },
+                    },
+                },
+                createdAt: 1_000,
+                updatedAt: 1_010,
+            },
+        });
+
+        expect(res?.type).toBe('transcript-stream-segment');
+        expect((res as any)?.message?.messageRole).toBe('event');
+    });
+
     it('parses direct-session transcript delta ephemerals', () => {
         const res = parseEphemeralUpdate({
             type: 'direct-session-transcript-delta',

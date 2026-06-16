@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { AGENT_IDS as SHARED_AGENT_IDS } from '@happier-dev/agents';
 
 import { AGENTS_UI } from './registryUi';
+import { getAgentPickerIconScale } from './registryUi';
 
 function sortedKeys(value: Record<string, unknown>): string[] {
     return Object.keys(value).sort();
@@ -27,4 +28,13 @@ describe('agents/registryUi', () => {
         expect(xml).toContain('<svg');
         expect(xml).toContain('viewBox="0 0 466.73 532.09"');
     });
+
+    it('keeps the Pi picker icon optically scaled for compact picker surfaces', () => {
+        expect(getAgentPickerIconScale('pi')).toBe(0.9);
+    });
+
+    it('slightly enlarges the Claude picker icon to compensate for the logo silhouette', () => {
+        expect(getAgentPickerIconScale('claude')).toBe(1.1);
+    });
+
 });

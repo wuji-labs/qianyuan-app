@@ -3,6 +3,8 @@ import * as React from 'react';
 
 import type { AgentId } from '@/agents/catalog/catalog';
 import { getAgentCore } from '@/agents/catalog/catalog';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
+import { getAgentPickerIconScale } from '@/agents/registry/registryUi';
 import type { ActionListItem } from '@/components/ui/lists/ActionListSection';
 import { hapticsLight } from '@/components/ui/theme/haptics';
 import { t } from '@/text';
@@ -17,6 +19,7 @@ export function buildCoreCollapsedControlActions(opts: Readonly<{
     profileLabel: string | null;
     profileIcon: string;
     envVarsCount?: number;
+    engineLabel?: string | null;
     agentType?: AgentId;
     machineName?: string | null;
     currentPath?: string | null;
@@ -70,8 +73,16 @@ export function buildCoreCollapsedControlActions(opts: Readonly<{
     if (opts.agentType && opts.onAgentClick) {
         controlActionsById.engine = [{
             id: 'agent',
-            label: t(getAgentCore(opts.agentId).displayNameKey),
-            icon: <Octicons name="cpu" size={16} color={opts.tint} />,
+            label: opts.engineLabel ?? t(getAgentCore(opts.agentType).displayNameKey),
+            icon: (
+                <AgentIcon
+                    agentId={opts.agentType}
+                    size={16}
+                    color={opts.tint}
+                    style={{ transform: [{ scale: getAgentPickerIconScale(opts.agentType) }] }}
+                    testID="agent-input-agent-action-logo"
+                />
+            ),
             onPress: () => {
                 hapticsLight();
                 opts.dismiss();

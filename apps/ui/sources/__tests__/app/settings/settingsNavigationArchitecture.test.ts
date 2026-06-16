@@ -7,6 +7,8 @@ const UI_SOURCES_ROOT = join(__dirname, '..', '..', '..');
 const APP_ROUTES_ROOT = join(UI_SOURCES_ROOT, 'app', '(app)');
 const SETTINGS_ROUTES_ROOT = join(APP_ROUTES_ROOT, 'settings');
 const SETTINGS_LAYOUT_PATH = join(SETTINGS_ROUTES_ROOT, '_layout.tsx');
+const CONNECTED_SERVICES_LEGACY_FILE_ROUTE_PATH = join(SETTINGS_ROUTES_ROOT, 'connected-services.tsx');
+const CONNECTED_SERVICES_INDEX_ROUTE_PATH = join(SETTINGS_ROUTES_ROOT, 'connected-services', 'index.tsx');
 const SETTINGS_NAVIGATION_REGISTRY_PATH = join(
     UI_SOURCES_ROOT,
     'components',
@@ -88,5 +90,13 @@ describe('settings navigation architecture', () => {
         expect(mainView).not.toContain('SettingsViewWrapper');
         expect(mainView).not.toContain('<TabBar');
         expect(mobileBottomChromeHost).toContain("settings: '/settings'");
+    });
+
+    it('keeps connected-services settings index in the route folder index', () => {
+        const registry = readFileSync(SETTINGS_NAVIGATION_REGISTRY_PATH, 'utf8');
+
+        expect(existsSync(CONNECTED_SERVICES_LEGACY_FILE_ROUTE_PATH)).toBe(false);
+        expect(existsSync(CONNECTED_SERVICES_INDEX_ROUTE_PATH)).toBe(true);
+        expect(registry).toContain("name: 'connected-services/index'");
     });
 });

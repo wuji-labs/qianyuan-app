@@ -243,6 +243,8 @@ export const THEME_COLOR_TOKEN_CLASSIFICATIONS = [
     { path: ['feed', 'card', 'background'], status: 'derived', reason: 'Tool feed card surface derived from surface.elevated so private transcript chrome follows active theme profiles.' },
     { path: ['shadow', 'color'], status: 'internal', reason: 'Legacy tint helper for computed shadows, not a standalone editable color token.' },
     { path: ['shadowPopoverArrowBoxShadow'], status: 'internal', reason: 'Popover arrow shadow recipe string, not a standalone editable color token.' },
+    { path: ['tabBarBorder'], status: 'internal', reason: 'Floating tab bar border recipe; V1 exposes shared border tokens rather than feature-specific chrome details.' },
+    { path: ['tabBarInnerShadow'], status: 'internal', reason: 'Floating tab bar inner shadow recipe string, not a standalone editable color token.' },
 
     { path: ['status', 'actionRequired'], status: 'derived', reason: 'Connection status color derived from state warning semantics.' },
     { path: ['status', 'connected'], status: 'derived', reason: 'Connection status color derived from state success semantics.' },
