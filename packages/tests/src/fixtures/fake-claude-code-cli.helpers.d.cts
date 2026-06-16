@@ -1,6 +1,6 @@
 type HookForwarderCommand =
   | { type: 'raw'; command: string }
-  | { type: 'node'; scriptPath: string; port: number; hookEventName?: string };
+  | { type: 'node'; runtimeExecutable: string; scriptPath: string; port: number; hookEventName?: string; secretFile?: string };
 
 export function findArgValue(argv: string[], name: string): string | null;
 export function parseMcpConfigs(argv: string[]): Array<Record<string, unknown>>;

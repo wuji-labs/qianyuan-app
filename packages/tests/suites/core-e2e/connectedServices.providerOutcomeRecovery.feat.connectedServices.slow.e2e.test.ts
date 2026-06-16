@@ -56,6 +56,8 @@ import {
   createConnectedServiceAuthGroup,
   createConnectedServiceProfile,
   fetchConnectedServiceAuthGroup,
+  findSessionContinuationProofWaitAttempt,
+  isRuntimeAuthRecoveryAwaitingProviderOutcomeProof,
   readSessionContinuationRecoveryAttempts,
   readSessionContinuationRecoveryRaw,
   readRuntimeAuthRecoveryIntent,
@@ -72,7 +74,10 @@ import {
   type StartedConnectedServicesClaudeDaemonFixture,
 } from '../../src/testkit/connectedServicesRecovery';
 import { daemonControlPostJson } from '../../src/testkit/daemon/controlServerClient';
-import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
+import {
+  countFakeClaudeEventsAfterCurrentRunSentinel,
+  fakeClaudeFixturePath,
+} from '../../src/testkit/fakeClaude';
 import { fetchJson } from '../../src/testkit/http';
 import { encryptLegacyBase64 } from '../../src/testkit/messageCrypto';
 import { createRunDirs } from '../../src/testkit/runDir';
@@ -579,7 +584,7 @@ describe('core e2e: connected-service provider-outcome recovery', () => {
     });
     if (!intent) throw new Error('Expected a durable runtime-auth recovery intent for the Claude group 401');
     expect(Number(intent.armedAtMs)).toBeLessThanOrEqual(firstRefresh.receivedAtMs);
-    expect(['waiting', 'checking']).toContain(intent.status);
+    expect(['waiting', 'checking', 'resumed_awaiting_proof']).toContain(intent.status);
 
     const continuationRaw = await readSessionContinuationRecoveryRaw({ fixture: claudeFixture, sessionId });
     if (!continuationRaw) throw new Error('Expected credential-refresh restart to create continuation recovery metadata');
@@ -616,6 +621,148 @@ describe('core e2e: connected-service provider-outcome recovery', () => {
       intervalMs: 250,
       context: 'Claude provider activity clears exact runtime-auth recovery identity',
     });
+  }, 360_000);
+
+  // FAILURE CLASS: local wake / restart progress is not provider activity. If a
+  // Claude recovery produces no provider-completed turn after the auth rewrite,
+  // the recovery intent must remain retryable/diagnosable instead of exhausting
+  // as "recovery unproven" simply because no provider-visible activity arrived.
+  it('keeps Claude recovery retryable when no provider-visible activity follows continuation recovery', async () => {
+    const groupId = `claude-po-local-wake-${randomUUID()}`;
+    const profileId = 'primary';
+    const originalPrompt = `E2E_CLAUDE_LOCAL_WAKE_ORIGINAL_PROMPT_${randomUUID()}`;
+    const claudeTokenServer = await startConnectedServiceRecoveryTokenServer({
+      respond: () => ({
+        status: 200,
+        body: {
+          access_token: 'claude-still-stale-access-token',
+          refresh_token: 'claude-still-stale-refresh-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          scope: CLAUDE_CODE_E2E_OAUTH_SCOPE,
+        },
+      }),
+    });
+    tokenServer = claudeTokenServer;
+
+    const testDir = run.testDir(`provider-outcome-claude-local-wake-${randomUUID()}`);
+    claudeFixture = await startConnectedServicesClaudeDaemon({
+      testDir,
+      testName: 'provider-outcome-claude-local-wake',
+      tokenUrl: claudeTokenServer.tokenUrl,
+      fakeClaudePath: fakeClaudeFixturePath(),
+      fakeClaudeLogPath: resolve(join(testDir, 'fake-claude-local-wake.jsonl')),
+      fakeClaudeScenario: 'local-auth-fails-while-stale-token',
+      extraEnv: {
+        HAPPIER_CONNECTED_SERVICES_RUNTIME_AUTH_RECOVERY_BASE_BACKOFF_MS: '250',
+        HAPPIER_CONNECTED_SERVICES_RUNTIME_AUTH_RECOVERY_MAX_BACKOFF_MS: '500',
+        HAPPIER_CONNECTED_SERVICES_RUNTIME_AUTH_RECOVERY_MAX_ATTEMPTS: '5',
+        HAPPIER_CONNECTED_SERVICES_CONTINUATION_PROVIDER_ACTIVITY_TIMEOUT_MS: '1200',
+      },
+    });
+
+    await createConnectedServiceProfile({
+      fixture: claudeFixture,
+      serviceId: CLAUDE_SUBSCRIPTION_SERVICE_ID,
+      profileId,
+      providerEmail: 'claude-local-wake@example.test',
+      accessToken: 'claude-local-wake-stale-access-token',
+      refreshToken: 'claude-local-wake-stale-refresh-token',
+      idToken: null,
+      scope: CLAUDE_CODE_E2E_OAUTH_SCOPE,
+      tokenType: 'Bearer',
+      providerAccountId: 'acct-claude-local-wake',
+      expiresAt: Date.now() + 60 * 60_000,
+    });
+    await createConnectedServiceAuthGroupWhenReadable({
+      fixture: claudeFixture,
+      serviceId: CLAUDE_SUBSCRIPTION_SERVICE_ID,
+      groupId,
+      activeProfileId: profileId,
+      memberProfileIds: [profileId],
+      preTurnProbeMode: 'never',
+    });
+
+    const sessionId = await spawnConnectedClaudeGroupSessionWhenEligible({
+      fixture: claudeFixture,
+      sessionId: `claude-provider-outcome-local-wake-${randomUUID()}`,
+      groupId,
+      profileId,
+    });
+
+    await postEncryptedUiTextMessage({
+      baseUrl: claudeFixture.serverBaseUrl,
+      token: claudeFixture.auth.token,
+      sessionId,
+      secret: claudeFixture.accountSecret,
+      text: originalPrompt,
+      timeoutMs: 20_000,
+    });
+    await recordConnectedServiceTurnLifecycle({
+      fixture: claudeFixture,
+      sessionId,
+      event: 'prompt_or_steer',
+    });
+    const refreshRequestsBeforeReport = claudeTokenServer.requests()
+      .filter((request) => request.path === '/oauth/token').length;
+
+    const report = await reportConnectedServiceRuntimeAuthFailure({
+      fixture: claudeFixture,
+      sessionId,
+      classification: buildClaudeAuthExpiredClassification({ profileId, groupId }),
+    });
+    expect(report.status).toBe(200);
+    expect(report.data.ok).toBe(true);
+
+    const firstRefresh = claudeTokenServer.requests()
+      .filter((request) => request.path === '/oauth/token')
+      .slice(refreshRequestsBeforeReport)[0];
+    if (!firstRefresh) throw new Error('Expected Claude runtime-auth recovery to force-refresh the active profile');
+
+    let proofWaitAttempt: UnknownRecord | null = null;
+    let proofWaitIntent: UnknownRecord | null = null;
+    await waitFor(async () => {
+      const attempts = await readSessionContinuationRecoveryAttempts({ fixture: claudeFixture!, sessionId });
+      proofWaitAttempt = findSessionContinuationProofWaitAttempt({
+        attempts,
+        serviceId: CLAUDE_SUBSCRIPTION_SERVICE_ID,
+        groupId,
+        profileId,
+      });
+      if (!proofWaitAttempt) return false;
+      proofWaitIntent = await readRuntimeAuthRecoveryIntent({
+        fixture: claudeFixture!,
+        sessionId,
+        serviceId: CLAUDE_SUBSCRIPTION_SERVICE_ID,
+        profileId,
+        groupId,
+      });
+      return isRuntimeAuthRecoveryAwaitingProviderOutcomeProof(proofWaitIntent);
+    }, {
+      timeoutMs: 45_000,
+      intervalMs: 250,
+      context: 'Claude continuation recovery reaches provider-outcome proof wait',
+    });
+    expect(proofWaitAttempt).toMatchObject({
+      continuationRequired: true,
+      replayMode: 'continuation_prompt',
+      serviceId: CLAUDE_SUBSCRIPTION_SERVICE_ID,
+      groupId,
+      profileId,
+    });
+    expect(proofWaitIntent).toMatchObject({
+      status: 'resumed_awaiting_proof',
+      lastError: 'recovery_unproven_awaiting_provider_outcome',
+    });
+
+    const completedProviderTurns = await countFakeClaudeEventsAfterCurrentRunSentinel({
+      logPath: claudeFixture.fakeClaudeLogPath,
+      sinceMs: firstRefresh.receivedAtMs,
+      predicate: (event) => event.type === 'local_stdin_turn_completed',
+    });
+    expect(completedProviderTurns).toBe(0);
+
+    expect(isRuntimeAuthRecoveryAwaitingProviderOutcomeProof(proofWaitIntent)).toBe(true);
   }, 360_000);
 
   // FAILURE CLASS: stale automatic continuation after manual supersession — once

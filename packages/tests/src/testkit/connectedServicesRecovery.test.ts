@@ -5,7 +5,11 @@ import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 
 import { withTimeoutMs } from './timing/withTimeout';
-import { startConnectedServiceRecoveryProxy } from './connectedServicesRecovery';
+import {
+  findSessionContinuationProofWaitAttempt,
+  isRuntimeAuthRecoveryAwaitingProviderOutcomeProof,
+  startConnectedServiceRecoveryProxy,
+} from './connectedServicesRecovery';
 
 function listen(server: ReturnType<typeof createServer>): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -93,5 +97,64 @@ describe('startConnectedServiceRecoveryProxy', () => {
       await stopPromise?.catch(() => {});
       await closeServer(target);
     }
+  });
+});
+
+describe('connected-services recovery proof-wait matchers', () => {
+  it('finds the matching continuation attempt only when it is awaiting provider proof', () => {
+    const attempt = findSessionContinuationProofWaitAttempt({
+      attempts: [
+        {
+          attemptId: 'unrelated',
+          status: 'awaiting_provider_activity',
+          continuationRequired: true,
+          replayMode: 'continuation_prompt',
+          serviceId: 'claude-subscription',
+          groupId: 'team',
+          profileId: 'other',
+        },
+        {
+          attemptId: 'matching',
+          status: 'provider_activity_timeout',
+          continuationRequired: true,
+          replayMode: 'continuation_prompt',
+          serviceId: 'claude-subscription',
+          groupId: 'team',
+          profileId: 'primary',
+        },
+      ],
+      serviceId: 'claude-subscription',
+      groupId: 'team',
+      profileId: 'primary',
+    });
+
+    expect(attempt).toMatchObject({ attemptId: 'matching' });
+    expect(findSessionContinuationProofWaitAttempt({
+      attempts: [
+        {
+          attemptId: 'local-only',
+          status: 'restart_requested',
+          continuationRequired: true,
+          replayMode: 'continuation_prompt',
+          serviceId: 'claude-subscription',
+          groupId: 'team',
+          profileId: 'primary',
+        },
+      ],
+      serviceId: 'claude-subscription',
+      groupId: 'team',
+      profileId: 'primary',
+    })).toBeNull();
+  });
+
+  it('recognizes runtime-auth intents pending on provider-outcome proof', () => {
+    expect(isRuntimeAuthRecoveryAwaitingProviderOutcomeProof({
+      status: 'resumed_awaiting_proof',
+      lastError: 'recovery_unproven_awaiting_provider_outcome',
+    })).toBe(true);
+    expect(isRuntimeAuthRecoveryAwaitingProviderOutcomeProof({
+      status: 'waiting',
+      lastError: 'recovery_unproven_awaiting_provider_outcome',
+    })).toBe(false);
   });
 });

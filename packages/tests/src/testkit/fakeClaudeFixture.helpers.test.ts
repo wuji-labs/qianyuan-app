@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -9,7 +10,10 @@ import {
   parseMcpConfigs,
   runHookForwarder,
 } from '../../src/fixtures/fake-claude-code-cli.helpers.cjs';
-import { fakeClaudeFixturePath } from '../../src/testkit/fakeClaude';
+import {
+  countFakeClaudeEventsAfterCurrentRunSentinel,
+  fakeClaudeFixturePath,
+} from '../../src/testkit/fakeClaude';
 import { withTempDir } from '../../src/testkit/fs/tempDir';
 
 describe('fake Claude fixture helpers', () => {
@@ -53,7 +57,7 @@ describe('fake Claude fixture helpers', () => {
       );
 
       const hook = parseHookForwarderCommand(settingsPath);
-      expect(hook).toEqual({ type: 'node', scriptPath, port: 7123 });
+      expect(hook).toEqual({ type: 'node', runtimeExecutable: 'node', scriptPath, port: 7123 });
     });
   });
 
@@ -71,7 +75,7 @@ describe('fake Claude fixture helpers', () => {
       );
 
       const hook = parseHookForwarderCommand(settingsPath);
-      expect(hook).toEqual({ type: 'node', scriptPath, port: 7123 });
+      expect(hook).toEqual({ type: 'node', runtimeExecutable: runtimePath, scriptPath, port: 7123 });
     });
   });
 
@@ -98,7 +102,39 @@ describe('fake Claude fixture helpers', () => {
       );
 
       const hook = parseHookForwarderCommand(settingsPath, pluginDir);
-      expect(hook).toEqual({ type: 'node', scriptPath, port: 7123, hookEventName: 'SessionStart' });
+      expect(hook).toEqual({ type: 'node', runtimeExecutable: 'node', scriptPath, port: 7123, hookEventName: 'SessionStart' });
+    });
+  });
+
+  it('parses SessionStart hook command with a secret-file argument', async () => {
+    await withTempDir({ prefix: 'fake-claude-fixture-' }, async ({ path: dir }) => {
+      const settingsPath = join(dir, 'settings.json');
+      const runtimePath = join(dir, 'managed node');
+      const scriptPath = join(dir, 'session_hook_forwarder.cjs');
+      const secretPath = join(dir, 'permission-hook-secret');
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          hooks: {
+            SessionStart: [{
+              hooks: [{
+                command: `${JSON.stringify(runtimePath)} ${JSON.stringify(scriptPath)} 7123 "SessionStart" --secret-file ${JSON.stringify(secretPath)}`,
+              }],
+            }],
+          },
+        }),
+        'utf8',
+      );
+
+      const hook = parseHookForwarderCommand(settingsPath);
+      expect(hook).toEqual({
+        type: 'node',
+        runtimeExecutable: runtimePath,
+        scriptPath,
+        port: 7123,
+        hookEventName: 'SessionStart',
+        secretFile: secretPath,
+      });
     });
   });
 
@@ -127,8 +163,120 @@ describe('fake Claude fixture helpers', () => {
     });
   });
 
+  it('passes secret-file arguments to the SessionStart hook forwarder', async () => {
+    const spawned: Array<{ command: string; args: string[] }> = [];
+    await runHookForwarder({
+      hook: {
+        type: 'node',
+        runtimeExecutable: '/opt/happier/managed-node',
+        scriptPath: '/tmp/session_hook_forwarder.cjs',
+        port: 7123,
+        hookEventName: 'SessionStart',
+        secretFile: '/tmp/permission-hook-secret',
+      },
+      payload: { ok: true },
+      logPath: '',
+      invocationId: 'inv-secret',
+      spawnImpl: ((command: string, args: string[]) => {
+        spawned.push({ command, args });
+        return {
+          on(event: string, handler: (code?: number, signal?: string | null) => void) {
+            if (event === 'exit') queueMicrotask(() => handler(0, null));
+            return this;
+          },
+          stdin: {
+            write() {},
+            end() {},
+          },
+        };
+      }) as never,
+    });
+
+    expect(spawned).toEqual([{
+      command: '/opt/happier/managed-node',
+      args: [
+        '/tmp/session_hook_forwarder.cjs',
+        '7123',
+        'SessionStart',
+        '--secret-file',
+        '/tmp/permission-hook-secret',
+      ],
+    }]);
+  });
+
+  it('does not treat missing fake Claude logs as zero matching events', async () => {
+    await withTempDir({ prefix: 'fake-claude-fixture-' }, async ({ path: dir }) => {
+      await expect(countFakeClaudeEventsAfterCurrentRunSentinel({
+        logPath: join(dir, 'missing.jsonl'),
+        sinceMs: 1_000,
+        predicate: (event) => event.type === 'local_stdin_turn_completed',
+      })).rejects.toThrow(/Expected readable fake Claude log/);
+    });
+  });
+
+  it('allows zero matching events only after a current-run fake Claude sentinel is readable', async () => {
+    await withTempDir({ prefix: 'fake-claude-fixture-' }, async ({ path: dir }) => {
+      const logPath = join(dir, 'fixture-log.jsonl');
+      await writeFile(
+        logPath,
+        `${JSON.stringify({ type: 'invocation', invocationId: 'inv-current', ts: 900 })}\n`
+        + `${JSON.stringify({ type: 'local_turn_started', invocationId: 'inv-current', ts: 950 })}\n`,
+        'utf8',
+      );
+
+      await expect(countFakeClaudeEventsAfterCurrentRunSentinel({
+        logPath,
+        sinceMs: 1_000,
+        predicate: (event) => event.type === 'local_stdin_turn_completed',
+      })).resolves.toBe(0);
+    });
+  });
+
   it('returns the fake Claude JavaScript wrapper entrypoint path', () => {
     const fixturePath = fakeClaudeFixturePath();
     expect(fixturePath.endsWith('fake-claude-code-cli.js')).toBe(true);
+  });
+
+  it('renders an idle local composer so unified-terminal startup readiness can inject prompts', async () => {
+    await withTempDir({ prefix: 'fake-claude-local-readiness-' }, async ({ path: dir }) => {
+      const logPath = join(dir, 'fake-claude.jsonl');
+      const child = spawn(process.execPath, [fakeClaudeFixturePath()], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          HAPPIER_E2E_FAKE_CLAUDE_LOG: logPath,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      try {
+        const stdout = await new Promise<string>((resolve, reject) => {
+          let output = '';
+          const timeout = setTimeout(() => {
+            reject(new Error(`Timed out waiting for fake Claude local composer output; stdout=${JSON.stringify(output)}`));
+          }, 2_000);
+          child.stdout.setEncoding('utf8');
+          child.stdout.on('data', (chunk: string) => {
+            output += chunk;
+            if (/>\s*Try\s+"/.test(output)) {
+              clearTimeout(timeout);
+              resolve(output);
+            }
+          });
+          child.on('error', (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+          child.on('exit', (code, signal) => {
+            clearTimeout(timeout);
+            reject(new Error(`fake Claude exited before composer output (code=${code}, signal=${signal})`));
+          });
+        });
+
+        expect(stdout).toMatch(/>\s*Try\s+"/);
+      } finally {
+        child.kill('SIGTERM');
+      }
+    });
   });
 });

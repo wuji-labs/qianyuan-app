@@ -36,11 +36,29 @@ type ViewportTelemetryEvent = Readonly<{
   writer?: string;
   reason?: string;
   mode?: string;
+  platform?: string;
   sessionId: string;
   targetOffsetY?: number;
   offsetY?: number;
   distanceFromBottom?: number;
   contentHeight?: number;
+  layoutHeight?: number;
+  trigger?: 'scroll' | 'edge-reached' | 'restore' | 'prepend-restore' | 'jump';
+  domScrollTop?: number;
+  domScrollHeight?: number;
+  domClientHeight?: number;
+  flashListContentHeight?: number;
+  flashListLayoutHeight?: number;
+  scrollable?: boolean;
+  paginationPhase?: 'idle' | 'armed' | 'loading' | 'cooldown';
+  paginationSuspendedReasons?: Array<'negative-offset' | 'transaction-open' | 'fill-not-done'>;
+  coldCount?: number;
+  hotCount?: number;
+  firstVisibleAnchorTestId?: string;
+  pendingWebPrependAnchorKind?: 'stable' | 'item' | 'none';
+  pendingWebPrependAnchorId?: string;
+  pendingWebPrependAnchorIndex?: number;
+  programmaticWebWrite?: boolean;
   timestampMs: number;
 }>;
 
@@ -148,6 +166,57 @@ function describeViewportEvent(event: ViewportTelemetryEvent): string {
 function formatViewportEvents(events: readonly ViewportTelemetryEvent[]): string {
   if (events.length === 0) return '  (no events)';
   return events.map((event) => `  - ${describeViewportEvent(event)}`).join('\n');
+}
+
+function hasViewportField(event: ViewportTelemetryEvent, field: keyof ViewportTelemetryEvent): boolean {
+  return Object.prototype.hasOwnProperty.call(event, field);
+}
+
+function assertWebWregDiagnostics(events: readonly ViewportTelemetryEvent[], label: string): void {
+  const offenders: Array<{ event: ViewportTelemetryEvent; missing: string[] }> = [];
+  for (const event of events) {
+    if (event.platform !== 'web') continue;
+    if (event.type !== 'scroll-observed' && event.type !== 'restore-decision') continue;
+
+    const required: Array<keyof ViewportTelemetryEvent> = [
+      'trigger',
+      'domScrollTop',
+      'domScrollHeight',
+      'domClientHeight',
+      'flashListContentHeight',
+      'flashListLayoutHeight',
+      'scrollable',
+      'distanceFromBottom',
+      'paginationPhase',
+      'paginationSuspendedReasons',
+      'coldCount',
+      'hotCount',
+      'pendingWebPrependAnchorKind',
+      'programmaticWebWrite',
+    ];
+    const missing = required.filter((field) => !hasViewportField(event, field)).map(String);
+    if (
+      event.pendingWebPrependAnchorKind !== undefined &&
+      event.pendingWebPrependAnchorKind !== 'none'
+    ) {
+      if (!hasViewportField(event, 'pendingWebPrependAnchorId')) missing.push('pendingWebPrependAnchorId');
+      if (!hasViewportField(event, 'pendingWebPrependAnchorIndex')) missing.push('pendingWebPrependAnchorIndex');
+    }
+    if (event.type === 'restore-decision' || event.trigger === 'restore' || event.trigger === 'prepend-restore') {
+      if (!hasViewportField(event, 'firstVisibleAnchorTestId')) missing.push('firstVisibleAnchorTestId');
+    }
+    if (missing.length > 0) {
+      offenders.push({ event, missing });
+    }
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(
+      `WREG telemetry diagnostics missing required web fields (${label}):\n`
+      + offenders.map(({ event, missing }) =>
+        `  - missing ${missing.join(', ')} :: ${describeViewportEvent(event)}`).join('\n'),
+    );
+  }
 }
 
 function committedScrollWrites(events: readonly ViewportTelemetryEvent[]): ViewportTelemetryEvent[] {
@@ -881,6 +950,7 @@ test.describe('ui e2e: transcript viewport invariants', () => {
       );
     }
     assertNoSilentBails(phaseEvents, 'prepend');
+    assertWebWregDiagnostics(phaseEvents, 'prepend');
     assertTransactionOwnerTargetSpread(phaseEvents, 'prepend');
   });
 });

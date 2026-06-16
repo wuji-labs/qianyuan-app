@@ -55,15 +55,17 @@ function findArgValue(argv, name) {
 
 function parseHookCommandString(cmd) {
   if (typeof cmd !== 'string' || cmd.length === 0) return null;
-  // Expected: node "<forwarderScript>" <port> ["HookEventName"]
-  // or: "<runtimeExecutable>" "<forwarderScript>" <port> ["HookEventName"]
-  const m = cmd.match(/^(?:node|"[^"]+")\s+"([^"]+)"\s+(\d+)(?:\s+"([^"]+)")?\s*$/);
+  // Expected: node "<forwarderScript>" <port> ["HookEventName"] [--secret-file "<path>"]
+  // or: "<runtimeExecutable>" "<forwarderScript>" <port> ["HookEventName"] [--secret-file "<path>"]
+  const m = cmd.match(/^(node|"([^"]+)")\s+"([^"]+)"\s+(\d+)(?:\s+"([^"]+)")?(?:\s+--secret-file\s+"([^"]+)")?\s*$/);
   if (!m) return { type: 'raw', command: cmd };
   return {
     type: 'node',
-    scriptPath: m[1],
-    port: Number(m[2]),
-    ...(typeof m[3] === 'string' && m[3].length > 0 ? { hookEventName: m[3] } : {}),
+    runtimeExecutable: typeof m[2] === 'string' && m[2].length > 0 ? m[2] : 'node',
+    scriptPath: m[3],
+    port: Number(m[4]),
+    ...(typeof m[5] === 'string' && m[5].length > 0 ? { hookEventName: m[5] } : {}),
+    ...(typeof m[6] === 'string' && m[6].length > 0 ? { secretFile: m[6] } : {}),
   };
 }
 
@@ -93,7 +95,10 @@ async function runHookForwarder(params) {
       if (typeof hook.hookEventName === 'string' && hook.hookEventName.length > 0) {
         args.push(hook.hookEventName);
       }
-      const child = spawnImpl('node', args, {
+      if (typeof hook.secretFile === 'string' && hook.secretFile.length > 0) {
+        args.push('--secret-file', hook.secretFile);
+      }
+      const child = spawnImpl(hook.runtimeExecutable || 'node', args, {
         stdio: ['pipe', 'ignore', 'ignore'],
         env: process.env,
       });

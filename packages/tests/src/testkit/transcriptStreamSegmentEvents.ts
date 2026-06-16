@@ -7,6 +7,7 @@ export type TranscriptStreamSegmentContent =
 export type TranscriptStreamSegmentMessage = {
   localId: string;
   sidechainId?: string | null;
+  messageRole?: 'user' | 'agent' | 'event' | 'unknown' | null;
   content: TranscriptStreamSegmentContent;
   createdAt: number;
   updatedAt: number;
@@ -42,10 +43,21 @@ function readTranscriptStreamSegmentPayload(value: unknown): TranscriptStreamSeg
   const localId = value.message.localId;
   const createdAt = value.message.createdAt;
   const updatedAt = value.message.updatedAt;
+  const messageRole = value.message.messageRole;
   const content = readContent(value.message.content);
   if (typeof localId !== 'string' || localId.length === 0) return null;
   if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) return null;
   if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) return null;
+  if (
+    messageRole !== undefined &&
+    messageRole !== null &&
+    messageRole !== 'user' &&
+    messageRole !== 'agent' &&
+    messageRole !== 'event' &&
+    messageRole !== 'unknown'
+  ) {
+    return null;
+  }
   if (!content) return null;
 
   const sidechainId = value.message.sidechainId;
@@ -55,6 +67,7 @@ function readTranscriptStreamSegmentPayload(value: unknown): TranscriptStreamSeg
     message: {
       localId,
       ...(sidechainId === null || typeof sidechainId === 'string' ? { sidechainId } : {}),
+      ...(messageRole !== undefined ? { messageRole } : {}),
       content,
       createdAt,
       updatedAt,
@@ -65,11 +78,13 @@ function readTranscriptStreamSegmentPayload(value: unknown): TranscriptStreamSeg
 export function createEncryptedTranscriptStreamSegmentMessage(params: {
   localId: string;
   ciphertextBase64: string;
+  messageRole?: TranscriptStreamSegmentMessage['messageRole'];
   nowMs?: number;
 }): TranscriptStreamSegmentMessage {
   const nowMs = params.nowMs ?? Date.now();
   return {
     localId: params.localId,
+    ...(params.messageRole !== undefined ? { messageRole: params.messageRole } : {}),
     content: { t: 'encrypted', c: params.ciphertextBase64 },
     createdAt: nowMs,
     updatedAt: nowMs,
@@ -79,11 +94,13 @@ export function createEncryptedTranscriptStreamSegmentMessage(params: {
 export function createPlainTranscriptStreamSegmentMessage(params: {
   localId: string;
   value: unknown;
+  messageRole?: TranscriptStreamSegmentMessage['messageRole'];
   nowMs?: number;
 }): TranscriptStreamSegmentMessage {
   const nowMs = params.nowMs ?? Date.now();
   return {
     localId: params.localId,
+    ...(params.messageRole !== undefined ? { messageRole: params.messageRole } : {}),
     content: { t: 'plain', v: params.value },
     createdAt: nowMs,
     updatedAt: nowMs,

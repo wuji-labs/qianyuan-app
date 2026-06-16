@@ -1090,11 +1090,21 @@ if (isSdkStreamJson) {
   void runPrintStreamJsonAndExit();
 } else {
   // Local/interactive: keep the process alive until the parent aborts us (SIGTERM on mode switch).
-  // Avoid printing anything on stdout, as local mode uses `inherit`.
   let localTurnStarted = false;
   let localTurnCompleted = false;
   let localStdinTurn = 0;
   const rl = readline.createInterface({ input: process.stdin });
+  const renderLocalIdleComposer = () => {
+    process.stdout.write('\n> Try "refactor <filepath>"\n');
+    safeAppendJsonl(logPath, {
+      type: 'local_idle_composer_rendered',
+      invocationId,
+      ts: Date.now(),
+      turn: localStdinTurn,
+    });
+  };
+
+  renderLocalIdleComposer();
 
   rl.on('line', (line) => {
     const promptText = String(line || '').trim();
@@ -1114,6 +1124,7 @@ if (isSdkStreamJson) {
     void emitHookEvent('UserPromptSubmit');
     appendLocalStdinTurn(promptText, localStdinTurn);
     void emitHookEvent('Stop', { background_tasks: [] });
+    renderLocalIdleComposer();
   });
 
   const maybeStartLocalTurn = () => {
