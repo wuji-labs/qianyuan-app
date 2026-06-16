@@ -12,11 +12,11 @@ import { isDaemonRunning, stopLocalDaemon } from './daemon.mjs';
 import { printResult, wantsHelp, wantsJson } from './utils/cli/cli.mjs';
 import { assertServerComponentDirMatches, assertServerPrismaProviderMatches } from './utils/server/validate.mjs';
 import { getExpoStatePaths, isStateProcessRunning } from './utils/expo/expo.mjs';
-import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeStart } from './utils/stack/runtime_state.mjs';
+import { recordStackRuntimeStart, recordStackRuntimeUpdate } from './utils/stack/runtime_state.mjs';
 import { resolveStackContext } from './utils/stack/context.mjs';
 import { resolveServerPortFromEnv, resolveServerUrls } from './utils/server/urls.mjs';
 import { ensureDevCliReady, prepareDaemonAuthSeed, startDevDaemon, watchHappyCliAndRestartDaemon } from './utils/dev/daemon.mjs';
-import { startDevServer, watchDevServerAndRestart } from './utils/dev/server.mjs';
+import { resolveStackOwnedServerRuntimePid, startDevServer, watchDevServerAndRestart } from './utils/dev/server.mjs';
 import { resolveDevServerConnection } from './utils/dev/resolveDevServerConnection.mjs';
 import { resolveLocalServerPortForStack } from './utils/server/resolve_stack_server_port.mjs';
 import { ensureDevExpoServer, resolveExpoTailscaleEnabled } from './utils/dev/expo_dev.mjs';
@@ -488,10 +488,10 @@ async function main() {
   if (startServer && stackMode && runtimeStatePath && !serverProcRef.current?.pid) {
     // If the server was already running when we started dev, `startDevServer` won't spawn a new process
     // (and therefore we don't have a ChildProcess handle). For safe watch/restart we need a PID.
-    const state = await readStackRuntimeStateFile(runtimeStatePath);
-    const pid = state?.processes?.serverPid;
-    if (isPidAlive(pid)) {
+    const pid = await resolveStackOwnedServerRuntimePid({ runtimeStatePath, serverPort, stackName, envPath });
+    if (Number.isFinite(pid) && pid > 1) {
       serverProcRef.current = { pid: Number(pid), exitCode: null };
+      await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: Number(pid) } }).catch(() => {});
     }
   }
   const serverWatcher = watchDevServerAndRestart({

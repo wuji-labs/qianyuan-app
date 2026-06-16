@@ -44,3 +44,18 @@ test(
   }
 );
 
+test('listListenPidsWithStatus reports unsupported listener discovery when lsof is unavailable', async () => {
+  const ports = await import('./ports.mjs');
+  assert.equal(typeof ports.listListenPidsWithStatus, 'function');
+
+  const out = await ports.listListenPidsWithStatus(34567, {
+    resolveCommandPathImpl: async () => '',
+    runCaptureImpl: async () => {
+      throw new Error('must not run listener discovery without a resolved command');
+    },
+    platform: 'linux',
+  });
+
+  assert.equal(out.supported, false);
+  assert.deepEqual(out.pids, []);
+});

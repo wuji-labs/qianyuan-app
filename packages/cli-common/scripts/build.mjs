@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs';
+import { resolveTypeScriptCommandInvocation } from '../../../scripts/workspaces/typescriptCommand.mjs';
 import { verifyPackageExportTargets } from './verifyExports.mjs';
 
 function rand() {
@@ -210,21 +211,51 @@ function runChecked(command, args, options, runCommandImpl) {
   }
 }
 
+function resolveTscBinaryArgs(tscArgs) {
+  const args = Array.isArray(tscArgs) ? tscArgs : [];
+  if (args[0] === '-s' && args[1] === 'tsc') {
+    return args.slice(2);
+  }
+  if (args[0] === 'tsc') {
+    return args.slice(1);
+  }
+  return args;
+}
+
 export function resolveCliCommonBuildTscInvocations({
   env = process.env,
   platform = process.platform,
+  packageDir,
   tscArgs,
+  resolveTypeScriptCommandInvocationImpl = resolveTypeScriptCommandInvocation,
 } = {}) {
   const args = Array.isArray(tscArgs) ? tscArgs : [];
   const npmExecPath = typeof env?.npm_execpath === 'string' ? env.npm_execpath.trim() : '';
-  return [
-    resolveYarnCommandInvocation(args, {
+  const yarnInvocation = resolveYarnCommandInvocation(args, {
       npmExecPath,
       platform,
       processExecPath: process.execPath,
       comspec: env?.COMSPEC ?? env?.ComSpec ?? env?.comspec,
-    }),
-  ];
+  });
+  const invocations = [];
+
+  if (typeof packageDir === 'string' && packageDir.trim()) {
+    try {
+      invocations.push(
+        resolveTypeScriptCommandInvocationImpl({
+          cwd: packageDir,
+          args: resolveTscBinaryArgs(args),
+          processExecPath: process.execPath,
+        }),
+      );
+    } catch {
+      // Fall through to the package-manager shim when TypeScript is not resolvable
+      // from the package under build.
+    }
+  }
+
+  invocations.push(yarnInvocation);
+  return invocations;
 }
 
 function runFirstAvailableChecked(candidates, options, runCommandImpl) {
@@ -240,7 +271,7 @@ function runFirstAvailableChecked(candidates, options, runCommandImpl) {
       return;
     } catch (error) {
       lastError = error;
-      if (!error?.code || candidate === candidates.at(-1)) {
+      if (candidate === candidates.at(-1)) {
         throw error;
       }
     }
@@ -330,8 +361,10 @@ export async function buildCliCommonDist(options = {}) {
       runFirstAvailableChecked(
         resolveCliCommonBuildTscInvocations({
           env: commandEnv,
+          packageDir,
           platform: options.platform ?? process.platform,
           tscArgs: ['-s', 'tsc', '-p', tempTsconfigPath],
+          resolveTypeScriptCommandInvocationImpl: options.resolveTypeScriptCommandInvocationImpl,
         }),
         {
           cwd: packageDir,

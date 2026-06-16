@@ -14,6 +14,7 @@ Fast deterministic tests for pure logic/component behavior.
 **Root command:**
 ```bash
 yarn test
+yarn test:import-cycles
 ```
 
 This runs:
@@ -27,6 +28,12 @@ This runs:
 - `yarn --cwd apps/server test:unit`
 - `yarn --cwd packages/relay-server test`
 - `yarn --cwd apps/stack test:unit`
+
+The CLI unit lane also runs the CLI runtime import-cycle guard. To run only that guard:
+
+```bash
+yarn test:import-cycles
+```
 
 Note: the UI workspace package name is `@happier-dev/app` and its directory is `apps/ui`.
 
@@ -175,6 +182,7 @@ Repo-level governance checks for test file naming/lane placement and feature-tag
 
 **Root commands:**
 ```bash
+yarn test:import-cycles
 yarn test:wiring:self
 yarn test:wiring
 yarn test:policy:self
@@ -184,6 +192,7 @@ yarn test:migration:inventory
 ```
 
 Notes:
+- `test:import-cycles` runs the CLI runtime import-cycle guard directly; `yarn workspace @happier-dev/cli test:unit` also runs it, so the root unit lane and CI CLI unit job enforce the guard.
 - `test:wiring:self` and `test:policy:self` are fast governance self-tests for the validators themselves.
 - `test:wiring` fails on invalid feature tags, obvious lane naming mistakes, and root-script/workflow/docs parity drift.
 - `test:policy` enforces only the low-noise rules that are safe today; noisier rules stay report-only until the repo cleanup catches up.

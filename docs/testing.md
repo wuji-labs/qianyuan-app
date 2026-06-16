@@ -7,6 +7,7 @@ This document records the repository-level test lane map and placement conventio
 Canonical lanes:
 
 - `yarn test` — fast unit lane across apps.
+- `yarn test:import-cycles` — CLI runtime import-cycle guard, also enforced by the CLI unit lane.
 - `yarn test:integration` — orchestration-heavy app integration lane.
 - `yarn test:e2e:core:fast` — default local core e2e loop.
 - `yarn test:e2e:core:slow` — long orchestration core e2e.

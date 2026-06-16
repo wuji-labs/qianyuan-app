@@ -19,7 +19,7 @@
     "test:mobile:e2e:android:validated": "yarn -s test:mobile:e2e:android && yarn -s test:mobile:e2e:android:connected-machine",
     "test:mobile:e2e:ios:validated": "yarn -s test:mobile:e2e:ios && yarn -s test:mobile:e2e:ios:connected-machine",
     "test:mobile:e2e:all": "node scripts/run-maestro-with-heartbeat.mjs --flows suites/mobile-e2e/flows",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit",
     "providers:run": "node scripts/run-providers.mjs",
     "providers:run:parallel": "node scripts/run-providers-parallel.mjs",
     "providers:opencode:smoke": "yarn -s providers:run opencode smoke",

@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import net from 'node:net';
-import { runCaptureIfCommandExists } from '../proc/commands.mjs';
+import { resolveCommandPath } from '../proc/commands.mjs';
+import { runCapture } from '../proc/proc.mjs';
 
 export async function isTcpPortListening(port, { host = '127.0.0.1', timeoutMs = 250 } = {}) {
   if (!Number.isFinite(port) || port <= 0) return false;
@@ -34,33 +35,10 @@ export async function isTcpPortListening(port, { host = '127.0.0.1', timeoutMs =
   });
 }
 
-export async function listListenPids(port, { timeoutMs = 1000 } = {}) {
-  if (!Number.isFinite(port) || port <= 0) return [];
-  if (process.platform === 'win32') return [];
-
-  let raw = '';
-  try {
-    // `lsof` exits non-zero if no matches; normalize to empty output.
-    raw = await runCaptureIfCommandExists('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeoutMs });
-    if (!raw && process.platform === 'darwin') {
-      // Some non-interactive shells (launchd/GUI apps) have a PATH that omits /usr/sbin,
-      // which makes `command -v lsof` fail even though lsof exists. Fall back to absolute paths.
-      raw =
-        (await runCaptureIfCommandExists('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-          timeoutMs,
-        })) ||
-        (await runCaptureIfCommandExists('/usr/bin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-          timeoutMs,
-        })) ||
-        '';
-    }
-  } catch {
-    raw = '';
-  }
-
+function parseListenPidOutput(raw) {
   return Array.from(
     new Set(
-      raw
+      String(raw ?? '')
         .split(/\s+/g)
         .map((s) => s.trim())
         .filter(Boolean)
@@ -68,6 +46,47 @@ export async function listListenPids(port, { timeoutMs = 1000 } = {}) {
         .filter((n) => Number.isInteger(n) && n > 1)
     )
   );
+}
+
+export async function listListenPidsWithStatus(
+  port,
+  {
+    timeoutMs = 1000,
+    platform = process.platform,
+    resolveCommandPathImpl = resolveCommandPath,
+    runCaptureImpl = runCapture,
+  } = {}
+) {
+  if (!Number.isFinite(port) || port <= 0) {
+    return { supported: true, pids: [] };
+  }
+  if (platform === 'win32') {
+    return { supported: false, pids: [], reason: 'unsupported-platform' };
+  }
+
+  const candidates = platform === 'darwin' ? ['lsof', '/usr/sbin/lsof', '/usr/bin/lsof'] : ['lsof'];
+  for (const candidate of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const resolved = await resolveCommandPathImpl(candidate, { timeoutMs }).catch(() => '');
+    if (!resolved) continue;
+
+    let raw = '';
+    try {
+      // `lsof` exits non-zero if no matches; normalize to empty output.
+      // eslint-disable-next-line no-await-in-loop
+      raw = await runCaptureImpl(resolved, ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { timeoutMs });
+    } catch {
+      raw = '';
+    }
+    return { supported: true, pids: parseListenPidOutput(raw) };
+  }
+
+  return { supported: false, pids: [], reason: 'missing-listener-discovery-command' };
+}
+
+export async function listListenPids(port, options = {}) {
+  const out = await listListenPidsWithStatus(port, options);
+  return out.pids;
 }
 
 /**
@@ -175,6 +194,22 @@ export async function isTcpPortFree(port, { host = '127.0.0.1', timeoutMs = 250 
       done(false);
     }
   });
+}
+
+export async function waitForTcpPortFree(
+  port,
+  { host = '127.0.0.1', timeoutMs = 5_000, intervalMs = 100, isTcpPortFreeImpl = isTcpPortFree } = {}
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isTcpPortFreeImpl(port, { host, timeoutMs: Math.min(intervalMs, 250) })) {
+      return true;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(intervalMs);
+  }
+  return false;
 }
 
 export async function pickNextFreeTcpPort(startPort, { reservedPorts = new Set(), host = '127.0.0.1', tries = 200 } = {}) {

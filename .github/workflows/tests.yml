@@ -684,7 +684,7 @@ jobs:
             sed -i 's/^DEBUG=.*/DEBUG=/' apps/cli/.env.integration-test
           fi
 
-      - name: Run unit tests
+      - name: Run unit tests and import-cycle guard
         run: yarn workspace @happier-dev/cli test:unit
 
       - name: Run integration tests

@@ -22,6 +22,7 @@ interface ParityDefinition {
 }
 
 export type GovernanceCommandId =
+  | 'test:import-cycles'
   | 'test:wiring:self'
   | 'test:wiring'
   | 'test:policy:self'
@@ -138,6 +139,14 @@ const CANONICAL_LANE_PARITY: readonly ParityDefinition[] = Object.freeze([
 ]);
 
 const GOVERNANCE_COMMAND_PARITY: readonly ParityDefinition[] = Object.freeze([
+  {
+    id: 'test:import-cycles',
+    rootScriptName: 'test:import-cycles',
+    docsCommands: ['yarn test:import-cycles'],
+    workflowCommands: ['yarn workspace @happier-dev/cli test:unit'],
+    workflowMode: 'any',
+    triggerMode: 'required',
+  },
   {
     id: 'test:wiring:self',
     rootScriptName: 'test:wiring:self',

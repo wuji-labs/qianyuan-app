@@ -135,6 +135,66 @@ describe('cli-common build export verification', () => {
     }
   });
 
+  it('uses the repository TypeScript binary directly when it is available', async () => {
+    const { buildCliCommonDist } = await import(pathToFileURL(join(scriptsDir, 'build.mjs')).href);
+    const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-tsc-fallback-'));
+    const commands = [];
+    const buildId = 'tsc-fallback';
+
+    try {
+      mkdirSync(join(fixtureDir, 'dist'), { recursive: true });
+      writeFileSync(join(fixtureDir, 'dist', 'index.js'), 'export const oldValue = true;\n', 'utf8');
+      writeFileSync(join(fixtureDir, 'dist', 'index.d.ts'), 'export declare const oldValue: boolean;\n', 'utf8');
+      writeFileSync(join(fixtureDir, 'package.json'), JSON.stringify({
+        name: '@happier-dev/cli-common-fixture',
+        exports: {
+          '.': {
+            default: './dist/index.js',
+            types: './dist/index.d.ts',
+          },
+        },
+      }, null, 2), 'utf8');
+      writeFileSync(join(fixtureDir, 'tsconfig.json'), JSON.stringify({
+        extends: './tsconfig.base.json',
+        compilerOptions: {
+          outDir: 'dist',
+          tsBuildInfoFile: 'dist/.tsbuildinfo',
+        },
+      }, null, 2), 'utf8');
+      const typescriptBinPath = join(fixtureDir, 'repo-node_modules', 'typescript', 'bin', 'tsc');
+
+      await buildCliCommonDist({
+        packageDir: fixtureDir,
+        buildId,
+        lockPath: join(fixtureDir, 'build.lock'),
+        resolveTypeScriptCommandInvocationImpl: ({ args }) => ({
+          command: process.execPath,
+          args: [typescriptBinPath, ...args],
+        }),
+        runCommandImpl: (cmd, args) => {
+          commands.push({ cmd, args });
+
+          expect(cmd).toBe(process.execPath);
+          expect(args[0]).toBe(typescriptBinPath);
+
+          const tsconfigPath = join(fixtureDir, `.tsconfig.build.${buildId}.json`);
+          const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
+          const outDir = tsconfig.compilerOptions.outDir;
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(outDir, 'index.js'), 'export const newValue = true;\n', 'utf8');
+          writeFileSync(join(outDir, 'index.d.ts'), 'export declare const newValue: boolean;\n', 'utf8');
+          return { status: 0 };
+        },
+      });
+
+      expect(commands).toHaveLength(1);
+      expect(commands[0].args).toContain('-p');
+      expect(readFileSync(join(fixtureDir, 'dist', 'index.js'), 'utf8')).toContain('newValue');
+    } finally {
+      rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
   it('detects missing files for declared export targets', () => {
     const fixtureDir = mkdtempSync(join(tmpdir(), 'happier-cli-common-exports-'));
 

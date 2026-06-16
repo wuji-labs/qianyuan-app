@@ -2,15 +2,15 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import { ensureDepsInstalled, pmSpawnScript } from '../proc/pm.mjs';
-import { run } from '../proc/proc.mjs';
+import { killProcessTree, run } from '../proc/proc.mjs';
 import { applyHappyServerMigrations, ensureHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
 import { applyServerLightEnvDefaults } from '../server/apply_server_light_env_defaults.mjs';
 import { resolveServerDevScript } from '../server/flavor_scripts.mjs';
 import { applyStackServerLoggingDefaults } from '../server/logging_env.mjs';
 import { resolveServerReadyTimeoutMs, waitForServerReady } from '../server/server.mjs';
-import { isTcpPortFree, pickNextFreeTcpPort } from '../net/ports.mjs';
-import { readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
-import { killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
+import { isTcpPortFree, listListenPids, listListenPidsWithStatus, pickNextFreeTcpPort, waitForTcpPortFree } from '../net/ports.mjs';
+import { isPidAlive, readStackRuntimeStateFile, recordStackRuntimeUpdate } from '../stack/runtime_state.mjs';
+import { getProcessGroupId, isPidOwnedByStack, killProcessGroupOwnedByStack } from '../proc/ownership.mjs';
 import { watchDebounced } from '../proc/watch.mjs';
 import { pickMetroPort, resolveStablePortStart } from '../expo/metro_ports.mjs';
 
@@ -91,6 +91,388 @@ function readDevServerWatchChangeSignature(paths) {
   return observed ? entries.join('\n') : null;
 }
 
+export async function resolveStackOwnedServerListenPid(
+  { serverPort, stackName, envPath },
+  {
+    listListenPidsImpl = listListenPids,
+    isPidOwnedByStackImpl = isPidOwnedByStack,
+    getProcessGroupIdImpl = getProcessGroupId,
+  } = {},
+) {
+  const listenPids = await listListenPidsImpl(serverPort, { timeoutMs: 1000 }).catch(() => []);
+  if (!listenPids.length) return null;
+
+  let expectedPgid = null;
+  for (const pid of listenPids) {
+    // eslint-disable-next-line no-await-in-loop
+    const owned = await isPidOwnedByStackImpl(pid, { stackName, envPath }).catch(() => false);
+    if (!owned) {
+      return null;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    const pgid = await getProcessGroupIdImpl(pid).catch(() => null);
+    if (!pgid) {
+      if (listenPids.length > 1) {
+        return null;
+      }
+      continue;
+    }
+    if (!expectedPgid) {
+      expectedPgid = pgid;
+    } else if (pgid !== expectedPgid) {
+      return null;
+    }
+  }
+  return listenPids[0] ?? null;
+}
+
+async function readListenPidsForOwnership({
+  serverPort,
+  listListenPidsImpl = listListenPids,
+  listListenPidsWithStatusImpl = listListenPidsWithStatus,
+}) {
+  if (typeof listListenPidsWithStatusImpl === 'function' && listListenPidsImpl === listListenPids) {
+    const out = await listListenPidsWithStatusImpl(serverPort, { timeoutMs: 1000 }).catch((error) => ({
+      supported: false,
+      pids: [],
+      reason: error instanceof Error ? error.message : 'listener-discovery-error',
+    }));
+    return {
+      supported: out?.supported !== false,
+      pids: Array.isArray(out?.pids) ? out.pids : [],
+      reason: out?.reason,
+    };
+  }
+
+  const pids = await listListenPidsImpl(serverPort, { timeoutMs: 1000 }).catch(() => null);
+  return {
+    supported: Array.isArray(pids),
+    pids: Array.isArray(pids) ? pids : [],
+    reason: Array.isArray(pids) ? undefined : 'listener-discovery-error',
+  };
+}
+
+async function assertServerPortOwnedBySpawnedProcessGroup({
+  serverPort,
+  spawnedPid,
+  listListenPidsImpl = listListenPids,
+  listListenPidsWithStatusImpl = listListenPidsWithStatus,
+  getProcessGroupIdImpl = getProcessGroupId,
+}) {
+  const rootPid = Number(spawnedPid);
+  const listenResult = await readListenPidsForOwnership({
+    serverPort,
+    listListenPidsImpl,
+    listListenPidsWithStatusImpl,
+  });
+  if (!listenResult.supported) {
+    throw new Error(
+      `[local] server readiness ownership could not be proven on port ${serverPort}: listener discovery unavailable` +
+        (listenResult.reason ? ` (${listenResult.reason})` : '')
+    );
+  }
+
+  const listenPids = listenResult.pids;
+  if (!listenPids.length) {
+    throw new Error(
+      `[local] server readiness ownership could not be proven on port ${serverPort}: no listener PID was discovered`
+    );
+  }
+
+  let rootPgid = null;
+
+  for (const listenPid of listenPids) {
+    if (Number(listenPid) === rootPid) {
+      continue;
+    }
+    if (!rootPgid) {
+      // eslint-disable-next-line no-await-in-loop
+      rootPgid = await getProcessGroupIdImpl(spawnedPid).catch(() => null);
+      if (!rootPgid) {
+        throw new Error(
+          `[local] server readiness ownership could not be proven on port ${serverPort}: ` +
+            `process group unavailable for pid=${spawnedPid}, listeners=${listenPids.join(', ')}`
+        );
+      }
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const listenPgid = await getProcessGroupIdImpl(listenPid).catch(() => null);
+    if (!listenPgid || listenPgid !== rootPgid) {
+      throw new Error(
+        `[local] server readiness was answered by another process on port ${serverPort}; ` +
+          `spawned pid=${spawnedPid}, listeners=${listenPids.join(', ')}`
+      );
+    }
+  }
+}
+
+async function isServerPortOwnedByProcessGroup({
+  serverPort,
+  rootPid,
+  listListenPidsImpl = listListenPids,
+  listListenPidsWithStatusImpl = listListenPidsWithStatus,
+  getProcessGroupIdImpl = getProcessGroupId,
+}) {
+  try {
+    await assertServerPortOwnedBySpawnedProcessGroup({
+      serverPort,
+      spawnedPid: rootPid,
+      listListenPidsImpl,
+      listListenPidsWithStatusImpl,
+      getProcessGroupIdImpl,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveStackOwnedServerRuntimePid(
+  { runtimeStatePath, serverPort, stackName, envPath },
+  {
+    readStackRuntimeStateFileImpl = readStackRuntimeStateFile,
+    isPidAliveImpl = isPidAlive,
+    isPidOwnedByStackImpl = isPidOwnedByStack,
+    resolveStackOwnedServerListenPidImpl = resolveStackOwnedServerListenPid,
+    listListenPidsImpl = listListenPids,
+    listListenPidsWithStatusImpl = listListenPidsWithStatus,
+    getProcessGroupIdImpl = getProcessGroupId,
+  } = {}
+) {
+  const state = await readStackRuntimeStateFileImpl(runtimeStatePath);
+  const runtimePid = Number(state?.processes?.serverPid);
+  if (Number.isFinite(runtimePid) && runtimePid > 1 && isPidAliveImpl(runtimePid)) {
+    const owned = await isPidOwnedByStackImpl(runtimePid, { stackName, envPath }).catch(() => false);
+    if (
+      owned &&
+      (await isServerPortOwnedByProcessGroup({
+        serverPort,
+        rootPid: runtimePid,
+        listListenPidsImpl,
+        listListenPidsWithStatusImpl,
+        getProcessGroupIdImpl,
+      }))
+    ) {
+      return runtimePid;
+    }
+  }
+
+  const listenPid = await resolveStackOwnedServerListenPidImpl({ serverPort, stackName, envPath });
+  return Number.isFinite(Number(listenPid)) && Number(listenPid) > 1 ? Number(listenPid) : null;
+}
+
+export async function stopStackOwnedServerForRestart(
+  { serverPort, runtimeStatePath, stackName, envPath },
+  {
+    readStackRuntimeStateFileImpl = readStackRuntimeStateFile,
+    killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
+    isPidAliveImpl = isPidAlive,
+    isPidOwnedByStackImpl = isPidOwnedByStack,
+    isTcpPortFreeImpl = isTcpPortFree,
+    resolveStackOwnedServerListenPidImpl = resolveStackOwnedServerListenPid,
+    recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
+    waitForTcpPortFreeImpl = waitForTcpPortFree,
+    listListenPidsImpl = listListenPids,
+    listListenPidsWithStatusImpl = listListenPidsWithStatus,
+    getProcessGroupIdImpl = getProcessGroupId,
+  } = {}
+) {
+  const st = await readStackRuntimeStateFileImpl(runtimeStatePath);
+  const pid = Number(st?.processes?.serverPid);
+  let stopPid = null;
+  let recordedPidAliveAndOwned = false;
+
+  if (pid > 1 && isPidAliveImpl(pid)) {
+    const owned = await isPidOwnedByStackImpl(pid, { stackName, envPath }).catch(() => false);
+    recordedPidAliveAndOwned = owned;
+    if (
+      owned &&
+      (await isServerPortOwnedByProcessGroup({
+        serverPort,
+        rootPid: pid,
+        listListenPidsImpl,
+        listListenPidsWithStatusImpl,
+        getProcessGroupIdImpl,
+      }))
+    ) {
+      stopPid = pid;
+    }
+  }
+
+  if (!stopPid) {
+    const free = await isTcpPortFreeImpl(serverPort, { host: '127.0.0.1' });
+    if (!free) {
+      const listenPid = await resolveStackOwnedServerListenPidImpl(
+        { serverPort, stackName, envPath },
+        { listListenPidsImpl, isPidOwnedByStackImpl, getProcessGroupIdImpl }
+      );
+      if (!(Number.isFinite(Number(listenPid)) && Number(listenPid) > 1)) {
+        throw new Error(
+          `[local] restart refused: server port ${serverPort} is occupied and the PID is not provably stack-owned.\n` +
+            `[local] Fix: run 'hstack stack stop ${stackName}' then re-run, or re-run without --restart.`
+        );
+      }
+
+      stopPid = Number(listenPid);
+      await recordStackRuntimeUpdateImpl(runtimeStatePath, { processes: { serverPid: Number(listenPid) } }).catch(() => {});
+    } else if (recordedPidAliveAndOwned) {
+      throw new Error(
+        `[local] restart refused: recorded server pid ${pid} is still alive, but server port ${serverPort} has no listener proof for it.\n` +
+          `[local] Fix: run 'hstack stack stop ${stackName}' then re-run, or re-run without --restart.`
+      );
+    }
+  }
+
+  if (stopPid) {
+    const res = await killProcessGroupOwnedByStackImpl(Number(stopPid), {
+      stackName,
+      envPath,
+      label: 'server',
+      json: true,
+    });
+    if (!res?.killed) {
+      throw new Error(
+        `[local] restart refused: server port ${serverPort} is occupied by a process that could not be stopped safely.\n` +
+          `[local] Fix: run 'hstack stack stop ${stackName}' then re-run, or re-run without --restart.`
+      );
+    }
+  }
+
+  const released = await waitForTcpPortFreeImpl(serverPort, { host: '127.0.0.1', timeoutMs: 5_000, intervalMs: 100 });
+  if (!released) {
+    throw new Error(`[local] restart refused: server port ${serverPort} did not release after stopping the previous server.`);
+  }
+}
+
+function removeChildFromChildren(children, child) {
+  const index = children.indexOf(child);
+  if (index >= 0) {
+    children.splice(index, 1);
+  }
+}
+
+function hasChildExited(child) {
+  return (
+    (child?.exitCode !== null && child?.exitCode !== undefined) ||
+    (child?.signalCode !== null && child?.signalCode !== undefined)
+  );
+}
+
+async function waitForChildExit(child, timeoutMs) {
+  if (hasChildExited(child)) return true;
+  if (!child || typeof child.once !== 'function') return false;
+
+  return await new Promise((resolvePromise) => {
+    let settled = false;
+    let timeout = null;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      resolvePromise(value);
+    };
+
+    timeout = setTimeout(() => done(false), timeoutMs);
+    child.once('exit', () => done(true));
+    child.once('close', () => done(true));
+  });
+}
+
+function signalSpawnedProcessGroup(child, signal) {
+  const pid = Number(child?.pid);
+  if (Number.isFinite(pid) && pid > 1) {
+    try {
+      if (process.platform !== 'win32') {
+        process.kill(-pid, signal);
+      } else {
+        child.kill?.(signal);
+      }
+      return;
+    } catch {
+      // Fall back to ChildProcess.kill below.
+    }
+  }
+  try {
+    child?.kill?.(signal);
+  } catch {
+    // ignore
+  }
+}
+
+async function terminateSpawnedChildForCleanup(
+  child,
+  {
+    killSpawnedChildImpl = killProcessTree,
+    signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
+    gracefulMs = 800,
+    forceMs = 300,
+  } = {}
+) {
+  if (!child) return true;
+
+  try {
+    signalSpawnedProcessGroupImpl(child, 'SIGTERM');
+  } catch {
+    try {
+      killSpawnedChildImpl(child, 'SIGTERM');
+    } catch {
+      // ignore
+    }
+  }
+  if (hasChildExited(child)) return true;
+  if (await waitForChildExit(child, gracefulMs)) return true;
+
+  try {
+    signalSpawnedProcessGroupImpl(child, 'SIGKILL');
+  } catch {
+    try {
+      killSpawnedChildImpl(child, 'SIGKILL');
+    } catch {
+      // ignore
+    }
+  }
+  return await waitForChildExit(child, forceMs);
+}
+
+async function cleanupStackSpawnedChild({
+  child,
+  children,
+  authoritativeChild = null,
+  killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
+  killSpawnedChildImpl = killProcessTree,
+  signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
+  terminateSpawnedChildImpl,
+  stackName,
+  envPath,
+}) {
+  if (!child || authoritativeChild === child) return;
+  const pid = Number(child?.pid);
+  if (!Number.isFinite(pid) || pid <= 1) {
+    const terminated = await (terminateSpawnedChildImpl
+      ? terminateSpawnedChildImpl(child)
+      : terminateSpawnedChildForCleanup(child, { killSpawnedChildImpl, signalSpawnedProcessGroupImpl }));
+    if (terminated) {
+      removeChildFromChildren(children, child);
+    }
+    return;
+  }
+
+  const res = await killProcessGroupOwnedByStackImpl(pid, {
+    stackName,
+    envPath,
+    label: 'server',
+    json: false,
+  }).catch(() => ({ killed: false }));
+  if (!res?.killed || res?.reason === 'killed_pid_only') {
+    const terminated = await (terminateSpawnedChildImpl
+      ? terminateSpawnedChildImpl(child)
+      : terminateSpawnedChildForCleanup(child, { killSpawnedChildImpl, signalSpawnedProcessGroupImpl }));
+    if (!terminated) return;
+  }
+  removeChildFromChildren(children, child);
+}
+
 export async function preflightDevServerRestart(
   { serverDir, serverEnv = {}, logger = console },
   { runImpl = run } = {},
@@ -150,7 +532,20 @@ export async function startDevServer({
   children,
   spawnOptions = {},
   quiet = false,
-}) {
+}, {
+  ensureDepsInstalledImpl = ensureDepsInstalled,
+  preflightDevServerRestartImpl = preflightDevServerRestart,
+  stopStackOwnedServerForRestartImpl = stopStackOwnedServerForRestart,
+  pmSpawnScriptImpl = pmSpawnScript,
+  waitForServerReadyImpl = waitForServerReady,
+  listListenPidsImpl = listListenPids,
+  getProcessGroupIdImpl = getProcessGroupId,
+  recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
+  killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
+  killSpawnedChildImpl = killProcessTree,
+  signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
+  terminateSpawnedChildImpl,
+} = {}) {
   const serverEnv = {
     ...baseEnv,
     PORT: String(serverPort),
@@ -185,36 +580,30 @@ export async function startDevServer({
   }
 
   // Ensure server deps exist before any Prisma/docker work.
-  await ensureDepsInstalled(serverDir, serverComponentName, { quiet, env: serverEnv });
+  await ensureDepsInstalledImpl(serverDir, serverComponentName, { quiet, env: serverEnv });
 
   const prismaPush = (baseEnv.HAPPIER_STACK_PRISMA_PUSH ?? '1').toString().trim() !== '0';
   const serverScript = resolveServerDevScript({ serverComponentName, serverDir, prismaPush });
 
   // Restart behavior (stack-safe): only kill when we can prove ownership via runtime state.
-  if (restart && stackMode && runtimeStatePath && serverAlreadyRunning) {
-    await preflightDevServerRestart({ serverDir, serverComponentName, serverEnv, logger: console });
-    const st = await readStackRuntimeStateFile(runtimeStatePath);
-    const pid = Number(st?.processes?.serverPid);
-    if (pid > 1) {
-      const res = await killProcessGroupOwnedByStack(pid, { stackName: autostart.stackName, envPath, label: 'server', json: true });
-      if (!res.killed) {
-        // Fail-closed if the port is still occupied.
-        const free = await isTcpPortFree(serverPort, { host: '127.0.0.1' });
-        if (!free) {
-          throw new Error(
-            `[local] restart refused: server port ${serverPort} is occupied and the PID is not provably stack-owned.\n` +
-              `[local] Fix: run 'hstack stack stop ${autostart.stackName}' then re-run, or re-run without --restart.`
-          );
-        }
-      }
-    }
+  if (restart && stackMode && runtimeStatePath) {
+    await preflightDevServerRestartImpl({ serverDir, serverComponentName, serverEnv, logger: console });
+    await stopStackOwnedServerForRestartImpl(
+      {
+        serverPort,
+        runtimeStatePath,
+        stackName: autostart.stackName,
+        envPath,
+      },
+      { killProcessGroupOwnedByStackImpl, recordStackRuntimeUpdateImpl }
+    );
   }
 
   if (serverAlreadyRunning && !restart) {
     return { serverEnv, serverScript, serverProc: null };
   }
 
-  const server = await pmSpawnScript({
+  const server = await pmSpawnScriptImpl({
     label: 'server',
     dir: serverDir,
     script: serverScript,
@@ -223,13 +612,39 @@ export async function startDevServer({
     quiet,
   });
   children.push(server);
-  if (stackMode && runtimeStatePath) {
-    await recordStackRuntimeUpdate(runtimeStatePath, { processes: { serverPid: server.pid } }).catch(() => {});
+  try {
+    await waitForServerReadyImpl(internalServerUrl, {
+      timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),
+      childProcess: server,
+    });
+    await assertServerPortOwnedBySpawnedProcessGroup({
+      serverPort,
+      spawnedPid: server.pid,
+      listListenPidsImpl,
+      getProcessGroupIdImpl,
+    });
+    if (hasChildExited(server)) {
+      throw new Error(
+        `[local] server process exited after readiness check ` +
+          `(pid=${server.pid}, code=${server.exitCode ?? 'null'}, signal=${server.signalCode ?? 'null'})`
+      );
+    }
+  } catch (error) {
+    await cleanupStackSpawnedChild({
+      child: server,
+      children,
+      killProcessGroupOwnedByStackImpl,
+      killSpawnedChildImpl,
+      signalSpawnedProcessGroupImpl,
+      terminateSpawnedChildImpl,
+      stackName: autostart.stackName,
+      envPath,
+    });
+    throw error;
   }
-  await waitForServerReady(internalServerUrl, {
-    timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),
-    childProcess: server,
-  });
+  if (stackMode && runtimeStatePath) {
+    await recordStackRuntimeUpdateImpl(runtimeStatePath, { processes: { serverPid: server.pid } }).catch(() => {});
+  }
   return { serverEnv, serverScript, serverProc: server };
 }
 
@@ -252,9 +667,16 @@ export function watchDevServerAndRestart({
   watchDebouncedImpl = watchDebounced,
   killProcessGroupOwnedByStackImpl = killProcessGroupOwnedByStack,
   isTcpPortFreeImpl = isTcpPortFree,
+  waitForTcpPortFreeImpl = waitForTcpPortFree,
   pmSpawnScriptImpl = pmSpawnScript,
   recordStackRuntimeUpdateImpl = recordStackRuntimeUpdate,
   waitForServerReadyImpl = waitForServerReady,
+  listListenPidsImpl = listListenPids,
+  getProcessGroupIdImpl = getProcessGroupId,
+  isPidAliveImpl = isPidAlive,
+  killSpawnedChildImpl = killProcessTree,
+  signalSpawnedProcessGroupImpl = signalSpawnedProcessGroup,
+  terminateSpawnedChildImpl,
   preflightDevServerRestartImpl = preflightDevServerRestart,
   readWatchChangeSignatureImpl = readDevServerWatchChangeSignature,
   existsSyncImpl = existsSync,
@@ -270,6 +692,20 @@ export function watchDevServerAndRestart({
   const watchPaths = resolveDevServerWatchPaths({ serverDir, existsSyncImpl });
   let lastWatchSignature = readWatchChangeSignatureImpl(watchPaths);
 
+  const cleanupProvisionalChild = async (child) => {
+    await cleanupStackSpawnedChild({
+      child,
+      children,
+      authoritativeChild: serverProcRef.current,
+      killProcessGroupOwnedByStackImpl,
+      killSpawnedChildImpl,
+      signalSpawnedProcessGroupImpl,
+      terminateSpawnedChildImpl,
+      stackName,
+      envPath,
+    });
+  };
+
   const hasRealWatchedChange = () => {
     const nextWatchSignature = readWatchChangeSignatureImpl(watchPaths);
     if (lastWatchSignature && nextWatchSignature && nextWatchSignature === lastWatchSignature) {
@@ -282,33 +718,76 @@ export function watchDevServerAndRestart({
   };
 
   const restartOnce = async () => {
-    const pid = Number(serverProcRef?.current?.pid);
+    const currentServerProc = serverProcRef?.current;
+    const pid = Number(currentServerProc?.pid);
     if (!Number.isFinite(pid) || pid <= 1) return false;
 
     await preflightDevServerRestartImpl({ serverDir, serverComponentName, serverEnv, logger });
 
     logger.log('[local] watch: server preflight passed → restarting...');
-    const killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
-    if (!killResult.killed) {
+    const ownsCurrentListener = await isServerPortOwnedByProcessGroup({
+      serverPort,
+      rootPid: pid,
+      listListenPidsImpl,
+      getProcessGroupIdImpl,
+    });
+    if (ownsCurrentListener) {
+      const killResult = await killProcessGroupOwnedByStackImpl(pid, { stackName, envPath, label: 'server', json: false });
+      if (!killResult.killed) {
+        throw new Error(
+          `[local] watch restart refused: server pid ${pid} owns port ${serverPort} but could not be stopped safely.\n` +
+            `[local] Fix: run 'hstack stack stop ${stackName}' then re-run.`
+        );
+      }
+    } else {
       const free = await isTcpPortFreeImpl(serverPort, { host: '127.0.0.1' });
+      const currentPidStillAlive = !hasChildExited(currentServerProc) && isPidAliveImpl(pid);
+      if (currentPidStillAlive) {
+        throw new Error(
+          `[local] watch restart refused: server pid ${pid} is still alive, but port ${serverPort} has no listener proof for it.\n` +
+            `[local] Fix: run 'hstack stack stop ${stackName}' then re-run.`
+        );
+      }
       if (!free) {
         throw new Error(
-          `[local] watch restart refused: server port ${serverPort} is occupied and the PID is not provably stack-owned.\n` +
+          `[local] watch restart refused: server port ${serverPort} is occupied and the running PID does not own it.\n` +
             `[local] Fix: run 'hstack stack stop ${stackName}' then re-run.`
         );
       }
     }
+    const released = await waitForTcpPortFreeImpl(serverPort, { host: '127.0.0.1', timeoutMs: 5_000, intervalMs: 100 });
+    if (!released) {
+      throw new Error(`[local] watch restart refused: server port ${serverPort} did not release after stopping pid=${pid}.`);
+    }
 
-    const next = await pmSpawnScriptImpl({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
-    children.push(next);
+    let next = null;
+    try {
+      next = await pmSpawnScriptImpl({ label: 'server', dir: serverDir, script: serverScript, env: serverEnv });
+      children.push(next);
+      await waitForServerReadyImpl(internalServerUrl, {
+        timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),
+        childProcess: next,
+      });
+      await assertServerPortOwnedBySpawnedProcessGroup({
+        serverPort,
+        spawnedPid: next.pid,
+        listListenPidsImpl,
+        getProcessGroupIdImpl,
+      });
+      if (hasChildExited(next)) {
+        throw new Error(
+          `[local] server process exited after readiness check ` +
+            `(pid=${next.pid}, code=${next.exitCode ?? 'null'}, signal=${next.signalCode ?? 'null'})`
+        );
+      }
+    } catch (error) {
+      await cleanupProvisionalChild(next);
+      throw error;
+    }
     serverProcRef.current = next;
     if (stackMode && runtimeStatePath) {
       await recordStackRuntimeUpdateImpl(runtimeStatePath, { processes: { serverPid: next.pid } }).catch(() => {});
     }
-    await waitForServerReadyImpl(internalServerUrl, {
-      timeoutMs: resolveServerReadyTimeoutMs({ serverComponentName, env: serverEnv }),
-      childProcess: next,
-    });
     logger.log(`[local] watch: server restarted (pid=${next.pid}, port=${serverPort})`);
     return true;
   };

@@ -16,6 +16,13 @@ test('root typecheck aggregator includes cli-common', () => {
   );
 });
 
+test('root import-cycle command delegates to the CLI guard', () => {
+  assert.equal(
+    rootPackage.scripts?.['test:import-cycles'],
+    'yarn workspace @happier-dev/cli test:import-cycles',
+  );
+});
+
 test('root provider aliases expose Cursor smoke and extended presets', () => {
   assert.equal(
     rootPackage.scripts?.['test:providers:cursor:smoke'],

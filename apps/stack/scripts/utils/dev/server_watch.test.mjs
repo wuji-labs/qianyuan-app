@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { watchDevServerAndRestart } from './server.mjs';
+import { resolveStackOwnedServerListenPid, startDevServer, watchDevServerAndRestart } from './server.mjs';
 
 async function withTempServerDir(t, fn) {
   const dir = await mkdtemp(join(tmpdir(), 'hstack-dev-server-watch-'));
@@ -81,6 +81,8 @@ test('watchDevServerAndRestart serializes pending server-light restarts', async 
           }
           return { pid: 200 + spawnCalls, exitCode: null };
         },
+        listListenPidsImpl: async () => [spawnCalls === 0 ? 101 : 200 + spawnCalls],
+        getProcessGroupIdImpl: async (pid) => Number(pid),
         recordStackRuntimeUpdateImpl: async () => {},
         waitForServerReadyImpl: async () => {
           readyCalls += 1;
@@ -176,6 +178,737 @@ test('watchDevServerAndRestart keeps the existing server when preflight rebuild 
   });
 });
 
+test('watchDevServerAndRestart waits for the old server port to be released before spawning', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawnCalls = 0;
+    let waitForPortFreeCalls = 0;
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async () => ({ killed: true }),
+        waitForTcpPortFreeImpl: async () => {
+          waitForPortFreeCalls += 1;
+          return true;
+        },
+        pmSpawnScriptImpl: async () => {
+          assert.equal(waitForPortFreeCalls, 1, 'must wait for the old listener to release before spawning');
+          spawnCalls += 1;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => [202],
+        getProcessGroupIdImpl: async () => 201,
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(waitForPortFreeCalls, 1);
+      assert.equal(spawnCalls, 1);
+      assert.equal(serverProcRef.current.pid, 201);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart rejects readiness from a listener outside the spawned process group', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawnCalls = 0;
+    let recordCalls = 0;
+    const errors = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async () => ({ killed: true }),
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawnCalls += 1;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => [999],
+        getProcessGroupIdImpl: async (pid) => (Number(pid) === 201 ? 201 : 999),
+        recordStackRuntimeUpdateImpl: async () => {
+          recordCalls += 1;
+        },
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: {
+          log() {},
+          error(message) {
+            errors.push(String(message));
+          },
+        },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(spawnCalls, 1);
+      assert.equal(recordCalls, 0, 'must not record a PID when another process owns readiness');
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.ok(errors.some((message) => message.includes('server restart failed')));
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart fails closed when readiness ownership has no listener evidence', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let recordCalls = 0;
+    const killedPids = [];
+    const errors = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: true };
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [] : [101]),
+        getProcessGroupIdImpl: async () => 201,
+        recordStackRuntimeUpdateImpl: async () => {
+          recordCalls += 1;
+        },
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: {
+          log() {},
+          error(message) {
+            errors.push(String(message));
+          },
+        },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(recordCalls, 0, 'must not record a replacement PID without listener proof');
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, [], 'failed provisional replacement must be removed from exit cleanup children');
+      assert.deepEqual(killedPids, [101, 201]);
+      assert.ok(errors.some((message) => message.includes('server restart failed')));
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart fails closed when spawned process group cannot be discovered', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let recordCalls = 0;
+    const killedPids = [];
+    const errors = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: true };
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [202] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned && Number(pid) !== 101 ? null : 101),
+        recordStackRuntimeUpdateImpl: async () => {
+          recordCalls += 1;
+        },
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: {
+          log() {},
+          error(message) {
+            errors.push(String(message));
+          },
+        },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(recordCalls, 0, 'must not record a replacement PID without process-group proof');
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, [], 'failed provisional replacement must be removed from exit cleanup children');
+      assert.deepEqual(killedPids, [101, 201]);
+      assert.ok(errors.some((message) => message.includes('server restart failed')));
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart fails closed when port listeners are mixed across process groups', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let recordCalls = 0;
+    const killedPids = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: true };
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [201, 999] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? (Number(pid) === 201 ? 201 : 999) : 101),
+        recordStackRuntimeUpdateImpl: async () => {
+          recordCalls += 1;
+        },
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(recordCalls, 0, 'must not record a replacement PID when any listener is outside the spawned group');
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, []);
+      assert.deepEqual(killedPids, [101, 201]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart cleans up an unadopted replacement after ownership failure', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const killedPids = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: true };
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [999] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? (Number(pid) === 201 ? 201 : 999) : 101),
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, [], 'replacement child must not remain registered after failed adoption');
+      assert.deepEqual(killedPids, [101, 201]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart keeps failed replacement registered when direct termination is not confirmed', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const killedPids = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: Number(pid) === 101 };
+        },
+        terminateSpawnedChildImpl: async () => false,
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [999] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? (Number(pid) === 201 ? 201 : 999) : 101),
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children.map((child) => child.pid), [201]);
+      assert.deepEqual(killedPids, [101, 201]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart directly terminates an unadopted replacement when marker cleanup refuses', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const killedPids = [];
+    const directlyKilled = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: Number(pid) === 101 };
+        },
+        terminateSpawnedChildImpl: async (child) => {
+          directlyKilled.push({ pid: child?.pid });
+          return true;
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [999] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? (Number(pid) === 201 ? 201 : 999) : 101),
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, [], 'replacement child must be unregistered after direct cleanup');
+      assert.deepEqual(killedPids, [101, 201]);
+      assert.deepEqual(directlyKilled, [{ pid: 201 }]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart keeps pid-only marker cleanup registered when direct termination is not confirmed', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const killedPids = [];
+    const directlyKilled = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return Number(pid) === 201
+            ? { killed: true, reason: 'killed_pid_only' }
+            : { killed: true, reason: 'killed_pgid' };
+        },
+        terminateSpawnedChildImpl: async (child) => {
+          directlyKilled.push({ pid: child?.pid });
+          return false;
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        listListenPidsImpl: async () => (spawned ? [999] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? (Number(pid) === 201 ? 201 : 999) : 101),
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children.map((child) => child.pid), [201]);
+      assert.deepEqual(killedPids, [101, 201]);
+      assert.deepEqual(directlyKilled, [{ pid: 201 }]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart signals an exited wrapper process group before unregistering failed replacement', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const killedPids = [];
+    const signaled = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: Number(pid) === 101 };
+        },
+        signalSpawnedProcessGroupImpl: (child, signal) => {
+          signaled.push({ pid: child?.pid, signal });
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: 0 };
+        },
+        listListenPidsImpl: async () => (spawned ? [201] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? 201 : Number(pid)),
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, []);
+      assert.deepEqual(killedPids, [101, 201]);
+      assert.deepEqual(signaled, [{ pid: 201, signal: 'SIGTERM' }]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart unregisters a signal-exited failed replacement', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    const killedPids = [];
+    const signaled = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: Number(pid) === 101 };
+        },
+        signalSpawnedProcessGroupImpl: (child, signal) => {
+          signaled.push({ pid: child?.pid, signal });
+        },
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawned = true;
+          return { pid: 201, exitCode: null, signalCode: 'SIGTERM' };
+        },
+        listListenPidsImpl: async () => (spawned ? [201] : [101]),
+        getProcessGroupIdImpl: async (pid) => (spawned ? 201 : Number(pid)),
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.deepEqual(children, []);
+      assert.deepEqual(killedPids, [101, 201]);
+      assert.deepEqual(signaled, [{ pid: 201, signal: 'SIGTERM' }]);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('startDevServer cleans up a spawned child when ownership proof fails', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const children = [];
+    const killedPids = [];
+    const updates = [];
+
+    await assert.rejects(
+      () =>
+        startDevServer(
+          {
+            serverComponentName: 'happier-server-light',
+            serverDir,
+            autostart: { stackName: 'watch-test', baseDir: serverDir },
+            baseEnv: {
+              HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+              HAPPIER_STACK_PRISMA_PUSH: '0',
+              HAPPIER_STACK_MANAGED_INFRA: '0',
+              HAPPIER_STACK_PRISMA_MIGRATE: '0',
+            },
+            serverPort: 34567,
+            internalServerUrl: 'http://127.0.0.1:34567',
+            publicServerUrl: 'http://127.0.0.1:34567',
+            envPath: join(serverDir, 'env'),
+            stackMode: true,
+            runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+            serverAlreadyRunning: false,
+            restart: false,
+            children,
+            quiet: true,
+          },
+          {
+            ensureDepsInstalledImpl: async () => {},
+            pmSpawnScriptImpl: async () => ({ pid: 201, exitCode: null }),
+            waitForServerReadyImpl: async () => {},
+            listListenPidsImpl: async () => [],
+            getProcessGroupIdImpl: async () => 201,
+            killProcessGroupOwnedByStackImpl: async (pid) => {
+              killedPids.push(pid);
+              return { killed: true };
+            },
+            recordStackRuntimeUpdateImpl: async (_path, patch) => {
+              updates.push(patch);
+            },
+          }
+        ),
+      /ownership could not be proven/
+    );
+
+    assert.deepEqual(children, []);
+    assert.deepEqual(killedPids, [201]);
+    assert.deepEqual(updates, []);
+  });
+});
+
+test('startDevServer directly terminates a spawned child when marker cleanup refuses', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const children = [];
+    const killedPids = [];
+    const directlyKilled = [];
+
+    await assert.rejects(
+      () =>
+        startDevServer(
+          {
+            serverComponentName: 'happier-server-light',
+            serverDir,
+            autostart: { stackName: 'watch-test', baseDir: serverDir },
+            baseEnv: {
+              HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+              HAPPIER_STACK_PRISMA_PUSH: '0',
+              HAPPIER_STACK_MANAGED_INFRA: '0',
+              HAPPIER_STACK_PRISMA_MIGRATE: '0',
+            },
+            serverPort: 34567,
+            internalServerUrl: 'http://127.0.0.1:34567',
+            publicServerUrl: 'http://127.0.0.1:34567',
+            envPath: join(serverDir, 'env'),
+            stackMode: true,
+            runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+            serverAlreadyRunning: false,
+            restart: false,
+            children,
+            quiet: true,
+          },
+          {
+            ensureDepsInstalledImpl: async () => {},
+            pmSpawnScriptImpl: async () => ({ pid: 201, exitCode: null }),
+            waitForServerReadyImpl: async () => {},
+            listListenPidsImpl: async () => [],
+            getProcessGroupIdImpl: async () => 201,
+            killProcessGroupOwnedByStackImpl: async (pid) => {
+              killedPids.push(pid);
+              return { killed: false, reason: 'not_owned' };
+            },
+            terminateSpawnedChildImpl: async (child) => {
+              directlyKilled.push({ pid: child?.pid });
+              return true;
+            },
+            recordStackRuntimeUpdateImpl: async () => {},
+          }
+        ),
+      /ownership could not be proven/
+    );
+
+    assert.deepEqual(children, []);
+    assert.deepEqual(killedPids, [201]);
+    assert.deepEqual(directlyKilled, [{ pid: 201 }]);
+  });
+});
+
+test('startDevServer runs stack restart cleanup even when existing server health check failed', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    const order = [];
+    const children = [];
+
+    const out = await startDevServer(
+      {
+        serverComponentName: 'happier-server-light',
+        serverDir,
+        autostart: { stackName: 'watch-test', baseDir: serverDir },
+        baseEnv: {
+          HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
+          HAPPIER_STACK_PRISMA_PUSH: '0',
+          HAPPIER_STACK_MANAGED_INFRA: '0',
+          HAPPIER_STACK_PRISMA_MIGRATE: '0',
+        },
+        serverPort: 34567,
+        internalServerUrl: 'http://127.0.0.1:34567',
+        publicServerUrl: 'http://127.0.0.1:34567',
+        envPath: join(serverDir, 'env'),
+        stackMode: true,
+        runtimeStatePath: join(serverDir, 'stack.runtime.json'),
+        serverAlreadyRunning: false,
+        restart: true,
+        children,
+        quiet: true,
+      },
+      {
+        ensureDepsInstalledImpl: async () => {
+          order.push('deps');
+        },
+        preflightDevServerRestartImpl: async () => {
+          order.push('preflight');
+        },
+        stopStackOwnedServerForRestartImpl: async () => {
+          order.push('stop');
+        },
+        pmSpawnScriptImpl: async () => {
+          order.push('spawn');
+          return { pid: 201, exitCode: null };
+        },
+        waitForServerReadyImpl: async () => {
+          order.push('ready');
+        },
+        listListenPidsImpl: async () => [201],
+        getProcessGroupIdImpl: async () => 201,
+        recordStackRuntimeUpdateImpl: async () => {
+          order.push('record');
+        },
+      }
+    );
+
+    assert.equal(out.serverProc.pid, 201);
+    assert.deepEqual(order, ['deps', 'preflight', 'stop', 'spawn', 'ready', 'record']);
+  });
+});
+
 test('watchDevServerAndRestart refuses to spawn when existing server is not stack-owned and port is occupied', async (t) => {
   await withTempServerDir(t, async (serverDir) => {
     let capturedOnChange = null;
@@ -222,7 +955,7 @@ test('watchDevServerAndRestart refuses to spawn when existing server is not stac
 
       await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
 
-      assert.deepEqual(killedPids, [101]);
+      assert.deepEqual(killedPids, []);
       assert.equal(spawnCalls, 0);
       assert.equal(readyCalls, 0);
       assert.deepEqual(children, []);
@@ -232,6 +965,337 @@ test('watchDevServerAndRestart refuses to spawn when existing server is not stac
       watcher?.close?.();
     }
   });
+});
+
+test('watchDevServerAndRestart refuses to spawn over a live current PID without listener proof', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawnCalls = 0;
+    let readyCalls = 0;
+    const errors = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        isTcpPortFreeImpl: async () => true,
+        waitForTcpPortFreeImpl: async () => true,
+        isPidAliveImpl: () => true,
+        listListenPidsImpl: async () => [],
+        pmSpawnScriptImpl: async () => {
+          spawnCalls += 1;
+          return { pid: 200 + spawnCalls, exitCode: null };
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {
+          readyCalls += 1;
+        },
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: {
+          log() {},
+          error(message) {
+            errors.push(String(message));
+          },
+        },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      assert.equal(typeof capturedOnChange, 'function');
+
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(spawnCalls, 0);
+      assert.equal(readyCalls, 0);
+      assert.deepEqual(children, []);
+      assert.equal(serverProcRef.current.pid, 101);
+      assert.ok(errors.some((message) => message.includes('server restart failed')));
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart can replace a dead adopted pid-only ref when the port is free', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawnCalls = 0;
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+    let spawned = false;
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        isTcpPortFreeImpl: async () => true,
+        waitForTcpPortFreeImpl: async () => true,
+        isPidAliveImpl: () => false,
+        listListenPidsImpl: async () => (spawned ? [201] : []),
+        getProcessGroupIdImpl: async () => 201,
+        pmSpawnScriptImpl: async () => {
+          spawnCalls += 1;
+          spawned = true;
+          return { pid: 201, exitCode: null };
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      assert.equal(typeof capturedOnChange, 'function');
+
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.equal(spawnCalls, 1);
+      assert.deepEqual(children.map((child) => child.pid), [201]);
+      assert.equal(serverProcRef.current.pid, 201);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('watchDevServerAndRestart does not kill current ref until it is proven to own the listener', async (t) => {
+  await withTempServerDir(t, async (serverDir) => {
+    let capturedOnChange = null;
+    let spawnCalls = 0;
+    const killedPids = [];
+    const children = [];
+    const serverProcRef = { current: { pid: 101, exitCode: null } };
+
+    const watcher = watchDevServerAndRestart(
+      createWatcherOptions(serverDir, { children, serverProcRef }),
+      {
+        watchDebouncedImpl: ({ onChange }) => {
+          capturedOnChange = onChange;
+          return { close() {} };
+        },
+        killProcessGroupOwnedByStackImpl: async (pid) => {
+          killedPids.push(pid);
+          return { killed: true };
+        },
+        isTcpPortFreeImpl: async () => false,
+        listListenPidsImpl: async () => [222],
+        getProcessGroupIdImpl: async (pid) => (Number(pid) === 101 ? 101 : 222),
+        waitForTcpPortFreeImpl: async () => true,
+        pmSpawnScriptImpl: async () => {
+          spawnCalls += 1;
+          return { pid: 201, exitCode: null };
+        },
+        recordStackRuntimeUpdateImpl: async () => {},
+        waitForServerReadyImpl: async () => {},
+        readWatchChangeSignatureImpl: createChangingSignatureReader(),
+        logger: { log() {}, error() {} },
+      }
+    );
+
+    try {
+      assert.ok(watcher);
+      await capturedOnChange({ eventType: 'change', filename: 'first-change.ts' });
+
+      assert.deepEqual(killedPids, []);
+      assert.equal(spawnCalls, 0);
+      assert.deepEqual(children, []);
+      assert.equal(serverProcRef.current.pid, 101);
+    } finally {
+      watcher?.close?.();
+    }
+  });
+});
+
+test('resolveStackOwnedServerListenPid returns a stack-owned listener for stale runtime repair', async () => {
+  const pid = await resolveStackOwnedServerListenPid(
+    { serverPort: 34567, stackName: 'watch-test', envPath: '/tmp/watch-test/env' },
+    {
+      listListenPidsImpl: async () => [222],
+      isPidOwnedByStackImpl: async (candidate) => Number(candidate) === 222,
+    }
+  );
+
+  assert.equal(pid, 222);
+});
+
+test('resolveStackOwnedServerListenPid refuses mixed stack-owned and unowned listeners', async () => {
+  const pid = await resolveStackOwnedServerListenPid(
+    { serverPort: 34567, stackName: 'watch-test', envPath: '/tmp/watch-test/env' },
+    {
+      listListenPidsImpl: async () => [222, 333],
+      isPidOwnedByStackImpl: async (candidate) => Number(candidate) === 222,
+      getProcessGroupIdImpl: async (candidate) => Number(candidate),
+    }
+  );
+
+  assert.equal(pid, null);
+});
+
+test('stopStackOwnedServerForRestart repairs a stale runtime PID with a proven stack-owned listener', async () => {
+  const server = await import('./server.mjs');
+  assert.equal(typeof server.stopStackOwnedServerForRestart, 'function');
+
+  const killedPids = [];
+  const updates = [];
+
+  await server.stopStackOwnedServerForRestart(
+    {
+      serverPort: 34567,
+      runtimeStatePath: '/tmp/watch-test/stack.runtime.json',
+      stackName: 'watch-test',
+      envPath: '/tmp/watch-test/env',
+    },
+    {
+      readStackRuntimeStateFileImpl: async () => ({ processes: { serverPid: 101 } }),
+      killProcessGroupOwnedByStackImpl: async (pid) => {
+        killedPids.push(pid);
+        return { killed: pid === 222, reason: pid === 222 ? 'killed' : 'not_owned' };
+      },
+      isTcpPortFreeImpl: async () => false,
+      resolveStackOwnedServerListenPidImpl: async () => 222,
+      recordStackRuntimeUpdateImpl: async (_path, patch) => {
+        updates.push(patch);
+      },
+      waitForTcpPortFreeImpl: async () => true,
+    }
+  );
+
+  assert.deepEqual(killedPids, [222]);
+  assert.deepEqual(updates, [{ processes: { serverPid: 222 } }]);
+});
+
+test('stopStackOwnedServerForRestart does not kill a recorded PID until it is proven to own the listener', async () => {
+  const server = await import('./server.mjs');
+  assert.equal(typeof server.stopStackOwnedServerForRestart, 'function');
+
+  const killedPids = [];
+  const updates = [];
+
+  await server.stopStackOwnedServerForRestart(
+    {
+      serverPort: 34567,
+      runtimeStatePath: '/tmp/watch-test/stack.runtime.json',
+      stackName: 'watch-test',
+      envPath: '/tmp/watch-test/env',
+    },
+    {
+      readStackRuntimeStateFileImpl: async () => ({ processes: { serverPid: 101 } }),
+      isPidAliveImpl: () => true,
+      isPidOwnedByStackImpl: async () => true,
+      listListenPidsImpl: async () => [222],
+      getProcessGroupIdImpl: async (pid) => (Number(pid) === 101 ? 101 : 222),
+      killProcessGroupOwnedByStackImpl: async (pid) => {
+        killedPids.push(pid);
+        return { killed: true };
+      },
+      isTcpPortFreeImpl: async () => false,
+      resolveStackOwnedServerListenPidImpl: async () => 222,
+      recordStackRuntimeUpdateImpl: async (_path, patch) => {
+        updates.push(patch);
+      },
+      waitForTcpPortFreeImpl: async () => true,
+    }
+  );
+
+  assert.deepEqual(killedPids, [222]);
+  assert.deepEqual(updates, [{ processes: { serverPid: 222 } }]);
+});
+
+test('stopStackOwnedServerForRestart refuses a live recorded PID that no longer has listener proof', async () => {
+  const server = await import('./server.mjs');
+  assert.equal(typeof server.stopStackOwnedServerForRestart, 'function');
+
+  const killedPids = [];
+  let waitedForPortFree = false;
+
+  await assert.rejects(
+    () =>
+      server.stopStackOwnedServerForRestart(
+        {
+          serverPort: 34567,
+          runtimeStatePath: '/tmp/watch-test/stack.runtime.json',
+          stackName: 'watch-test',
+          envPath: '/tmp/watch-test/env',
+        },
+        {
+          readStackRuntimeStateFileImpl: async () => ({ processes: { serverPid: 101 } }),
+          isPidAliveImpl: () => true,
+          isPidOwnedByStackImpl: async () => true,
+          listListenPidsImpl: async () => [],
+          getProcessGroupIdImpl: async () => 101,
+          killProcessGroupOwnedByStackImpl: async (pid) => {
+            killedPids.push(pid);
+            return { killed: true, reason: 'killed_pgid' };
+          },
+          isTcpPortFreeImpl: async () => true,
+          waitForTcpPortFreeImpl: async () => {
+            waitedForPortFree = true;
+            return true;
+          },
+        }
+      ),
+    /recorded server pid 101 is still alive/
+  );
+
+  assert.deepEqual(killedPids, []);
+  assert.equal(waitedForPortFree, false);
+});
+
+test('resolveStackOwnedServerRuntimePid rejects a live runtime PID without stack-owned listener proof', async () => {
+  const server = await import('./server.mjs');
+  assert.equal(typeof server.resolveStackOwnedServerRuntimePid, 'function');
+
+  const pid = await server.resolveStackOwnedServerRuntimePid(
+    {
+      runtimeStatePath: '/tmp/watch-test/stack.runtime.json',
+      serverPort: 34567,
+      stackName: 'watch-test',
+      envPath: '/tmp/watch-test/env',
+    },
+    {
+      readStackRuntimeStateFileImpl: async () => ({ processes: { serverPid: 101 } }),
+      isPidAliveImpl: () => true,
+      isPidOwnedByStackImpl: async () => true,
+      listListenPidsImpl: async () => [],
+      getProcessGroupIdImpl: async () => 101,
+      resolveStackOwnedServerListenPidImpl: async () => null,
+    }
+  );
+
+  assert.equal(pid, null);
+});
+
+test('resolveStackOwnedServerRuntimePid repairs an unrelated live runtime PID with a proven listener', async () => {
+  const server = await import('./server.mjs');
+  assert.equal(typeof server.resolveStackOwnedServerRuntimePid, 'function');
+
+  const pid = await server.resolveStackOwnedServerRuntimePid(
+    {
+      runtimeStatePath: '/tmp/watch-test/stack.runtime.json',
+      serverPort: 34567,
+      stackName: 'watch-test',
+      envPath: '/tmp/watch-test/env',
+    },
+    {
+      readStackRuntimeStateFileImpl: async () => ({ processes: { serverPid: 101 } }),
+      isPidAliveImpl: () => true,
+      isPidOwnedByStackImpl: async () => false,
+      resolveStackOwnedServerListenPidImpl: async () => 222,
+    }
+  );
+
+  assert.equal(pid, 222);
 });
 
 test('watchDevServerAndRestart watches source/config paths instead of the whole server directory', async (t) => {
