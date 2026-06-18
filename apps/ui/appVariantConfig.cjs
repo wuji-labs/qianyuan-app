@@ -41,40 +41,43 @@ function buildProductionConfig(overrides) {
     };
 }
 
+// WUJI fork: 乾元無極 brand injected over happier base.
+// Variant names, bundle IDs, and URL schemes follow the same 5-lane structure
+// so the build/publish/release-ring machinery works unchanged.
 const APP_ENVIRONMENT_CONFIGS = {
     internaldev: buildRingBackedConfig('internaldev', {
-        name: 'Happier (internal dev)',
-        iosBundleId: 'dev.happier.app.dev.internal',
-        androidPackage: 'dev.happier.app.internaldev',
-        scheme: 'happier-internaldev',
+        name: '乾元無極 (内部)',
+        iosBundleId: 'com.wujilabs.qianyuan.dev.internal',
+        androidPackage: 'com.wujilabs.qianyuan.internaldev',
+        scheme: 'qianyuan-internaldev',
         enableAssociatedDomains: false,
     }),
     internalpreview: buildRingBackedConfig('internalpreview', {
-        name: 'Happier (internal preview)',
-        iosBundleId: 'dev.happier.app.internalpreview',
-        androidPackage: 'dev.happier.app.internalpreview',
-        scheme: 'happier-internalpreview',
+        name: '乾元無極 (内部预览)',
+        iosBundleId: 'com.wujilabs.qianyuan.internalpreview',
+        androidPackage: 'com.wujilabs.qianyuan.internalpreview',
+        scheme: 'qianyuan-internalpreview',
         enableAssociatedDomains: false,
     }),
     publicdev: buildRingBackedConfig('publicdev', {
-        name: 'Happier (dev)',
-        iosBundleId: 'dev.happier.app.publicdev',
-        androidPackage: 'dev.happier.app.publicdev',
-        scheme: 'happier-dev',
+        name: '乾元無極 (dev)',
+        iosBundleId: 'com.wujilabs.qianyuan.dev',
+        androidPackage: 'com.wujilabs.qianyuan.publicdev',
+        scheme: 'qianyuan-dev',
         enableAssociatedDomains: false,
     }),
     preview: buildRingBackedConfig('preview', {
-        name: 'Happier (preview)',
-        iosBundleId: 'dev.happier.app.preview',
-        androidPackage: 'dev.happier.app.preview',
-        scheme: 'happier-preview',
+        name: '乾元無極 (preview)',
+        iosBundleId: 'com.wujilabs.qianyuan.preview',
+        androidPackage: 'com.wujilabs.qianyuan.preview',
+        scheme: 'qianyuan-preview',
         enableAssociatedDomains: false,
     }),
     production: buildProductionConfig({
-        name: 'Happier',
-        iosBundleId: 'dev.happier.app',
-        androidPackage: 'dev.happier.app',
-        scheme: 'happier',
+        name: '乾元無極',
+        iosBundleId: 'com.wujilabs.qianyuan',
+        androidPackage: 'com.wujilabs.qianyuan',
+        scheme: 'qianyuan',
         enableAssociatedDomains: true,
     }),
 };

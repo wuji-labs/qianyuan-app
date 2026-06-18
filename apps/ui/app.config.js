@@ -58,10 +58,10 @@ if (appLocalConfigModule && typeof appLocalConfigModule === 'object') {
 }
 
 const DEFAULTS = {
-    owner: "happier-dev",
-    slug: "happier",
+    owner: "wujilabs",
+    slug: "qianyuan",
     easProjectId: "2a550bd7-e4d2-4f59-ab47-dcb778775cee",
-    linkHost: "app.happier.dev",
+    linkHost: "app.qianyuan.wuji",
 };
 
 // Allow opt-in overrides for local dev tooling without changing upstream defaults.
@@ -347,8 +347,8 @@ const baseExpoConfig = {
                 "@sentry/react-native/expo",
                 {
                     url: "https://sentry.io/",
-                    project: "happier-ui",
-                    organization: "happier-devs"
+                    project: "qianyuan-app",
+                    organization: "wuji-labs"
                 }
             ],
             [
