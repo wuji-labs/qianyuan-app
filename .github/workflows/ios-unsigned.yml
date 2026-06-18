@@ -33,8 +33,25 @@ jobs:
         with:
           node-version: 22
 
+      # ── Build cache (cold→10 min) ──────────────────────────
+      # node_modules + Pods are too large to cache as whole dirs,
+      # so we cache the package-manager caches instead — yarn
+      # offline mirror + CocoaPods spec repo. Derived data is
+      # self-warming after the first xcodebuild (runner keeps it
+      # for the job duration, and incremental rebuilds are fast).
+      - name: Restore package caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/yarn-offline
+            ~/Library/Caches/CocoaPods
+          key: ios-build-${{ runner.os }}-${{ hashFiles('apps/ui/package.json', 'yarn.lock') }}
+          restore-keys: ios-build-${{ runner.os }}-
+
       - name: Install dependencies (yarn)
-        run: yarn install --frozen-lockfile
+        run: |
+          yarn config set yarn-offline-mirror /tmp/yarn-offline
+          yarn install --frozen-lockfile --prefer-offline
         env:
           REDISMS_DISABLE_POSTINSTALL: "1"
 
@@ -58,6 +75,13 @@ jobs:
           echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
           echo "Resolved workspace=$WORKSPACE scheme=$SCHEME"
           echo "All schemes:"; xcodebuild -workspace "$WORKSPACE" -list 2>/dev/null || true
+
+      # Restore xcode derived data (cached Pod compilation — biggest time save).
+      - name: Restore derived data cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/dd
+          key: xcode-dd-${{ runner.os }}-${{ hashFiles('apps/ui/ios/Podfile.lock') }}-v1
 
       - name: Build (unsigned) & package IPA
         working-directory: apps/ui/ios
