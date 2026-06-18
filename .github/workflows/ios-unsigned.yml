@@ -1,0 +1,117 @@
+name: iOS Unsigned IPA (WUJI)
+
+# Builds an UNSIGNED arm64 device IPA on a GitHub macOS runner — no Apple
+# Developer account needed. The output IPA is re-signed + installed on device
+# by 万能签 (super-signature / TrollStore-class), which signs arbitrary IPAs.
+#
+# Ported from the slopus fork and adapted to the happier engine (yarn, apps/ui).
+#
+# Trigger manually: gh workflow run ios-unsigned.yml
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      APP_ENV: production
+      EXPO_NO_TELEMETRY: "1"
+      SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
+      YARN_ENABLE_IMMUTABLE_INSTALLS: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16 (RN 0.83+ needs >= 16.1)
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies (yarn)
+        run: yarn install --frozen-lockfile
+        env:
+          REDISMS_DISABLE_POSTINSTALL: "1"
+
+      - name: Expo prebuild (iOS)
+        working-directory: apps/ui
+        run: npx expo prebuild -p ios --no-install --clean
+
+      - name: CocoaPods install
+        working-directory: apps/ui/ios
+        run: pod install
+
+      - name: Resolve Xcode workspace + scheme
+        id: xc
+        working-directory: apps/ui/ios
+        run: |
+          WORKSPACE=$(ls -d *.xcworkspace | head -1)
+          # The app scheme = the app .xcodeproj name (NOT schemes[0], which is a
+          # Pod scheme and builds no .app). Expo prebuild names it after the app.
+          SCHEME=$(basename "$(ls -d *.xcodeproj | head -1)" .xcodeproj)
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+          echo "Resolved workspace=$WORKSPACE scheme=$SCHEME"
+          echo "All schemes:"; xcodebuild -workspace "$WORKSPACE" -list 2>/dev/null || true
+
+      - name: Build (unsigned) & package IPA
+        working-directory: apps/ui/ios
+        run: |
+          set -eo pipefail
+          # Tee the full build to a log so the failure reason survives as an
+          # artifact (uploaded below with if: always()) — the run page itself
+          # needs an authenticated token to read, the artifact log is the
+          # fastest path to the actual xcodebuild error.
+          set +e
+          xcodebuild \
+            -workspace "${{ steps.xc.outputs.workspace }}" \
+            -scheme "${{ steps.xc.outputs.scheme }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            build 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
+          BUILD_RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$BUILD_RC" -ne 0 ]; then
+            echo "::group::xcodebuild failed (rc=$BUILD_RC) — last 120 lines"
+            tail -120 "$RUNNER_TEMP/xcodebuild.log"
+            echo "::endgroup::"
+            echo "::error::xcodebuild failed (rc=$BUILD_RC). See xcodebuild-log artifact."
+            grep -nE "error:|fatal error:|The following build commands failed" "$RUNNER_TEMP/xcodebuild.log" | head -20 || true
+            exit "$BUILD_RC"
+          fi
+          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -maxdepth 3 -name "*.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "No .app produced. Tree:"; find "$RUNNER_TEMP/dd/Build/Products" -maxdepth 3; exit 1
+          fi
+          echo "Found app: $APP"
+          cd "$RUNNER_TEMP"
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry qianyuan-unsigned.ipa Payload
+          ls -lh qianyuan-unsigned.ipa
+
+      - name: Upload xcodebuild log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: ${{ runner.temp }}/xcodebuild.log
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qianyuan-unsigned-ipa
+          path: ${{ runner.temp }}/qianyuan-unsigned.ipa
+          if-no-files-found: error
