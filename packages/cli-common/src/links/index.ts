@@ -14,6 +14,15 @@ function stripTrailingSlash(url: string): string {
 
 const SAFE_SERVER_PROTOCOLS = new Set(['http:', 'https:']);
 
+// Brand deep-link scheme for the companion mobile app. The app (apps/ui) defines
+// its scheme per variant in appVariantConfig.cjs (production = `qianyuan`); the CLI
+// must emit the SAME scheme or the app rejects the pairing link as invalid.
+// Defaults to the 乾元無極 (qianyuan) production scheme; override via
+// HAPPIER_APP_SCHEME for other variants (qianyuan-dev, qianyuan-preview, …).
+const APP_SCHEME = ((typeof process !== 'undefined' && process.env && process.env.HAPPIER_APP_SCHEME) || 'qianyuan')
+  .trim()
+  .replace(/:(\/\/)?$/, '') || 'qianyuan';
+
 function isLoopbackHostname(hostname: string): boolean {
   const host = String(hostname ?? '').trim().toLowerCase();
   if (!host) return false;
@@ -77,8 +86,8 @@ export function buildTerminalConnectLinks(params: Readonly<{
       ? `${webappUrl}/terminal/connect#key=${publicKeyB64Url}&server=${encodedWebServerUrl}`
       : `${webappUrl}/terminal/connect#key=${publicKeyB64Url}`,
     mobileUrl: mobileServerUrl
-      ? `happier://terminal?key=${publicKeyB64Url}&server=${encodedMobileServerUrl}`
-      : `happier://terminal?key=${publicKeyB64Url}`,
+      ? `${APP_SCHEME}://terminal?key=${publicKeyB64Url}&server=${encodedMobileServerUrl}`
+      : `${APP_SCHEME}://terminal?key=${publicKeyB64Url}`,
   };
 }
 
@@ -92,13 +101,13 @@ export function buildConfigureServerLinks(params: Readonly<{
   const encodedWebServerUrl = webServerUrl ? encodeURIComponent(webServerUrl) : '';
   const encodedMobileServerUrl = mobileServerUrl ? encodeURIComponent(mobileServerUrl) : '';
   if (!webServerUrl && !mobileServerUrl) {
-    return { webUrl: webappUrl, mobileUrl: `happier://server` };
+    return { webUrl: webappUrl, mobileUrl: `${APP_SCHEME}://server` };
   }
 
   return {
     // Prefer setting the server on any screen via `?server=` so callers don't need to navigate
     // to a dedicated server selection route first.
     webUrl: webServerUrl ? `${webappUrl}/?server=${encodedWebServerUrl}` : webappUrl,
-    mobileUrl: mobileServerUrl ? `happier://server?url=${encodedMobileServerUrl}` : `happier://server`,
+    mobileUrl: mobileServerUrl ? `${APP_SCHEME}://server?url=${encodedMobileServerUrl}` : `${APP_SCHEME}://server`,
   };
 }
