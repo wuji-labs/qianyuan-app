@@ -7,6 +7,7 @@ const nativeImagePickerModule = vi.hoisted(() => ({
 vi.mock('expo-image-picker', () => ({
     launchImageLibraryAsync: vi.fn(async () => ({ canceled: true })),
     MediaTypeOptions: { Images: 'images' },
+    getMediaLibraryPermissionsAsync: vi.fn(async () => ({ status: 'granted', granted: true })),
 }));
 
 vi.mock('expo-modules-core', () => ({
