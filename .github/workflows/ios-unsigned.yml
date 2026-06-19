@@ -15,6 +15,10 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 90
+    # contents:write lets the run publish the raw .ipa as a Release asset
+    # (a direct, un-wrapped download URL) — see the "Publish IPA to Release" step.
+    permissions:
+      contents: write
     env:
       APP_ENV: production
       EXPO_NO_TELEMETRY: "1"
@@ -140,3 +144,27 @@ jobs:
           name: qianyuan-unsigned-ipa
           path: ${{ runner.temp }}/qianyuan-unsigned.ipa
           if-no-files-found: error
+
+      # Publish the RAW .ipa as a Release asset. The Actions "artifact" download
+      # is always re-wrapped in an outer .zip (qianyuan-unsigned-ipa.zip) — if
+      # that wrapper is fed to 万能签/ESign the importer rejects it as a broken
+      # IPA ("导入的 ipa 文件有错误"). A Release asset is served as the bare file:
+      # its URL downloads qianyuan-unsigned.ipa directly, ready to import.
+      # Rolling 'ios-latest' tag → a stable URL the signer app can bookmark:
+      #   https://github.com/<owner>/<repo>/releases/download/ios-latest/qianyuan-unsigned.ipa
+      - name: Publish IPA to Release (raw .ipa, no wrapper zip)
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eo pipefail
+          TAG="ios-latest"
+          # Recreate the rolling release so the asset always points at this build.
+          gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$TAG" \
+            "$RUNNER_TEMP/qianyuan-unsigned.ipa#qianyuan-unsigned.ipa" \
+            -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "乾元無極 iOS (unsigned arm64) · latest" \
+            --notes "Raw unsigned arm64 device IPA. Import THIS file into 万能签/超级签/ESign — never a .zip. Commit ${GITHUB_SHA}. bundle id com.wujilabs.qianyuan · MinimumOS 15.1."
+          echo "Published: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/qianyuan-unsigned.ipa"
