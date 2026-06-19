@@ -93,6 +93,30 @@ describe('decideMessageCatchUpPolicy', () => {
         })).toEqual({ kind: 'defer_forward_loading' });
     });
 
+    it('forces tail_reset_latest_page on a large gap when nothing is materialized, regardless of pinned state', () => {
+        expect(decideMessageCatchUpPolicy({
+            isForeground: true,
+            isSessionVisible: true,
+            isPinned: false,
+            materializedMaxSeq: 0,
+            sessionSeqHint: 20,
+            offlineForMs: 0,
+            thresholds,
+        })).toEqual({ kind: 'tail_reset_latest_page' });
+    });
+
+    it('forces tail_reset_latest_page after long offline when nothing is materialized', () => {
+        expect(decideMessageCatchUpPolicy({
+            isForeground: true,
+            isSessionVisible: true,
+            isPinned: false,
+            materializedMaxSeq: 0,
+            sessionSeqHint: 1,
+            offlineForMs: 5000,
+            thresholds,
+        })).toEqual({ kind: 'tail_reset_latest_page' });
+    });
+
     it('returns incremental_batched when gap is small', () => {
         expect(decideMessageCatchUpPolicy({
             isForeground: true,

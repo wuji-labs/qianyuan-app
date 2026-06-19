@@ -52,6 +52,13 @@ export function decideMessageCatchUpPolicy(input: Readonly<{
     const isLargeGap = gapSeq >= thresholds.largeGapSeq;
 
     if (isLongOffline || isLargeGap) {
+        // Empty-store safety net: when nothing is materialized locally there is no viewport
+        // to preserve, so `defer_forward_loading` would just leave the user staring at an
+        // empty transcript. Force the latest page so something renders; the non-destructive
+        // seq-merge in applyMessages handles any overlap if later catch-up runs.
+        if (materializedMaxSeq === 0) {
+            return { kind: 'tail_reset_latest_page' };
+        }
         if (input.isPinned) {
             return { kind: 'tail_reset_latest_page' };
         }
