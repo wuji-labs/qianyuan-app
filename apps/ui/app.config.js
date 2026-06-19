@@ -400,6 +400,17 @@ const baseExpoConfig = {
                     recordAudioAndroid: true
                 }
             ],
+            // expo-image-picker config plugin: ensures ExponentImagePicker native module is
+            // autolinked into the iOS/Android build. Without this, JS-side picker calls fall
+            // through to a silent empty-array return on real devices.
+            [
+                "expo-image-picker",
+                {
+                    photosPermission: "Allow $(PRODUCT_NAME) to access your photo library so you can pick and share photos with AI.",
+                    cameraPermission: "Allow $(PRODUCT_NAME) to access your camera to take and share photos with AI."
+                }
+            ],
+            "expo-document-picker",
             [
                 "expo-notifications",
                 {

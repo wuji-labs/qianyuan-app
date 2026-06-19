@@ -12,7 +12,19 @@ export type NativePickedFile =
 
 export async function nativePickFiles(params?: Readonly<{ multiple?: boolean }>): Promise<NativePickedFile[]> {
     const multiple = params?.multiple !== false;
-    const DocumentPicker: any = await import('expo-document-picker');
+    let DocumentPicker: any;
+    try {
+        DocumentPicker = await import('expo-document-picker');
+    } catch (err) {
+        // expo-document-picker not autolinked into this build — turns "tap did nothing"
+        // into a searchable log line on the device.
+        console.warn('[nativePickFiles] expo-document-picker unavailable:', err instanceof Error ? err.message : err);
+        return [];
+    }
+    if (typeof DocumentPicker?.getDocumentAsync !== 'function') {
+        console.warn('[nativePickFiles] DocumentPicker.getDocumentAsync is not a function — check expo-document-picker autolinking.');
+        return [];
+    }
     const result = await DocumentPicker.getDocumentAsync({
         multiple,
         type: '*/*',

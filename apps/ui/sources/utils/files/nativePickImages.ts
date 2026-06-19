@@ -11,7 +11,14 @@ type ImagePickerNativeModule = Readonly<{
 function isImagePickerNativeModuleAvailable(): boolean {
     if (Platform.OS === 'web') return true;
     const nativeModule = requireOptionalNativeModule<ImagePickerNativeModule>('ExponentImagePicker');
-    return typeof nativeModule?.launchImageLibraryAsync === 'function';
+    const available = typeof nativeModule?.launchImageLibraryAsync === 'function';
+    if (!available) {
+        // Silent-fail diagnostic: the native module was not autolinked into this build.
+        // Surfacing it here turns a confusing "tap did nothing" symptom into a single
+        // searchable line in the device log.
+        console.warn('[nativePickImages] ExponentImagePicker native module unavailable on', Platform.OS, '— picker will return []. Check expo-image-picker autolinking in the EAS build.');
+    }
+    return available;
 }
 
 function sanitizePickedNameFromAsset(asset: unknown): string {
@@ -40,6 +47,18 @@ export async function nativePickImages(params?: Readonly<{ multiple?: boolean }>
         quality: 1,
     });
     if (!result || result.canceled) return [];
+
+    if (typeof ImagePicker.getMediaLibraryPermissionsAsync === 'function') {
+        // Permission denied also surfaces as `canceled` in some builds. Logging the asset
+        // count when picker returns lets us tell "user cancelled" from "permission denied"
+        // when debugging a real device.
+        try {
+            const perms = await ImagePicker.getMediaLibraryPermissionsAsync();
+            if (perms?.status && perms.status !== 'granted') {
+                console.warn('[nativePickImages] media library permission not granted:', perms.status);
+            }
+        } catch { /* non-fatal */ }
+    }
 
     const assets = Array.isArray(result.assets) ? result.assets : [];
     const mapped: NativePickedFile[] = assets
